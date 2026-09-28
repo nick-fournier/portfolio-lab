@@ -1,0 +1,60 @@
+"""FastAPI application factory for the read-only dashboard.
+
+The dashboard only reads the data directory: backtest runs (via ``backtest.results``) and
+job status files. It never imports strategy code, so any strategy's runs render the same
+way. plotly.js is served from the installed ``plotly`` package; no chart CDN is needed.
+"""
+
+from pathlib import Path
+
+import plotly
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from portfolio_lab.web.routes import runs, status
+
+HERE = Path(__file__).parent
+PLOTLY_JS = Path(plotly.__file__).parent / "package_data" / "plotly.min.js"
+#: Shown in place of a missing metric.
+MISSING = "\N{EN DASH}"
+
+
+def _pct(value: float | None, digits: int = 1) -> str:
+    """Format a fraction as a percentage, e.g. 0.1234 -> '12.3%'."""
+    return MISSING if value is None else f"{value * 100:.{digits}f}%"
+
+
+def _num(value: float | None, digits: int = 2) -> str:
+    """Format a number with thousands separators."""
+    return MISSING if value is None else f"{value:,.{digits}f}"
+
+
+def create_app(data_dir: Path) -> FastAPI:
+    """Build the dashboard app reading from ``data_dir``.
+
+    Args:
+        data_dir: The data directory (mounted read-only in production).
+    """
+    app = FastAPI(title="Portfolio lab", docs_url=None, redoc_url=None, openapi_url=None)
+    templates = Jinja2Templates(directory=HERE / "templates")
+    templates.env.filters["pct"] = _pct
+    templates.env.filters["num"] = _num
+    app.state.data_dir = Path(data_dir)
+    app.state.templates = templates
+
+    app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
+
+    @app.get("/vendor/plotly.min.js", include_in_schema=False)
+    def plotly_js() -> FileResponse:
+        """Serve the plotly.js bundle that ships with the Python package."""
+        return FileResponse(
+            PLOTLY_JS,
+            media_type="text/javascript",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    app.include_router(runs.router)
+    app.include_router(status.router)
+    return app

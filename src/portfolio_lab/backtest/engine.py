@@ -16,6 +16,7 @@ delistings).
 """
 
 import logging
+import os
 import subprocess
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import date
@@ -101,7 +102,9 @@ def _params(strategy: Strategy) -> dict:
 
 
 def _git_sha() -> str | None:
-    """Short commit hash of the running code, if available."""
+    """Short commit hash of the running code: ``GIT_SHA`` (set in the image) or git."""
+    if sha := os.environ.get("GIT_SHA"):
+        return sha[:7]
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=True
@@ -188,7 +191,7 @@ def _simulate(
             if stale.size:
                 liquidations += stale.size
                 names = [panel.symbols[j] for j in stale]
-                log.info("liquidating %s on %s after missing bars", names, panel.dates[i])
+                log.debug("liquidating %s on %s after missing bars", names, panel.dates[i])
             nav = book.nav
             held = int((book.holdings > 0).sum())
             daily.append(

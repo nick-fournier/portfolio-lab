@@ -1,0 +1,26 @@
+{% if runs %}
+<table>
+  <thead>
+    <tr>
+      <th>Run</th><th>Strategy</th><th>Params</th><th>Period</th>
+      <th class="num">CAGR</th><th class="num">Sharpe</th><th class="num">Max DD</th><th class="num">vs {{ runs[0].meta.benchmark }}</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in runs %}
+    <tr>
+      <td><a href="/runs/{{ r.meta.run_id }}">{{ r.meta.created_at[:16] | replace("T", " ") }}</a></td>
+      <td>{{ r.meta.strategy }}</td>
+      <td class="muted">{% for k, v in r.meta.params.items() if v is not none %}{{ k }}={{ v }} {% endfor %}</td>
+      <td class="muted">{{ r.meta.start }} → {{ r.meta.end }}</td>
+      <td class="num">{{ r.metrics.cagr | pct }}</td>
+      <td class="num">{{ r.metrics.sharpe | num }}</td>
+      <td class="num neg">{{ r.metrics.max_drawdown | pct }}</td>
+      <td class="num {{ 'pos' if r.metrics.get('alpha', 0) > 0 else 'neg' }}">α {{ r.metrics.get('alpha') | pct }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No runs yet. Run <code>plab backtest &lt;strategy&gt; --start YYYY-MM-DD</code>.</p>
+{% endif %}

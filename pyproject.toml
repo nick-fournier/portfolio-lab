@@ -74,3 +74,7 @@ max-args = 8  # config-heavy constructors (backtest runs, cost models) legitimat
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = [
+    # Starlette's TestClient warning about its own httpx dependency; not our code.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]
