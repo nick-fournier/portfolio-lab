@@ -1,47 +1,68 @@
-# data_pipeline
+# portfolio-lab
 
-This is a [Dagster](https://dagster.io/) project scaffolded with [`dagster project scaffold`](https://docs.dagster.io/getting-started/create-new-project).
+A research lab for portfolio strategies:
+- **point-in-time data:** daily prices, the listed-stock universe and fundamentals;
+- **one honest walk-forward backtest harness:** no look-ahead, trading costs, baselines;
+- **a read-only dashboard** at `portfolio.nicholasfournier.com`.
 
-## Getting started
+This is research only. Strategies output target weights, so the same code can drive paper
+trading later.
 
-First, install your Dagster code location as a Python package. By using the --editable flag, pip will install your Python package in ["editable mode"](https://pip.pypa.io/en/latest/topics/local-project-installs/#editable-installs) so that as you develop, local code changes will automatically apply.
+## Architecture
 
-```bash
-pip install -e ".[dev]"
+```
+src/portfolio_lab/
+  core/        settings, parquet storage, trading calendar, HTTP client, logging
+  data/        sources/ (NASDAQ Trader, Alpaca, SEC EDGAR, FRED) and ingest/ jobs
+  research/    point-in-time panel and DataView, derived factors (e.g. Piotroski)
+  strategies/  Strategy protocol, portfolio constructors, baselines, meanvar/, ...
+  backtest/    engine (timing, drift, costs), metrics, immutable run results
+  web/         FastAPI + HTMX + Plotly dashboard (reads results only)
+  jobs/        scheduler: runs ingest jobs when due, catching up missed sessions
+  cli.py       `plab` command
 ```
 
-Then, start the Dagster UI web server:
+**Dependency direction:** `core` ← `data` ← `research` ← `strategies` ← `backtest` ←
+`web`/`jobs`/`cli`. Nothing imports upward. `web` never imports strategy code; it renders
+the generic run artifacts each backtest writes.
 
-```bash
-dagster dev
+**No look-ahead by construction:**
+- Strategies only ever see a `DataView` bounded at the decision date.
+- A "poison" test corrupts all future data and checks that every registered strategy still
+  produces identical weights.
+
+## Data
+
+Datasets are Parquet files under `PORTFOLIO_DATA_DIR` (default `./data`; on orange it's
+`/home/nick/portfolio-data`). Every write is atomic. Backtest runs are immutable
+directories, so the web app can read while jobs write.
+
+| Data | Source |
+|---|---|
+| Daily prices | Alpaca Market Data (free plan; `feed=sip`, from 2016) |
+| Universe | NASDAQ Trader symbol directory (NASDAQ, NYSE, AMEX; ETFs and derivatives excluded) |
+| Fundamentals | SEC EDGAR `companyfacts` (point-in-time via each filing's date) |
+| Risk-free rate | FRED 3-month T-bill (DTB3) |
+
+**Known limitation:** free sources mostly lack delisted stocks, which introduces
+survivorship bias. Every backtest records this caveat.
+
+Put the Alpaca keys in a `.env` file at the repo root (gitignored):
 ```
-
-Open http://localhost:3000 with your browser to see the project.
-
-You can start writing assets in `data_pipeline/assets.py`. The assets are automatically loaded into the Dagster code location as you define them.
+ALPACA_API_KEY_ID=...
+ALPACA_API_SECRET_KEY=...
+```
 
 ## Development
 
-### Adding new Python dependencies
-
-You can specify new Python dependencies in `setup.py`.
-
-### Unit testing
-
-Tests are in the `data_pipeline_tests` directory and you can run tests using `pytest`:
-
 ```bash
-pytest data_pipeline_tests
+uv sync                      # create .venv with runtime + dev dependencies
+uv run pre-commit install    # run the checks on every commit
+uv run pytest
+uv run plab --help
 ```
 
-### Schedules and sensors
-
-If you want to enable Dagster [Schedules](https://docs.dagster.io/concepts/partitions-schedules-sensors/schedules) or [Sensors](https://docs.dagster.io/concepts/partitions-schedules-sensors/sensors) for your jobs, the [Dagster Daemon](https://docs.dagster.io/deployment/dagster-daemon) process must be running. This is done automatically when you run `dagster dev`.
-
-Once your Dagster Daemon is running, you can start turning on schedules and sensors for your jobs.
-
-## Deploy on Dagster Cloud
-
-The easiest way to deploy your Dagster project is to use Dagster Cloud.
-
-Check out the [Dagster Cloud Documentation](https://docs.dagster.cloud) to learn more.
+**Code standards, enforced by pre-commit and CI:**
+- `ruff` lint and format with a line length of 100.
+- Google-style docstrings on every module, public class and public function.
+- At most 500 lines per Python file. When a module outgrows that, split it.

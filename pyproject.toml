@@ -1,31 +1,76 @@
 [project]
-name = "data-pipeline"
+name = "portfolio-lab"
 version = "0.1.0"
-description = "Add your description here"
+description = "Research lab for portfolio strategies: point-in-time data, walk-forward backtests, and a dashboard."
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+authors = [{ name = "nick-fournier", email = "nichfournier@gmail.com" }]
+requires-python = ">=3.12,<3.13"
 dependencies = [
-    "connectorx>=0.4.1",
-    "dagster>=1.9.10",
-    "dagster-postgres>=0.25.10",
-    "dagster-webserver>=1.9.10",
-    "pandera[polars]>=0.22.1",
-    "plotly>=5.24.1",
-    "polars>=1.21.0",
-    "pyarrow>=19.0.0",
+    "duckdb>=1.1",
+    "exchange-calendars>=4.5",
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "jinja2>=3.1",
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "plotly>=5.24",
+    "polars>=1.9",
+    "pyarrow>=17.0",
+    "pydantic-settings>=2.5",
     "pyportfolioopt>=1.5.6",
-    "ruff>=0.9.3",
-    "scikit-learn>=1.6.1",
-    "sshtunnel>=0.4.0",
     "statsmodels>=0.14.4",
-    "yahooquery>=2.3.7",
+    "typer>=0.12",
+    "uvicorn>=0.30",
 ]
 
-[tool.ruff.lint]
-select = ["I", "E", "F", "W", "PL", "N", "RUF"]
+[project.scripts]
+plab = "portfolio_lab.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.0",
+    "pytest>=8.3",
+    "respx>=0.21",
+    "ruff>=0.7",
+]
 
 [tool.ruff]
 line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
 
-[tool.dagster]
-module_name = "data_pipeline"
+[tool.ruff.lint]
+select = [
+    "E", "W",  # pycodestyle
+    "F",       # pyflakes
+    "I",       # isort
+    "B",       # bugbear
+    "UP",      # pyupgrade
+    "SIM",     # simplify
+    "N",       # pep8-naming
+    "RUF",     # ruff-specific
+    "PL",      # pylint
+    "D",       # pydocstyle (docstrings required)
+]
+ignore = [
+    "D105",     # magic methods (__repr__ etc.) are self-describing
+    "D107",     # __init__ is documented in the class docstring
+    "PLR2004",  # numeric thresholds (e.g. $5 price floor) are domain constants, named where reused
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pylint]
+max-args = 8  # config-heavy constructors (backtest runs, cost models) legitimately take several args
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "PLR0913"]  # test functions and fixtures don't need docstrings
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
