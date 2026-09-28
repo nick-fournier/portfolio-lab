@@ -35,8 +35,10 @@ KEYS = ("symbol", "date")
 OVERLAP_SESSIONS = 5
 #: Symbols whose last stored bar is this many sessions behind the newest get a full refetch.
 STALE_SESSIONS = 20
-#: Tolerance when verifying stored returns against a fresh fetch.
-VERIFY_TOLERANCE = 1e-6
+#: Tolerance when verifying stored returns against a fresh fetch. Alpaca rounds adjusted
+#: prices to 4 decimals, so returns recomputed after a new adjustment wobble by ~1e-5;
+#: real corrections are orders of magnitude larger.
+VERIFY_TOLERANCE = 1e-4
 #: Symbols fetched, validated and written per step, bounding memory on a full backfill.
 CHUNK_SYMBOLS = 500
 

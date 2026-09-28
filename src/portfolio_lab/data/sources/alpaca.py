@@ -7,8 +7,9 @@ truncated in UTC.
 
 import logging
 from collections.abc import Iterator, Sequence
-from datetime import date
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 import polars as pl
 
@@ -21,6 +22,8 @@ BARS_PATH = "/v2/stocks/bars"
 MAX_SYMBOLS_PER_REQUEST = 200
 PAGE_LIMIT = 10_000
 NEW_YORK = "America/New_York"
+#: The free plan can't query the most recent 15 minutes of SIP data; keep a margin.
+SIP_DELAY = timedelta(minutes=16)
 
 Adjustment = Literal["raw", "all"]
 
@@ -54,6 +57,19 @@ def make_client(settings: Settings) -> RateLimitedClient:
         base_url=settings.alpaca_data_url,
         headers=settings.alpaca_headers(),
         max_per_minute=settings.alpaca_requests_per_minute,
+    )
+
+
+def end_param(end: date, now: datetime | None = None) -> str:
+    """Return the ``end`` query value: end of ``end`` in New York, capped at now minus the delay.
+
+    A bare date is read by Alpaca as reaching the end of that day, which for today falls
+    inside the free plan's delayed window and is rejected with HTTP 403.
+    """
+    end_of_day = datetime.combine(end, time(23, 59, 59), ZoneInfo(NEW_YORK))
+    latest = (now or datetime.now(UTC)) - SIP_DELAY
+    return (
+        min(end_of_day, latest).astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
     )
 
 
@@ -114,7 +130,7 @@ def fetch_bars(
             "symbols": ",".join(batch),
             "timeframe": timeframe,
             "start": start.isoformat(),
-            "end": end.isoformat(),
+            "end": end_param(end),
             "adjustment": adjustment,
             "feed": "sip",
             "limit": PAGE_LIMIT,

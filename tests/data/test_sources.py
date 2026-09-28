@@ -1,11 +1,11 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
 
 from portfolio_lab.core.http import RateLimitedClient
-from portfolio_lab.data.sources.alpaca import fetch_bars
+from portfolio_lab.data.sources.alpaca import end_param, fetch_bars
 from portfolio_lab.data.sources.fred import parse_dtb3
 
 
@@ -61,3 +61,11 @@ def test_parse_dtb3_drops_holidays_and_converts_percent():
     df = parse_dtb3("observation_date,DTB3\n2024-01-02,5.25\n2024-01-15,.\n2024-01-16,5.20\n")
     assert df["date"].to_list() == [date(2024, 1, 2), date(2024, 1, 16)]
     assert df["rate"].to_list() == pytest.approx([0.0525, 0.052])
+
+
+def test_end_param_caps_recent_data():
+    now = datetime(2024, 3, 11, 22, 0, tzinfo=UTC)
+    # Past day: end of that day in New York (EST, UTC-5).
+    assert end_param(date(2024, 3, 8), now) == "2024-03-09T04:59:59Z"
+    # Today: capped at now minus the 16-minute SIP delay.
+    assert end_param(date(2024, 3, 11), now) == "2024-03-11T21:44:00Z"
