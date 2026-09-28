@@ -4,12 +4,16 @@ Commands stay thin: they parse arguments and delegate to the ``data``, ``backtes
 ``web`` and ``jobs`` packages, so the same logic is reachable from tests and the scheduler.
 """
 
-from datetime import date
+import json
+from datetime import date, datetime
 from importlib.metadata import version
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
+from portfolio_lab.backtest.costs import CostModel
+from portfolio_lab.backtest.engine import BacktestConfig, run
+from portfolio_lab.backtest.results import save_run
 from portfolio_lab.core.config import get_settings
 from portfolio_lab.core.http import RateLimitedClient
 from portfolio_lab.core.log import setup_logging
@@ -18,6 +22,8 @@ from portfolio_lab.data.ingest.prices import update_prices, verify_prices
 from portfolio_lab.data.ingest.rates import ingest_rates
 from portfolio_lab.data.ingest.universe import current_symbols, ingest_universe
 from portfolio_lab.data.sources.alpaca import make_client
+from portfolio_lab.research.panel import Panel
+from portfolio_lab.strategies.base import create
 
 app = typer.Typer(help="Portfolio lab: ingest data, run backtests, serve the dashboard.")
 ingest_app = typer.Typer(help="Fetch and store market data.")
@@ -110,3 +116,52 @@ def ingest_all_cmd(full: Full = False) -> None:
     ingest_prices_cmd(full)
     ingest_benchmarks_cmd(full)
     ingest_rates_cmd()
+
+
+def _parse_params(pairs: list[str]) -> dict[str, Any]:
+    """Parse ``key=value`` pairs; values are JSON when possible (numbers, null), else strings."""
+    params = {}
+    for pair in pairs:
+        key, sep, raw = pair.partition("=")
+        if not sep:
+            raise typer.BadParameter(f"expected key=value, got {pair!r}")
+        try:
+            params[key] = json.loads(raw)
+        except json.JSONDecodeError:
+            params[key] = raw
+    return params
+
+
+Day = Annotated[datetime, typer.Option(formats=["%Y-%m-%d"], help="Date (YYYY-MM-DD).")]
+
+
+@app.command("backtest")
+def backtest_cmd(
+    strategy: Annotated[str, typer.Argument(help="Registered strategy name.")],
+    start: Day,
+    end: Annotated[
+        datetime | None, typer.Option(formats=["%Y-%m-%d"], help="Last date (default: latest).")
+    ] = None,
+    param: Annotated[
+        list[str] | None, typer.Option(help="Strategy parameter as key=value; repeatable.")
+    ] = None,
+    notional: Annotated[
+        float, typer.Option(help="Portfolio size in dollars, for costs.")
+    ] = 100_000,
+    max_weight: Annotated[float, typer.Option(help="Largest weight in any one name.")] = 1.0,
+) -> None:
+    """Run a strategy through the walk-forward backtest and save the run."""
+    settings = get_settings()
+    strat = create(strategy, **_parse_params(param or []))
+    panel = Panel.load(settings.data_dir, end=end.date() if end else None)
+    config = BacktestConfig(
+        start=start.date(),
+        end=end.date() if end else panel.dates[-1],
+        costs=CostModel(notional=notional),
+        max_weight=max_weight,
+    )
+    result = run(strat, panel, config)
+    run_id = save_run(result, settings.data_dir)
+    typer.echo(f"run {run_id}")
+    for key, value in result.metrics.items():
+        typer.echo(f"  {key:>20}: {value:,.4f}")
