@@ -76,3 +76,17 @@ def test_current_symbols_uses_latest_snapshot_and_included_only(tmp_path):
     )
     write_parquet_atomic(master, paths.universe_symbols)
     assert current_symbols(paths) == ["AAA"]
+
+
+def test_validate_nulls_impossible_returns():
+    rows = pl.DataFrame(
+        [
+            _row("A", date(2024, 1, 2), 10, 11, 9, 10.5, ret=-1.0),
+            _row("A", date(2024, 1, 3), 10, 11, 9, 10.5, ret=float("inf")),
+            _row("A", date(2024, 1, 4), 10, 11, 9, 10.5, ret=0.02),
+        ]
+    ).with_columns(pl.lit(0.0).alias("ret_co"))
+    kept, issues = validate_price_rows(rows)
+    assert kept["ret_cc"].to_list() == [None, None, 0.02]
+    assert kept.height == 3
+    assert any("impossible returns nulled" in i for i in issues)

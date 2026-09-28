@@ -14,11 +14,11 @@ def parse_dtb3(text: str) -> pl.DataFrame:
 
     FRED marks holidays with ``.``; those rows are dropped.
     """
-    df = pl.read_csv(io.StringIO(text), null_values=".", try_parse_dates=True)
+    df = pl.read_csv(io.StringIO(text), null_values=".", infer_schema=False)
     return (
         df.rename({df.columns[0]: "date", df.columns[1]: "rate"})
         .drop_nulls("rate")
-        .with_columns(pl.col("date").cast(pl.Date), (pl.col("rate").cast(pl.Float64) / 100))
+        .with_columns(pl.col("date").str.to_date(), (pl.col("rate").cast(pl.Float64) / 100))
         .sort("date")
     )
 

@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -69,3 +69,18 @@ def test_end_param_caps_recent_data():
     assert end_param(date(2024, 3, 8), now) == "2024-03-09T04:59:59Z"
     # Today: capped at now minus the 16-minute SIP delay.
     assert end_param(date(2024, 3, 11), now) == "2024-03-11T21:44:00Z"
+
+
+def test_fetch_bars_keeps_decimals_after_whole_number_prices():
+    # Regression: 120 whole-dollar closes followed by a fractional one used to be typed as
+    # integers from the first rows, truncating 0.9909 to 0.
+    days = [date(2024, 1, 1) + timedelta(days=i) for i in range(121)]
+    closes = [2] * 120 + [0.9909]
+    bars = [_bar(f"{d}T05:00:00Z", c) for d, c in zip(days, closes, strict=True)]
+    payload = {"bars": {"AAA": bars}}
+    client = RateLimitedClient(
+        base_url="https://data.test",
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=payload)),
+    )
+    df = fetch_bars(client, ["AAA"], days[0], days[-1])
+    assert df["close"][-1] == pytest.approx(0.9909)

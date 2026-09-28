@@ -51,6 +51,12 @@ _FIELDS = {
 }
 
 
+# Raw payload rows: symbol, Alpaca's timestamp string, then bar fields as final types.
+_ROW_SCHEMA = {"symbol": pl.String, "t": pl.String} | {
+    name: BAR_SCHEMA[name] for name in _FIELDS.values()
+}
+
+
 def make_client(settings: Settings) -> RateLimitedClient:
     """Return an authenticated, rate-limited client for the Alpaca data API."""
     return RateLimitedClient(
@@ -89,7 +95,9 @@ def _to_frame(bars: dict[str, list[dict]]) -> pl.DataFrame:
     if not rows:
         return pl.DataFrame(schema=BAR_SCHEMA)
     return (
-        pl.DataFrame(rows)
+        # Explicit schema: inferring from the first rows would type a page whose early
+        # prices are whole numbers as integers and silently truncate later ones (0.99 -> 0).
+        pl.DataFrame(rows, schema=_ROW_SCHEMA)
         .with_columns(
             pl.col("t")
             .str.to_datetime(time_zone="UTC")

@@ -18,8 +18,9 @@ def validate_price_rows(rows: pl.DataFrame) -> tuple[pl.DataFrame, list[str]]:
     """Check price rows and drop the ones that violate hard invariants.
 
     Hard invariants (rows dropped): one row per (symbol, date), a trading-session date,
-    positive close, and ``low <= open, close <= high``. Soft check (reported only): close-to-
-    close returns within :data:`RETURN_BOUNDS`.
+    positive close, and ``low <= open, close <= high``. Impossible returns (non-finite or
+    <= -100%) are set to null. Soft check (reported only): close-to-close returns within
+    :data:`RETURN_BOUNDS`.
 
     Args:
         rows: Price rows with at least symbol, date, open, high, low, close, ret_cc.
@@ -49,6 +50,20 @@ def validate_price_rows(rows: pl.DataFrame) -> tuple[pl.DataFrame, list[str]]:
         issues.append(f"{bad.height} rows with impossible OHLC dropped, e.g. {examples}")
 
     kept = rows.filter(pl.col("date").is_in(valid_days) & ~impossible)
+
+    # With positive raw prices a return <= -100% or a non-finite one cannot be real; it
+    # means corrupt adjusted data. Null it (the harness treats null as missing) and report.
+    ret_cols = [c for c in ("ret_cc", "ret_co") if c in kept.columns]
+    corrupt = pl.any_horizontal(
+        [(~pl.col(c).is_finite() | (pl.col(c) <= -1)) & pl.col(c).is_not_null() for c in ret_cols]
+    )
+    broken = kept.filter(corrupt)
+    if broken.height:
+        examples = broken.select("symbol", "date").head(3).rows()
+        issues.append(f"{broken.height} impossible returns nulled, e.g. {examples}")
+        kept = kept.with_columns(
+            [pl.when(corrupt).then(None).otherwise(pl.col(c)).alias(c) for c in ret_cols]
+        )
 
     low, high = RETURN_BOUNDS
     outliers = kept.filter((pl.col("ret_cc") < low) | (pl.col("ret_cc") > high))
