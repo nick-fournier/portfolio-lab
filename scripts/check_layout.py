@@ -6,9 +6,9 @@ there are no JavaScript errors. Optionally saves full-page screenshots.
 
 Runs in the Playwright image against a running dashboard (``plab serve``)::
 
-    docker run --rm --network host -v "$PWD/scripts:/scripts" \\
-        mcr.microsoft.com/playwright/python:v1.49.0-noble \\
-        bash -c "pip install -q playwright==1.49.0 && \\
+    docker run --rm --network host -v "$PWD/scripts:/scripts" \
+        mcr.microsoft.com/playwright/python:v1.49.0-noble \
+        bash -c "pip install -q playwright==1.49.0 && \
                  python /scripts/check_layout.py http://127.0.0.1:8100"
 
 Exits non-zero if any check fails.
