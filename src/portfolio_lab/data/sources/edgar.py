@@ -207,7 +207,9 @@ def fetch_profiles(client: RateLimitedClient, ciks: Sequence[int]) -> pl.DataFra
     One request per company; companies the SEC has no record for are skipped.
     """
     rows = []
-    for cik in ciks:
+    for n, cik in enumerate(ciks, 1):
+        if n % 500 == 0:
+            log.info("edgar: %d/%d company profiles", n, len(ciks))
         try:
             d = client.get_json(SUBMISSIONS_URL.format(cik=cik))
         except httpx.HTTPStatusError as exc:

@@ -37,6 +37,15 @@ INDUSTRY_RELATIVE = (
 )  # fmt: skip
 #: Fewest stocks in an industry on a date for industry percentiles.
 MIN_INDUSTRY = 5
+#: Every feature column :func:`build_features` produces (with industry data and F-scores).
+FEATURES = (
+    "earnings_yield", "book_to_market", "cf_yield", "fcf_yield", "sales_yield",
+    "dividend_yield", "roa", "cfo_to_assets", "accruals", "gross_profitability",
+    "operating_margin", "leverage", "current_ratio", "d_roa", "d_lt_debt", "d_current_ratio",
+    "d_gross_margin", "d_asset_turnover", "share_issuance", "asset_growth", "sales_growth",
+    "log_size", "mom_12_1", "ret_1m", "volatility", "beta", "log_adv", "fscore",
+    *(f"{c}_ind" for c in INDUSTRY_RELATIVE),
+)  # fmt: skip
 
 
 def _price_features(panel: Panel, index: int, cols: np.ndarray) -> dict[str, np.ndarray]:

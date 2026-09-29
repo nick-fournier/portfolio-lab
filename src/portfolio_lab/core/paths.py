@@ -70,6 +70,16 @@ class DataPaths:
         return self.root / "fundamentals" / "fscores.parquet"
 
     @property
+    def fundamentals_states(self) -> Path:
+        """Point-in-time state of every company as of each of its filings."""
+        return self.root / "fundamentals" / "states.parquet"
+
+    @property
+    def features(self) -> Path:
+        """Monthly point-in-time feature panel (``research.features``)."""
+        return self.root / "features" / "monthly.parquet"
+
+    @property
     def forecast_cache(self) -> Path:
         """Cached return forecasts, one folder per model configuration."""
         return self.root / "cache" / "forecasts"

@@ -3,8 +3,9 @@
 A signal maps a point-in-time :class:`~portfolio_lab.research.dataview.DataView` and a list
 of candidate symbols to scores, ``{symbol: score}``, where a higher score predicts a higher
 return. Only the ranking matters, so a signal can be a return forecast, a quality score or
-anything else. The scoreboard (``research.scoreboard``) measures how well each ranking
-predicted the returns that followed.
+anything else. Its ``horizon`` (sessions: 1, 5 or 21) says how far ahead it predicts; the
+scoreboard (``research.scoreboard``) measures how well each ranking predicted the returns
+over that horizon.
 """
 
 from collections.abc import Callable, Sequence
@@ -16,9 +17,10 @@ Scores = dict[str, float]
 
 
 class Signal(Protocol):
-    """Anything with a name and a ``score`` method."""
+    """Anything with a name, a prediction horizon and a ``score`` method."""
 
     name: str
+    horizon: int
 
     def score(self, view: DataView, symbols: Sequence[str]) -> Scores:
         """Score ``symbols`` using data up to the view's decision date."""

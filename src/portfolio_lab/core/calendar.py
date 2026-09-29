@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import exchange_calendars as xcals
 import pandas as pd
 
-Frequency = Literal["D", "W", "M"]
+Frequency = Literal["D", "W", "M", "Q"]
 
 NEW_YORK = ZoneInfo("America/New_York")
 
@@ -77,14 +77,19 @@ def rebalance_dates(days: list[date], freq: Frequency) -> list[date]:
     Args:
         days: Trading sessions in ascending order.
         freq: ``"D"`` for every session, ``"W"`` for the last session of each ISO week,
-            ``"M"`` for the last session of each month.
+            ``"M"`` for the last session of each month, ``"Q"`` of each calendar quarter.
 
     Returns:
         The subset of ``days`` on which to rebalance, in ascending order.
     """
     if freq == "D":
         return list(days)
-    key = (lambda d: d.isocalendar()[:2]) if freq == "W" else (lambda d: (d.year, d.month))
+    keys = {
+        "W": lambda d: d.isocalendar()[:2],
+        "M": lambda d: (d.year, d.month),
+        "Q": lambda d: (d.year, (d.month - 1) // 3),
+    }
+    key = keys[freq]
     last: dict[tuple[int, int], date] = {}
     for d in days:
         last[key(d)] = d
