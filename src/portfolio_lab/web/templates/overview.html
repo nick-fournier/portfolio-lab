@@ -6,7 +6,8 @@
   same walk-forward backtest on point-in-time data, pays realistic trading costs, and is compared
   against simple baselines. <a href="/about">How it works →</a></p>
 
-{% if chart %}<div id="compare" class="chart"></div>{% endif %}
+{% if chart %}<h2>Growth of $1 <span class="muted">(latest run of each strategy)</span></h2>
+<div id="compare" class="chart tall"></div>{% endif %}
 
 <h2>Strategies</h2>
 {% if runs %}
@@ -39,7 +40,7 @@
 <script>
   document.addEventListener("DOMContentLoaded", () => {
     const fig = {{ chart | safe }};
-    Plotly.newPlot("compare", fig.data, fig.layout, {responsive: true, displaylogo: false});
+    Plotly.newPlot("compare", fig.data, fig.layout, window.PLOT_CONFIG);
   });
 </script>
 {% endif %}

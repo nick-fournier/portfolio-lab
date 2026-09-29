@@ -1,9 +1,10 @@
 :root { --fg: #1f2328; --muted: #656d76; --line: #d0d7de; --accent: #0969da; --bad: #cf222e; --good: #1a7f37; }
 * { box-sizing: border-box; }
 body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--fg); margin: 0; }
-header { border-bottom: 1px solid var(--line); padding: 0.75rem 1.5rem; display: flex; gap: 1.5rem; align-items: baseline; }
-header .brand { font-weight: 600; font-size: 1.1rem; color: var(--fg); text-decoration: none; }
-header nav a { color: var(--muted); text-decoration: none; margin-right: 1rem; }
+header { border-bottom: 1px solid var(--line); padding: 0.75rem 1.5rem; display: flex; flex-wrap: wrap; gap: 0.4rem 1.5rem; align-items: baseline; }
+header .brand { font-weight: 600; font-size: 1.1rem; color: var(--fg); text-decoration: none; white-space: nowrap; }
+header nav { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; }
+header nav a { color: var(--muted); text-decoration: none; white-space: nowrap; }
 header nav a:hover, a { color: var(--accent); }
 main { padding: 1.25rem 1.5rem; max-width: 1200px; }
 h1 { font-size: 1.4rem; margin: 0 0 0.75rem; }
@@ -23,11 +24,16 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .badge { border-radius: 999px; padding: 0.1rem 0.6rem; font-size: 0.8rem; border: 1px solid var(--line); }
 .badge.fresh { color: var(--good); border-color: var(--good); }
 .badge.stale, .badge.missing { color: var(--bad); border-color: var(--bad); }
-.chart { width: 100%; min-height: 320px; }
+.chart { width: 100%; height: 380px; }
+.chart.short { height: 260px; }
+.chart.tall { height: 460px; }
+.chart.auto { height: auto; }
+.table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-wrap td, .table-wrap th { white-space: nowrap; }
 select { font: inherit; padding: 0.2rem 0.4rem; }
 .lede { font-size: 1.05rem; max-width: 75ch; line-height: 1.5; }
 .filters { display: flex; gap: 1.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
-.strategies { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
+.strategies { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap: 1rem; }
 .strategy { border: 1px solid var(--line); border-radius: 8px; padding: 0.9rem 1rem; }
 .strategy h3 { margin: 0 0 0.3rem; font-size: 1.05rem; }
 .strategy p { margin: 0.3rem 0 0.6rem; line-height: 1.45; }
@@ -38,3 +44,13 @@ select { font: inherit; padding: 0.2rem 0.4rem; }
 .prose { max-width: 75ch; line-height: 1.55; }
 .prose h2 { margin-top: 1.75rem; }
 .prose li { margin-bottom: 0.35rem; }
+
+@media (max-width: 600px) {
+  header { padding: 0.6rem 1rem; }
+  main { padding: 1rem; }
+  h1 { font-size: 1.25rem; }
+  .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chart { height: 320px; }
+  .chart.tall { height: 520px; }  /* room for a multi-row legend below the plot */
+  .strategy .stats { flex-wrap: wrap; gap: 0.5rem 1rem; }
+}
