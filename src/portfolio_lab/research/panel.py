@@ -60,6 +60,8 @@ class Panel:
         eligible: Boolean array, same shape.
         rf_daily: Daily risk-free rate per session (annual rate / 252).
         universe: Symbols that may ever be eligible; the rest (benchmarks) are price-only.
+        fundamentals: Optional point-in-time scores by symbol and filing date (symbol,
+            filed, fscore, n_signals), from ``research.piotroski``.
     """
 
     def __init__(
@@ -70,9 +72,11 @@ class Panel:
         eligible: np.ndarray,
         rf_daily: np.ndarray,
         universe: Iterable[str] = (),
+        fundamentals: pl.DataFrame | None = None,
     ):
         self.dates = list(dates)
         self.universe = frozenset(universe)
+        self.fundamentals = fundamentals.sort("filed") if fundamentals is not None else None
         self.symbols = list(symbols)
         self.date_index = {d: i for i, d in enumerate(self.dates)}
         self.symbol_index = {s: j for j, s in enumerate(self.symbols)}
@@ -181,7 +185,10 @@ class Panel:
         symbols = pl.read_parquet(paths.universe_symbols)
         universe = symbols.filter("included")["symbol"].to_list()
         rates = pl.read_parquet(paths.rates) if paths.rates.exists() else None
-        return cls.from_long(lf.collect(), universe, rates, rules)
+        panel = cls.from_long(lf.collect(), universe, rates, rules)
+        if paths.fscores.exists():
+            panel.fundamentals = pl.read_parquet(paths.fscores).sort("filed")
+        return panel
 
 
 def _daily_rates(dates: list[date], rates: pl.DataFrame | None) -> np.ndarray:

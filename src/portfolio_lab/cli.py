@@ -75,6 +75,16 @@ def verify_prices_cmd(
     tasks.verify_task(get_settings(), sample)
 
 
+@ingest_app.command("fundamentals")
+def ingest_fundamentals_cmd(
+    force: Annotated[
+        bool, typer.Option(help="Re-parse even if the bulk file is unchanged.")
+    ] = False,
+) -> None:
+    """Refresh SEC fundamentals for the universe and recompute Piotroski F-scores."""
+    tasks.fundamentals_task(get_settings(), force)
+
+
 @ingest_app.command("all")
 def ingest_all_cmd(full: Full = False) -> None:
     """Run universe, prices, benchmarks and rates in order."""

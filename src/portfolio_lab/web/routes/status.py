@@ -19,6 +19,8 @@ DATA_JOBS = {
     "benchmarks": ("max_date", "rows_written"),
     "rates": ("max_date", "latest_rate"),
     "verify_prices": ("checked", "repaired"),
+    "fundamentals": ("companies_with_facts", "facts", "latest_filing"),
+    "fscores": ("filings_scored", "with_8_signals", "latest_filing"),
 }
 
 

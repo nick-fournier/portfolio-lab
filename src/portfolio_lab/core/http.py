@@ -9,6 +9,7 @@ import logging
 import random
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -80,9 +81,20 @@ class RateLimitedClient:
         return min(60.0, 2.0**attempt) + random.uniform(0, 1)
 
     def get(self, url: str, params: dict[str, Any] | None = None) -> httpx.Response:
-        """GET ``url`` with rate limiting and retries.
+        """GET ``url`` with rate limiting and retries (see :meth:`request`)."""
+        return self.request("GET", url, params)
+
+    def head(self, url: str) -> httpx.Response:
+        """HEAD ``url`` with rate limiting and retries (e.g. to read an ETag)."""
+        return self.request("HEAD", url)
+
+    def request(
+        self, method: str, url: str, params: dict[str, Any] | None = None
+    ) -> httpx.Response:
+        """Send a request with rate limiting and retries.
 
         Args:
+            method: HTTP method, e.g. ``"GET"``.
             url: Absolute URL, or a path relative to ``base_url``.
             params: Query parameters.
 
@@ -98,11 +110,13 @@ class RateLimitedClient:
             if attempt:
                 delay = self._backoff(attempt, response)
                 reason = response.status_code if response is not None else "transport error"
-                log.warning("GET %s failed (%s); retry %d in %.1fs", url, reason, attempt, delay)
+                log.warning(
+                    "%s %s failed (%s); retry %d in %.1fs", method, url, reason, attempt, delay
+                )
                 self._sleep(delay)
             self._throttle()
             try:
-                response = self._client.get(url, params=params)
+                response = self._client.request(method, url, params=params)
             except httpx.TransportError:
                 if attempt == self._max_retries:
                     raise
@@ -112,6 +126,31 @@ class RateLimitedClient:
                 response.raise_for_status()
                 return response
         raise AssertionError("unreachable")  # pragma: no cover
+
+    def download(self, url: str, dest: Path, chunk_bytes: int = 1 << 20) -> None:
+        """Stream ``url`` to ``dest`` without holding it in memory, retrying on failure.
+
+        Raises:
+            httpx.HTTPStatusError: For non-retryable errors, or when retries are exhausted.
+            httpx.TransportError: When the connection keeps failing.
+        """
+        for attempt in range(self._max_retries + 1):
+            self._throttle()
+            try:
+                with self._client.stream("GET", url) as response:
+                    if response.status_code in RETRY_STATUSES and attempt < self._max_retries:
+                        self._sleep(self._backoff(attempt + 1, response))
+                        continue
+                    response.raise_for_status()
+                    with dest.open("wb") as out:
+                        for chunk in response.iter_bytes(chunk_bytes):
+                            out.write(chunk)
+                    return
+            except httpx.TransportError:
+                if attempt == self._max_retries:
+                    raise
+                log.warning("download %s interrupted; retry %d", url, attempt + 1)
+                self._sleep(self._backoff(attempt + 1, None))
 
     def get_json(self, url: str, params: dict[str, Any] | None = None) -> Any:
         """GET ``url`` and decode the JSON body."""

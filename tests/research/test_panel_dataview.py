@@ -91,3 +91,17 @@ def test_view_rejects_out_of_range(make_panel):
     panel = make_panel()
     with pytest.raises(IndexError):
         DataView(panel, len(panel.dates))
+
+
+def test_fscores_are_point_in_time_and_expire(make_panel):
+    panel = make_panel(symbols=("AAA", "BBB"), days=400)
+    table = panel.fundamentals
+    first = table["filed"].min()
+    day = panel.date_index[first]
+    # A filing dated asof is not visible yet; the next session it is.
+    assert DataView(panel, day).fscores() == {}
+    assert DataView(panel, day + 1).fscores() == {"AAA": 9, "BBB": 5}
+    # Scores older than max_age_days are dropped; too few signals are dropped.
+    assert DataView(panel, day + 1).fscores(max_age_days=0) == {}
+    assert DataView(panel, day + 1).fscores(min_signals=10) == {}
+    assert DataView(panel, day + 1).fscores(["BBB", "ZZZ"]) == {"BBB": 5}
