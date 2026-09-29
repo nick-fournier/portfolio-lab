@@ -187,6 +187,12 @@ def models_cmd() -> None:
     typer.echo(tasks.models_task(get_settings()))
 
 
+@app.command("make-vs-buy")
+def make_vs_buy_cmd() -> None:
+    """Compare our strategies with funds anyone can buy (needs TIINGO_API_KEY for mutual funds)."""
+    typer.echo(tasks.make_vs_buy_task(get_settings()))
+
+
 @app.command("serve")
 def serve_cmd(
     host: Annotated[str, typer.Option(help="Interface to bind.")] = "127.0.0.1",

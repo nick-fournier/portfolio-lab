@@ -13,13 +13,15 @@ import polars as pl
 
 from portfolio_lab.backtest.costs import CostModel
 from portfolio_lab.backtest.engine import BacktestConfig, run
-from portfolio_lab.backtest.results import prune_runs, save_run
+from portfolio_lab.backtest.results import list_runs, load_run, prune_runs, save_run
+from portfolio_lab.core.calendar import last_complete_session
 from portfolio_lab.core.config import Settings
 from portfolio_lab.core.http import RateLimitedClient
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic, write_status
 from portfolio_lab.data.ingest.delisted import ingest_delisted
 from portfolio_lab.data.ingest.fundamentals import ingest_fundamentals
+from portfolio_lab.data.ingest.funds import ingest_funds
 from portfolio_lab.data.ingest.macro import ingest_macro
 from portfolio_lab.data.ingest.prices import update_prices, verify_prices
 from portfolio_lab.data.ingest.rates import ingest_rates
@@ -32,6 +34,7 @@ from portfolio_lab.research.dataset import build_dataset
 from portfolio_lab.research.evaluation import scoreboard_rows
 from portfolio_lab.research.features import FEATURES, build_features
 from portfolio_lab.research.fundamentals import filing_states
+from portfolio_lab.research.funds import FUNDS, compare
 from portfolio_lab.research.models import prepare, run_all
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.piotroski import build_fscores, fscores_by_symbol
@@ -350,4 +353,32 @@ def models_task(settings: Settings) -> dict:
               "best": {int(h): best.filter(pl.col("horizon") == h)["model"][0]
                        for h in best["horizon"].unique()}}  # fmt: skip
     write_status(settings.data_dir, "models", status)
+    return status
+
+
+def make_vs_buy_task(settings: Settings) -> dict:
+    """Refresh fund prices and compare them with our strategies' latest runs."""
+    paths = DataPaths(settings.data_dir)
+    with make_client(settings) as alpaca, RateLimitedClient(max_per_minute=60) as tiingo:
+        ingest_funds(settings, alpaca, tiingo, last_complete_session())
+    prices = pl.read_parquet(paths.fund_prices)
+    series = {
+        f.symbol: (f.name, f.category, prices.filter(pl.col("symbol") == f.symbol))
+        for f in FUNDS
+        if prices.filter(pl.col("symbol") == f.symbol).height
+    }
+    for stored in list_runs(settings.data_dir, latest_only=True):
+        meta = stored["meta"]
+        if meta["strategy"] == "buy_hold":
+            continue  # SPY is already in the comparison as a fund
+        label = meta.get("label") or meta["strategy"]
+        daily = load_run(settings.data_dir, meta["run_id"]).daily.select("date", "ret")
+        series[f"ours: {label}"] = (label, "ours", daily)
+    rates = pl.read_parquet(paths.rates) if paths.rates.exists() else None
+    summary, growth = compare(series, rates, SCHEDULED_START)
+    write_parquet_atomic(summary, paths.make_vs_buy / "summary.parquet")
+    write_parquet_atomic(growth, paths.make_vs_buy / "growth.parquet")
+    common = summary.filter(pl.col("period") == "common")
+    status = {"series": summary["key"].n_unique(), "common_start": common["start"].min()}
+    write_status(settings.data_dir, "make_vs_buy", status)
     return status

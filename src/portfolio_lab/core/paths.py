@@ -70,6 +70,16 @@ class DataPaths:
         return self.root / "results" / "models"
 
     @property
+    def fund_prices(self) -> Path:
+        """Daily prices adjusted for distributions for the make-vs-buy funds."""
+        return self.root / "prices" / "funds.parquet"
+
+    @property
+    def make_vs_buy(self) -> Path:
+        """Make-vs-buy results: ``summary.parquet`` and ``growth.parquet``."""
+        return self.root / "results" / "make_vs_buy"
+
+    @property
     def edgar_bulk(self) -> Path:
         """Downloaded SEC ``companyfacts.zip`` (about 1.4 GB, replaced when it changes)."""
         return self.root / "raw" / "edgar" / "companyfacts.zip"
