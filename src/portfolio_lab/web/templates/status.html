@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Data status · Portfolio lab{% endblock %}
+{% block content %}
+<h1>Data status <span class="badge {{ freshness }}">prices {{ freshness }}</span></h1>
+
+<h2>Data jobs</h2>
+<table>
+  <thead><tr><th>Job</th><th>Finished (UTC)</th><th>Details</th><th>Issues</th></tr></thead>
+  <tbody>
+  {% for job in jobs %}
+    <tr>
+      <td>{{ job.name }}</td>
+      <td class="muted">{{ (job.finished_at or "")[:19] | replace("T", " ") }}</td>
+      <td>{% for k, v in job.details.items() %}{{ k }}: <b>{{ v }}</b>{% if not loop.last %} · {% endif %}{% endfor %}</td>
+      <td class="{{ 'neg' if job.issues else 'muted' }}">{{ job.issues | length }}{% if job.issues %} <span class="muted" title="{{ job.issues | join('\n') }}">(hover)</span>{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4" class="muted">No jobs have run yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>Scheduler</h2>
+<table>
+  <thead><tr><th>Job</th><th>Last success (UTC)</th><th>Last session</th><th>Last error</th></tr></thead>
+  <tbody>
+  {% for name, s in scheduler.items() %}
+    <tr>
+      <td>{{ name }}</td>
+      <td class="muted">{{ (s.last_success or "never")[:19] | replace("T", " ") }}</td>
+      <td class="muted">{{ s.last_session or "–" }}</td>
+      <td class="{{ 'neg' if s.last_error else 'muted' }}">{{ s.last_error or "–" }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4" class="muted">The scheduler has not run yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

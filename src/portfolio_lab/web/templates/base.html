@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Portfolio lab{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+  <script src="https://unpkg.com/htmx.org@2.0.3/dist/htmx.min.js" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header>
+    <a class="brand" href="/">Portfolio lab</a>
+    <nav><a href="/">Runs</a><a href="/status">Data status</a></nav>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+</body>
+</html>

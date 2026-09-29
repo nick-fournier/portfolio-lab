@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ meta.strategy }} · Portfolio lab{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js" defer></script>{% endblock %}
+{% block content %}
+<h1>{{ meta.strategy }}
+  <span class="muted">{% for k, v in meta.params.items() if v is not none %}{{ k }}={{ v }} {% endfor %}</span></h1>
+<p class="muted">{{ meta.start }} → {{ meta.end }} · rebalance {{ meta.schedule }} · benchmark {{ meta.benchmark }}
+  · run {{ meta.run_id }}{% if meta.git_sha %} · code {{ meta.git_sha }}{% endif %}</p>
+
+<div class="cards">
+  {% for label, key, fmt in [("CAGR", "cagr", "pct"), ("Total return", "total_return", "pct"), ("Volatility", "volatility", "pct"),
+                              ("Sharpe", "sharpe", "num"), ("Sortino", "sortino", "num"), ("Max drawdown", "max_drawdown", "pct"),
+                              ("Beta", "beta", "num"), ("Alpha", "alpha", "pct"), ("Info ratio", "information_ratio", "num"),
+                              ("Turnover / yr", "turnover_annual", "num"), ("Avg holdings", "avg_holdings", "num")] %}
+  <div class="card"><div class="label">{{ label }}</div>
+    <div class="value">{{ (metrics.get(key) | pct) if fmt == "pct" else (metrics.get(key) | num) }}</div></div>
+  {% endfor %}
+</div>
+
+<div id="equity" class="chart"></div>
+<div id="drawdown" class="chart"></div>
+{% if weights_chart %}<div id="weights" class="chart"></div>{% endif %}
+
+<h2>Latest target holdings <span class="muted">({{ n_positions }} positions{% if n_positions > holdings|length %}, top {{ holdings|length }} shown{% endif %})</span></h2>
+<table>
+  <thead><tr><th>Symbol</th><th class="num">Weight</th></tr></thead>
+  <tbody>{% for h in holdings %}<tr><td>{{ h.symbol }}</td><td class="num">{{ h.weight | pct(2) }}</td></tr>{% endfor %}</tbody>
+</table>
+
+<h2>Caveats</h2>
+<ul class="caveats">{% for c in meta.caveats %}<li>{{ c }}</li>{% endfor %}</ul>
+
+<h2>Costs</h2>
+<p class="muted">Half-spread {{ meta.costs.half_spread_bps }} bps + volume-based impact at a ${{ meta.costs.notional | num(0) }} portfolio.
+  Forced liquidations: {{ metrics.get("forced_liquidations", 0) | num(0) }}.</p>
+
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const opts = {responsive: true, displaylogo: false};
+    for (const [id, fig] of [["equity", {{ equity | safe }}], ["drawdown", {{ drawdown | safe }}]{% if weights_chart %}, ["weights", {{ weights_chart | safe }}]{% endif %}]) {
+      Plotly.newPlot(id, fig.data, fig.layout, opts);
+    }
+  });
+</script>
+{% endblock %}

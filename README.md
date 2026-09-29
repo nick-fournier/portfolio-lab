@@ -53,6 +53,32 @@ ALPACA_API_KEY_ID=...
 ALPACA_API_SECRET_KEY=...
 ```
 
+## Running
+
+```bash
+uv run plab ingest all                            # universe, prices, benchmarks, rates
+uv run plab backtest equal_weight --start 2017-01-03 --param top_n=500
+uv run plab serve                                 # dashboard on http://127.0.0.1:8100
+uv run plab schedule                              # long-running: jobs when due
+```
+
+The scheduler runs the daily ingest after 20:00 New York time on each session, catching up
+any missed sessions. Weekly, it spot-checks stored prices and refreshes the baseline
+backtests. Its state and every job's last result are shown on the dashboard's status page.
+
+## Deployment
+
+CI (`.github/workflows/ci.yml`) runs pre-commit and the tests on every push and pull
+request. On `main` it also builds the arm64 image `nichfournier/portfolio-lab` on a native
+arm64 runner and pushes it to Docker Hub. The repo needs the secrets `DOCKER_USERNAME` and
+`DOCKER_PASSWORD`.
+
+On orange, the image runs twice from `clubhouse-server/orange/compose.yaml`:
+- `portfolio-web` runs `plab serve` with the data mounted read-only.
+- `portfolio-jobs` runs `plab schedule` with the Alpaca keys.
+
+Deploy with `docker compose pull && docker compose up -d`.
+
 ## Development
 
 ```bash

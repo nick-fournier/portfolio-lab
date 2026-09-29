@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Backtest runs</h1>
+<p>
+  <label>Strategy
+    <select name="strategy" hx-get="/" hx-target="#runs" hx-push-url="true">
+      <option value="">All</option>
+      {% for s in strategies %}<option value="{{ s }}" {% if s == selected %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+  </label>
+</p>
+<div id="runs">{% include "_runs_table.html" %}</div>
+{% endblock %}
