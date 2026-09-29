@@ -140,5 +140,11 @@ def test_signals_page(client, tmp_path):
     pl.DataFrame(rows, schema=schema, orient="row").write_parquet(path)
     page = client.get("/signals")
     assert page.status_code == 200
-    for expected in ("100 most liquid stocks", "All eligible stocks", "momentum", "+0.030"):
+    for expected in ("What is IC?", "100 most liquid stocks", "momentum", "+0.030"):
         assert expected in page.text
+
+
+def test_overview_drops_benchmark_line_duplicated_by_buy_hold(client):
+    page = client.get("/").text
+    assert "buy_hold (SPY)" in page
+    assert "SPY (benchmark)" not in page  # buy_hold already is the SPY line
