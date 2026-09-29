@@ -28,7 +28,7 @@ class MeanVar:
     flattered by survivorship bias in free data, so treat its results as an upper bound.
 
     Args:
-        model: Return model: ``arima_logret`` (default), ``arima320_price`` (the legacy
+        model: Return model: ``ar1_logret`` (default), ``arima320_price`` (the legacy
             model) or ``historical_mean`` (no forecast).
         objective: ``max_sharpe``, ``min_volatility`` or ``max_quadratic_utility``.
         top_n: Candidates: the most liquid eligible stocks.
@@ -40,7 +40,7 @@ class MeanVar:
         workers: Processes used for model fits (not a strategy parameter).
     """
 
-    model: str = "arima_logret"
+    model: str = "ar1_logret"
     objective: str = "max_sharpe"
     top_n: int = 100
     lookback: int = 252

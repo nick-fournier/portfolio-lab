@@ -6,7 +6,10 @@ forecasts with an annual risk-free rate):
 
 - ``arima320_price``: ARIMA(3,2,0) on price levels, the legacy model (kept for comparison;
   it extrapolates recent trend).
-- ``arima_logret``: ARIMA(1,0,1) on daily log returns, summed over the horizon.
+- ``ar1_logret``: AR(1) on daily log returns, fitted by least squares (closed form, so it
+  can't fail to converge and gives the same answer on every CPU), forecast analytically
+  over the horizon. It replaced ARIMA(1,0,1) fitted by maximum likelihood, whose optimizer
+  failed on ~5% of real windows and converged differently on x86 and arm64.
 - ``historical_mean``: trailing geometric mean return, the textbook input with no forecast.
 
 Fits run in a process pool and are cached per (symbol, decision date), so re-running a
@@ -30,7 +33,7 @@ from portfolio_lab.core.store import upsert_parquet
 
 log = logging.getLogger(__name__)
 
-MODELS = ("arima320_price", "arima_logret", "historical_mean")
+MODELS = ("arima320_price", "ar1_logret", "historical_mean")
 TRADING_DAYS = 252
 #: Forecasts are clipped to this annual range, keeping extreme extrapolations from
 #: destabilizing the optimizer (the per-name weight cap limits their influence anyway).
@@ -51,7 +54,7 @@ class ForecastSpec:
         lookback: Sessions of history fitted.
     """
 
-    model: str = "arima_logret"
+    model: str = "ar1_logret"
     horizon: int = 21
     lookback: int = TRADING_DAYS
 
@@ -65,6 +68,20 @@ class ForecastSpec:
         return f"{self.model}-h{self.horizon}-l{self.lookback}-v{MODEL_VERSION}"
 
 
+def ar1_forecast_sum(returns: np.ndarray, horizon: int) -> float:
+    """Sum of the next ``horizon`` returns forecast by an AR(1) fitted with least squares.
+
+    Fits ``r[t] = c + phi * r[t-1]``; with long-run mean ``mu = c / (1 - phi)`` the k-step
+    forecast is ``mu + phi**k * (r[-1] - mu)``, so the sum over ``k = 1..horizon`` is
+    ``horizon * mu + (r[-1] - mu) * phi * (1 - phi**horizon) / (1 - phi)``. ``phi`` is
+    clipped to keep the process stationary.
+    """
+    phi, c = np.polyfit(returns[:-1], returns[1:], 1)
+    phi = float(np.clip(phi, -0.99, 0.99))
+    mu = c / (1 - phi)
+    return float(horizon * mu + (returns[-1] - mu) * phi * (1 - phi**horizon) / (1 - phi))
+
+
 def forecast_one(prices: np.ndarray, spec: ForecastSpec) -> float:
     """Annualized expected return for one symbol, or NaN if the model fails.
 
@@ -72,8 +89,6 @@ def forecast_one(prices: np.ndarray, spec: ForecastSpec) -> float:
         prices: Adjusted price levels, oldest first, no missing values.
         spec: The model configuration.
     """
-    from statsmodels.tsa.arima.model import ARIMA  # noqa: PLC0415 - heavy; loaded in workers
-
     if len(prices) < 30 or not np.all(prices > 0):
         return np.nan
     with warnings.catch_warnings():
@@ -82,16 +97,15 @@ def forecast_one(prices: np.ndarray, spec: ForecastSpec) -> float:
             if spec.model == "historical_mean":
                 annual = (prices[-1] / prices[0]) ** (TRADING_DAYS / (len(prices) - 1)) - 1
             elif spec.model == "arima320_price":
+                from statsmodels.tsa.arima.model import ARIMA  # noqa: PLC0415 - heavy; only here
+
                 fit = ARIMA(prices, order=(3, 2, 0)).fit()
                 if not fit.mle_retvals.get("converged", True):
                     return np.nan
                 expected = fit.forecast(steps=spec.horizon)[-1]
                 annual = (expected / prices[-1]) ** (TRADING_DAYS / spec.horizon) - 1
-            else:  # arima_logret
-                fit = ARIMA(np.diff(np.log(prices)), order=(1, 0, 1)).fit()
-                if not fit.mle_retvals.get("converged", True):
-                    return np.nan
-                log_return = fit.forecast(steps=spec.horizon).sum()
+            else:  # ar1_logret
+                log_return = ar1_forecast_sum(np.diff(np.log(prices)), spec.horizon)
                 annual = np.exp(log_return * TRADING_DAYS / spec.horizon) - 1
         except (ValueError, np.linalg.LinAlgError):
             return np.nan

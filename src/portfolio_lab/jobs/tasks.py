@@ -29,7 +29,7 @@ SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("equal_weight", {}),
     # Control for meanvar: the same candidates (100 most liquid), equally weighted.
     ("equal_weight", {"top_n": 100}),
-    ("meanvar", {"model": "arima_logret"}),
+    ("meanvar", {"model": "ar1_logret"}),
     ("meanvar", {"model": "arima320_price"}),
     ("meanvar", {"model": "historical_mean"}),
 )
