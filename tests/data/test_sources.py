@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from portfolio_lab.core.http import RateLimitedClient
-from portfolio_lab.data.sources.alpaca import end_param, fetch_bars
+from portfolio_lab.data.sources.alpaca import end_param, fetch_bars, fetch_minute_bars
 from portfolio_lab.data.sources.fred import parse_dtb3
 
 
@@ -114,3 +114,21 @@ def test_fetch_bars_isolates_unnamed_bad_symbols():
         client, ["AAA", "BBB", "3UW:DU", "CCC", "DDD"], date(2024, 3, 8), date(2024, 3, 8)
     )
     assert sorted(df["symbol"]) == ["AAA", "BBB", "CCC", "DDD"]
+
+
+def test_fetch_minute_bars_keeps_new_york_timestamps():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(parse_qs(urlparse(str(request.url)).query))
+        # 14:31Z on 2024-03-08 is 09:31 in New York (EST).
+        return httpx.Response(
+            200,
+            json={"bars": {"AAA": [_bar("2024-03-08T14:31:00Z", 10.5)]}, "next_page_token": None},
+        )
+
+    client = RateLimitedClient(base_url="https://data.test", transport=httpx.MockTransport(handler))
+    df = fetch_minute_bars(client, ["AAA"], date(2024, 3, 8))
+    assert seen["timeframe"] == ["1Min"] and seen["start"][0].startswith("2024-03-08T09:30:00")
+    ts = df["ts"][0]
+    assert (ts.hour, ts.minute) == (9, 31) and df["close"][0] == 10.5

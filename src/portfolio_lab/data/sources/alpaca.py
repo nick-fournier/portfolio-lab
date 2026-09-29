@@ -2,7 +2,7 @@
 
 Daily bars come back with UTC timestamps at midnight New York time (``04:00Z`` or ``05:00Z``
 depending on daylight saving), so they are converted to ``America/New_York`` dates, never
-truncated in UTC.
+truncated in UTC. Minute bars keep their New York timestamps (the start of each minute).
 """
 
 import logging
@@ -53,6 +53,10 @@ _FIELDS = {
 }
 
 
+MINUTE_SCHEMA = {"symbol": pl.String, "ts": pl.Datetime("us", NEW_YORK)} | {
+    name: dtype for name, dtype in BAR_SCHEMA.items() if name not in ("symbol", "date")
+}
+
 # Raw payload rows: symbol, Alpaca's timestamp string, then bar fields as final types.
 _ROW_SCHEMA = {"symbol": pl.String, "t": pl.String} | {
     name: BAR_SCHEMA[name] for name in _FIELDS.values()
@@ -87,34 +91,34 @@ def _batches(items: Sequence[str], size: int) -> Iterator[list[str]]:
         yield list(items[i : i + size])
 
 
-def _to_frame(bars: dict[str, list[dict]]) -> pl.DataFrame:
-    """Convert Alpaca's ``{symbol: [bar, ...]}`` payload into a typed frame."""
+def _to_frame(bars: dict[str, list[dict]], intraday: bool = False) -> pl.DataFrame:
+    """Convert Alpaca's ``{symbol: [bar, ...]}`` payload into a typed frame.
+
+    Daily frames follow :data:`BAR_SCHEMA`; intraday ones :data:`MINUTE_SCHEMA`.
+    """
+    schema = MINUTE_SCHEMA if intraday else BAR_SCHEMA
     rows = [
         {"symbol": symbol, "t": bar["t"], **{name: bar.get(key) for key, name in _FIELDS.items()}}
         for symbol, symbol_bars in bars.items()
         for bar in symbol_bars
     ]
     if not rows:
-        return pl.DataFrame(schema=BAR_SCHEMA)
-    return (
-        # Explicit schema: inferring from the first rows would type a page whose early
-        # prices are whole numbers as integers and silently truncate later ones (0.99 -> 0).
-        pl.DataFrame(rows, schema=_ROW_SCHEMA)
-        .with_columns(
-            pl.col("t")
-            .str.to_datetime(time_zone="UTC")
-            .dt.convert_time_zone(NEW_YORK)
-            .dt.date()
-            .alias("date")
-        )
-        .select([pl.col(name).cast(dtype) for name, dtype in BAR_SCHEMA.items()])
+        return pl.DataFrame(schema=schema)
+    # Explicit schema: inferring from the first rows would type a page whose early prices
+    # are whole numbers as integers and silently truncate later ones (0.99 -> 0).
+    local = pl.col("t").str.to_datetime(time_zone="UTC").dt.convert_time_zone(NEW_YORK)
+    frame = pl.DataFrame(rows, schema=_ROW_SCHEMA).with_columns(
+        (local if intraday else local.dt.date()).alias("ts" if intraday else "date")
     )
+    return frame.select([pl.col(name).cast(dtype) for name, dtype in schema.items()])
 
 
 _INVALID_SYMBOL = re.compile(r"invalid symbol: ([A-Za-z0-9.$/^=+-]+)")
 
 
-def _fetch_batch(client: RateLimitedClient, batch: list[str], params: dict) -> list[pl.DataFrame]:
+def _fetch_batch(
+    client: RateLimitedClient, batch: list[str], params: dict, intraday: bool = False
+) -> list[pl.DataFrame]:
     """Fetch every page for one batch of symbols.
 
     Alpaca rejects a whole request with HTTP 400 if any symbol is malformed. The offending
@@ -130,7 +134,7 @@ def _fetch_batch(client: RateLimitedClient, batch: list[str], params: dict) -> l
                 if page_token:
                     query["page_token"] = page_token
                 payload = client.get_json(BARS_PATH, query)
-                frames.append(_to_frame(payload.get("bars") or {}))
+                frames.append(_to_frame(payload.get("bars") or {}, intraday))
                 page_token = payload.get("next_page_token")
                 if not page_token:
                     return frames
@@ -146,8 +150,8 @@ def _fetch_batch(client: RateLimitedClient, batch: list[str], params: dict) -> l
                 return []
             else:
                 half = len(batch) // 2
-                return _fetch_batch(client, batch[:half], params) + _fetch_batch(
-                    client, batch[half:], params
+                return _fetch_batch(client, batch[:half], params, intraday) + _fetch_batch(
+                    client, batch[half:], params, intraday
                 )
     return []
 
@@ -191,3 +195,33 @@ def fetch_bars(
     if not frames:
         return pl.DataFrame(schema=BAR_SCHEMA)
     return pl.concat(frames).unique(subset=["symbol", "date"], keep="last").sort("symbol", "date")
+
+
+def fetch_minute_bars(client: RateLimitedClient, symbols: Sequence[str], day: date) -> pl.DataFrame:
+    """Raw one-minute bars for one session's regular hours (9:30 to 16:00 New York).
+
+    Args:
+        client: Client from :func:`make_client`.
+        symbols: Symbols to fetch; batched in groups of 200 per request.
+        day: The session.
+
+    Returns:
+        Rows per :data:`MINUTE_SCHEMA`, sorted by symbol and time. A minute without trades
+        has no bar.
+    """
+    zone = ZoneInfo(NEW_YORK)
+    params = {
+        "timeframe": "1Min",
+        "start": datetime.combine(day, time(9, 30), zone).isoformat(),
+        "end": datetime.combine(day, time(15, 59), zone).isoformat(),
+        "adjustment": "raw",
+        "feed": "sip",
+        "limit": PAGE_LIMIT,
+        "sort": "asc",
+    }
+    frames = []
+    for batch in _batches(sorted(set(symbols)), MAX_SYMBOLS_PER_REQUEST):
+        frames += _fetch_batch(client, batch, params, intraday=True)
+    if not frames:
+        return pl.DataFrame(schema=MINUTE_SCHEMA)
+    return pl.concat(frames).unique(subset=["symbol", "ts"], keep="last").sort("symbol", "ts")

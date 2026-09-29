@@ -25,6 +25,11 @@ class DataPaths:
         return self.root / "prices" / "benchmarks"
 
     @property
+    def prices_minute(self) -> Path:
+        """Cached one-minute bars, one folder per session (fetched on demand by probes)."""
+        return self.root / "prices" / "minute"
+
+    @property
     def universe_snapshots(self) -> Path:
         """One classified symbol-directory snapshot per day, ``date=YYYY-MM-DD/``."""
         return self.root / "universe" / "snapshots"
