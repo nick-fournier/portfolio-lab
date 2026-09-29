@@ -39,9 +39,17 @@
     liquid ones).</li>
   <li><b>Mean-variance:</b> the original optimizer's idea done properly. Return forecasts
     (the legacy ARIMA on prices, an AR(1) model on returns, or a plain trailing average) feed the
-    efficient frontier over the 100 most liquid stocks. So far the forecasts add nothing over
-    the trailing average, and the edge over the market comes from concentrating in recent
-    winners: a momentum tilt that survivorship bias flatters, so it is an upper bound.</li>
+    efficient frontier over the 100 most liquid stocks.</li>
+  <li><b>Momentum:</b> equal-weight the 20 biggest winners of the past year (skipping the last
+    month), on the same 100 stocks or on every eligible stock.</li>
+</ul>
+<p><b>What the comparison shows so far.</b> The forecasts add nothing over a plain trailing
+  average. Plain momentum on the same 100 stocks earns the same return as mean-variance (about 25%
+  a year since 2017), so the return is momentum; what the optimizer adds is risk control, with
+  market-level beta and drawdowns instead of momentum's 1.35 beta and -50% drawdown, for a much
+  better Sharpe ratio. Momentum across all eligible stocks does badly, so the effect lived in large,
+  liquid names. All of this is flattered by survivorship bias, so treat it as an upper bound.</p>
+<ul>
   <li><b>Next:</b> a Piotroski F-score value filter computed from SEC filings as of the date
     each filing was public.</li>
 </ul>
