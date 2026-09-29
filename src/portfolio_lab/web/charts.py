@@ -66,3 +66,28 @@ def weights_figure(weights: pl.DataFrame, top: int = 20) -> str | None:
     )
     fig.update_layout(title=f"Target weights, top {len(names)} names", height=120 + 22 * len(names))
     return fig.to_json()
+
+
+def comparison_figure(series: list[tuple[str, pl.DataFrame]], benchmark: str) -> str | None:
+    """Growth of $1 for several runs on one log-scale chart, plus the benchmark.
+
+    Args:
+        series: ``(label, daily)`` pairs, one per run.
+        benchmark: Benchmark label; its curve comes from the run covering the most days.
+    """
+    if not series:
+        return None
+    fig = go.Figure(layout=_LAYOUT)
+    for label, daily in series:
+        fig.add_scatter(x=daily["date"].to_list(), y=daily["nav"].to_list(), name=label)
+    longest = max((daily for _, daily in series), key=lambda d: d.height)
+    if "benchmark_ret" in longest.columns:
+        bench = np.cumprod(1 + longest["benchmark_ret"].to_numpy())
+        fig.add_scatter(
+            x=longest["date"].to_list(),
+            y=bench.tolist(),
+            name=f"{benchmark} (benchmark)",
+            line={"color": "#6e7781", "dash": "dot"},
+        )
+    fig.update_layout(title="Growth of $1, latest run of each strategy", yaxis_type="log")
+    return fig.to_json()

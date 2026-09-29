@@ -11,7 +11,10 @@ from portfolio_lab.strategies.construct import equal_weight
 @register("equal_weight")
 @dataclass
 class EqualWeightEligible:
-    """Hold every eligible stock (or the ``top_n`` most liquid) in equal weights.
+    """Equal-weight baseline: every eligible stock, equally weighted, rebalanced monthly.
+
+    It shows what owning the market evenly earns, with no stock picking at all. With
+    ``top_n``, only the most liquid eligible stocks are held.
 
     Args:
         top_n: If set, only the ``top_n`` eligible stocks by dollar volume.
@@ -34,7 +37,9 @@ class EqualWeightEligible:
 @register("buy_hold")
 @dataclass
 class BuyHold:
-    """Hold a single symbol (by default SPY) at 100%.
+    """Benchmark: buy and hold one symbol, by default SPY (the S&P 500).
+
+    Any strategy has to beat this, after costs, to be worth its complexity.
 
     Args:
         symbol: What to hold; benchmark ETFs are allowed.

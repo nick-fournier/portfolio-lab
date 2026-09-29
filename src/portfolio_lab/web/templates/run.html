@@ -4,6 +4,7 @@
 {% block content %}
 <h1>{{ meta.strategy }}
   <span class="muted">{% for k, v in meta.params.items() if v is not none %}{{ k }}={{ v }} {% endfor %}</span></h1>
+{% if meta.description %}<p class="lede">{{ meta.description }}</p>{% endif %}
 <p class="muted">{{ meta.start }} → {{ meta.end }} · rebalance {{ meta.schedule }} · benchmark {{ meta.benchmark }}
   · run {{ meta.run_id }}{% if meta.git_sha %} · code {{ meta.git_sha }}{% endif %}</p>
 
@@ -20,12 +21,12 @@
 <div id="equity" class="chart"></div>
 <div id="drawdown" class="chart"></div>
 {% if weights_chart %}<div id="weights" class="chart"></div>{% endif %}
-
-<h2>Latest target holdings <span class="muted">({{ n_positions }} positions{% if n_positions > holdings|length %}, top {{ holdings|length }} shown{% endif %})</span></h2>
+<h2 id="holdings">Current target holdings <span class="muted">({{ n_positions }} positions{% if n_positions > holdings|length %}, top {{ holdings|length }} shown{% endif %})</span></h2>
 <table>
   <thead><tr><th>Symbol</th><th class="num">Weight</th></tr></thead>
   <tbody>{% for h in holdings %}<tr><td>{{ h.symbol }}</td><td class="num">{{ h.weight | pct(2) }}</td></tr>{% endfor %}</tbody>
 </table>
+
 
 <h2>Caveats</h2>
 <ul class="caveats">{% for c in meta.caveats %}<li>{{ c }}</li>{% endfor %}</ul>

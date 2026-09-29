@@ -89,6 +89,7 @@ def test_benchmark_and_metadata():
     result = run(Fixed({"SPY": 1.0}), panel, BacktestConfig(DAYS[0], DAYS[-1], costs=FLAT_COST))
     assert result.daily["benchmark_ret"].to_list() == [0.01] * 4
     assert result.meta["strategy"] == "fixed"
+    assert result.meta["description"] == ""  # Fixed has no docstring
     assert result.meta["start"] == DAYS[0] and result.meta["end"] == DAYS[-1]
     assert any("Survivorship" in c for c in result.meta["caveats"])
     assert result.weights["symbol"].unique().to_list() == ["SPY"]

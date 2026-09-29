@@ -64,11 +64,31 @@ def client(tmp_path):
     return test_client
 
 
-def test_index_lists_runs_and_filters(client):
+def test_overview_compares_strategies(client):
     page = client.get("/")
     assert page.status_code == 200
+    for expected in ("equal_weight", "buy_hold", "Growth of $1", "#holdings", "How it works"):
+        assert expected in page.text
+
+
+def test_about(client):
+    page = client.get("/about")
+    assert page.status_code == 200
+    assert "Survivorship bias" in page.text and "Lead-lag" in page.text
+
+
+def test_runs_list_filters_and_history(client, tmp_path):
+    page = client.get("/runs")
+    assert page.status_code == 200
     assert "equal_weight" in page.text and "buy_hold" in page.text
-    partial = client.get("/?strategy=buy_hold", headers={"HX-Request": "true"})
+    # A second run of the same configuration is hidden unless history is requested.
+    days = [date(2024, 1, 2), date(2024, 1, 3)]
+    save_run(_run("buy_hold", days), tmp_path)
+    latest = client.get("/runs?strategy=buy_hold", headers={"HX-Request": "true"})
+    everything = client.get("/runs?strategy=buy_hold&history=true", headers={"HX-Request": "true"})
+    assert latest.text.count("/runs/") == 1
+    assert everything.text.count("/runs/") == 2
+    partial = client.get("/runs?strategy=buy_hold", headers={"HX-Request": "true"})
     assert "<html" not in partial.text  # HTMX gets just the table
     assert "buy_hold" in partial.text and "equal_weight" not in partial.text
 

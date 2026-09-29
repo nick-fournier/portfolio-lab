@@ -44,10 +44,31 @@ def runs_dir(data_dir: Path) -> Path:
     return data_dir / "results" / "runs"
 
 
+#: Metadata that defines *what* was tested. Two runs agreeing on these are the same
+#: configuration, even if they ran on different days, code versions or data.
+CONFIG_KEYS = ("strategy", "params", "schedule", "start", "benchmark", "costs", "max_weight")
+
+
+def _canonical(value: Any) -> Any:
+    """Normalize values so equal configs hash equally (e.g. ``100000`` and ``100000.0``)."""
+    if isinstance(value, dict):
+        return {str(k): _canonical(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_canonical(v) for v in value]
+    if isinstance(value, int) and not isinstance(value, bool):
+        return float(value)
+    return value
+
+
+def config_id(meta: dict[str, Any]) -> str:
+    """Return a short hash identifying a run's configuration (see :data:`CONFIG_KEYS`)."""
+    config = _canonical({k: meta.get(k) for k in CONFIG_KEYS})
+    return hashlib.sha1(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest()[:10]
+
+
 def make_run_id(meta: dict[str, Any], created: datetime) -> str:
-    """Return a sortable, unique id: ``<UTC timestamp>-<strategy>-<params hash>``."""
-    digest = hashlib.sha1(json.dumps(meta, sort_keys=True, default=str).encode()).hexdigest()
-    return f"{created:%Y%m%dT%H%M%S}-{meta['strategy']}-{digest[:6]}"
+    """Return a sortable, unique id: ``<UTC timestamp>-<strategy>-<config hash>``."""
+    return f"{created:%Y%m%dT%H%M%S}-{meta['strategy']}-{config_id(meta)[:6]}"
 
 
 def save_run(result: RunResult, data_dir: Path) -> str:
@@ -58,12 +79,19 @@ def save_run(result: RunResult, data_dir: Path) -> str:
         data_dir: The data directory root.
     """
     created = datetime.now(UTC)
-    run_id = make_run_id(result.meta, created)
+    base_id = run_id = make_run_id(result.meta, created)
+    n = 1
+    while (runs_dir(data_dir) / run_id).exists():  # same config saved within the same second
+        n += 1
+        run_id = f"{base_id}-{n}"
     path = runs_dir(data_dir) / run_id
-    if path.exists():
-        shutil.rmtree(path)
     path.mkdir(parents=True)
-    meta = {**result.meta, "run_id": run_id, "created_at": created.isoformat(timespec="seconds")}
+    meta = {
+        **result.meta,
+        "run_id": run_id,
+        "config_id": config_id(result.meta),
+        "created_at": created.isoformat(timespec="seconds"),
+    }
     (path / "meta.json").write_text(json.dumps(meta, indent=2, default=str))
     (path / "metrics.json").write_text(json.dumps(result.metrics, indent=2))
     write_parquet_atomic(result.daily, path / "daily.parquet")
@@ -72,21 +100,40 @@ def save_run(result: RunResult, data_dir: Path) -> str:
     return run_id
 
 
-def list_runs(data_dir: Path) -> list[dict[str, Any]]:
-    """Return ``{"meta": ..., "metrics": ...}`` for every complete run, newest first."""
+def list_runs(data_dir: Path, latest_only: bool = False) -> list[dict[str, Any]]:
+    """Return ``{"meta": ..., "metrics": ...}`` for complete runs, newest first.
+
+    Args:
+        data_dir: The data directory root.
+        latest_only: Keep only the newest run of each configuration.
+    """
     root = runs_dir(data_dir)
     if not root.exists():
         return []
-    runs = []
+    runs, seen = [], set()
     for path in sorted(root.iterdir(), reverse=True):
-        if (path / SUCCESS_MARKER).exists():
-            runs.append(
-                {
-                    "meta": json.loads((path / "meta.json").read_text()),
-                    "metrics": json.loads((path / "metrics.json").read_text()),
-                }
-            )
+        if not (path / SUCCESS_MARKER).exists():
+            continue
+        meta = json.loads((path / "meta.json").read_text())
+        meta["config_id"] = config_id(meta)  # recomputed, so hashing changes apply to old runs
+        if latest_only and meta["config_id"] in seen:
+            continue
+        seen.add(meta["config_id"])
+        runs.append({"meta": meta, "metrics": json.loads((path / "metrics.json").read_text())})
     return runs
+
+
+def prune_runs(data_dir: Path, keep: int = 3) -> list[str]:
+    """Delete all but the newest ``keep`` runs of each configuration; return deleted ids."""
+    kept: dict[str, int] = {}
+    deleted = []
+    for run in list_runs(data_dir):
+        cid = run["meta"]["config_id"]
+        kept[cid] = kept.get(cid, 0) + 1
+        if kept[cid] > keep:
+            shutil.rmtree(runs_dir(data_dir) / run["meta"]["run_id"])
+            deleted.append(run["meta"]["run_id"])
+    return deleted
 
 
 def load_run(data_dir: Path, run_id: str) -> RunResult:
