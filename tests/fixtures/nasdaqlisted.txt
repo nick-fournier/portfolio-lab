@@ -1,0 +1,15 @@
+Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares
+AAAP|Pacer Barings CLO Market Flex ETF|G|N|N|100|Y|N
+AACG|ATA Creativity Global - American Depositary Shares, each representing two common shares|S|N|N|100|N|N
+AAPL|Apple Inc. - Common Stock|Q|N|N|40|N|N
+ACGLN|Arch Capital Group Ltd. - Depositary Shares, each Representing a 1/1,000th Interest in a 4.550% Non-Cumulative Preferred Share, Series G|Q|N|N|100|N|N
+AMPGZ|Amplitech Group, Inc. - Series B Right|S|N|N|100|N|N
+CHSCN|CHS Inc - Preferred Class B Series 2 Reset Rate|Q|N|N|100|N|N
+OBAI|Our Bond, Inc. - Common Stock|G|N|D|100|N|N
+OXLC|Oxford Lane Capital Corp. - Closed End Fund|Q|N|N|100|N|N
+PFBC|Preferred Bank - Common Stock|Q|N|N|100|N|N
+QUMSR|Quantumsphere Acquisition Corp. - Rights|G|N|N|100|N|N
+RWAYL|Runway Growth Finance Corp. - 7.50% Notes due 2027|Q|N|N|100|N|N
+SCATU|Southern Cross Acquisition II Corp. - Units|S|N|N|100|N|N
+ZVZZT|NASDAQ TEST STOCK|G|Y|N|100|N|N
+File Creation Time: 0928202618:01|||||||
