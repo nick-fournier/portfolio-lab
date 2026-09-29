@@ -65,6 +65,11 @@ class DataPaths:
         return self.root / "results" / "context_dial.parquet"
 
     @property
+    def models(self) -> Path:
+        """Model results: predictions, summary, calibration and importance tables."""
+        return self.root / "results" / "models"
+
+    @property
     def edgar_bulk(self) -> Path:
         """Downloaded SEC ``companyfacts.zip`` (about 1.4 GB, replaced when it changes)."""
         return self.root / "raw" / "edgar" / "companyfacts.zip"

@@ -181,6 +181,12 @@ def context_cmd() -> None:
     typer.echo(tasks.context_task(get_settings()))
 
 
+@app.command("models")
+def models_cmd() -> None:
+    """Train and evaluate the relaxed models walk-forward (results under results/models)."""
+    typer.echo(tasks.models_task(get_settings()))
+
+
 @app.command("serve")
 def serve_cmd(
     host: Annotated[str, typer.Option(help="Interface to bind.")] = "127.0.0.1",

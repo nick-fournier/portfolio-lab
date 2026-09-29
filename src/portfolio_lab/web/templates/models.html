@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Models · Portfolio lab{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js" defer></script>{% endblock %}
+{% block content %}
+<h1>Models</h1>
+<p class="lede">Instead of one hand-built score, these models learn how to combine every stock
+  trait (and, for the tree model, the market environment) into a probability that the stock
+  beats the median stock over the next month or quarter. Each January a model is trained only
+  on earlier months, then judged on the year it never saw.</p>
+
+{% if sections %}
+{% for s in sections %}
+<h2>{{ s.title }}</h2>
+{% for pool in s.pools %}
+<h3>{{ pool.title }}</h3>
+<div class="table-wrap wrap-head"><table>
+  <thead><tr><th>Model</th><th class="num">Top tenth beat median</th>
+    <th class="num">Bottom tenth lagged</th><th class="num">Months top tenth &gt;50%</th>
+    <th class="num">AUC</th><th class="num">IC (t)</th><th class="num">Calibration error</th>
+    <th class="num">Worst year AUC</th></tr></thead>
+  <tbody>{% for r in pool.rows %}<tr>
+    <td><a href="/signals#g-model-{{ r.model | replace('_', '-') }}">{{ r.model }}</a></td>
+    <td class="num">{{ r.top10_hit | pct }}</td><td class="num">{{ r.bottom10_hit | pct }}</td>
+    <td class="num">{{ r.top10_months_ok | pct(0) }}</td>
+    <td class="num">{{ "%.3f" | format(r.auc) }}</td>
+    <td class="num">{{ "%+.3f" | format(r.ic) }} <span class="muted">({{ "%+.1f" | format(r.ic_t) }})</span></td>
+    <td class="num">{{ "%.3f" | format(r.ece) }}{% if s.ece_cal.get(r.model) is not none %} <span class="muted">→ {{ "%.3f" | format(s.ece_cal[r.model]) }}</span>{% endif %}</td>
+    <td class="num">{{ "%.3f" | format(r.worst_year_auc) if r.worst_year_auc is not none else "–" }}</td>
+  </tr>{% endfor %}</tbody>
+</table></div>
+{% endfor %}
+
+{% if s.calibration %}
+<h3>Does a stated probability come true?</h3>
+<p class="muted">Each point groups a tenth of all predictions by stated probability. On the
+  dotted line a stated 55% comes true 55% of the time; "+cal" is the calibrated version.</p>
+<div id="cal-{{ s.key }}" class="chart"></div>
+{% endif %}
+{% if s.importance %}
+<h3>What the tree model relies on</h3>
+<p class="muted">How much ranking accuracy falls when one input is shuffled (environment series
+  grouped), averaged over test years. Larger = relied on more.</p>
+<div id="imp-{{ s.key }}" class="chart auto"></div>
+{% endif %}
+{% endfor %}
+
+<h2>Reading this</h2>
+<ul class="prose">
+  <li><b>AUC</b>: the chance that, of two stocks, the model rates higher the one that then did
+    better. 0.5 is a coin flip; at monthly horizons 0.52 is a useful edge, because it repeats
+    across thousands of stocks.</li>
+  <li><b>Top / bottom tenth</b>: each month, how often the tenth of stocks rated most likely to
+    beat the median did so, and how often the least likely tenth lagged. This is what a
+    portfolio would hold or avoid, and does not depend on calibration.</li>
+  <li><b>Calibration error</b>: the average gap between stated and realized probabilities; the
+    arrow shows it after calibration (re-mapped using only earlier years' outcomes). Honest
+    probabilities for single stocks sit close to 50%: the reliability comes from breadth, many
+    small edges at once, not from certainty about any one stock.</li>
+  <li>Models are named in the <a href="/signals#glossary">glossary</a>; their monthly IC is also on
+    the <a href="/signals">scoreboard</a>.</li>
+</ul>
+{% else %}
+<p class="muted">No model results yet (<code>plab models</code>).</p>
+{% endif %}
+
+{% if sections %}
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    {% for s in sections %}
+    {% if s.calibration %}drawPlot("cal-{{ s.key }}", {{ s.calibration | safe }});{% endif %}
+    {% if s.importance %}drawPlot("imp-{{ s.key }}", {{ s.importance | safe }});{% endif %}
+    {% endfor %}
+  });
+</script>
+{% endif %}
+{% endblock %}
