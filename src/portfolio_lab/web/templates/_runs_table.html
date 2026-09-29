@@ -1,5 +1,5 @@
 {% if runs %}
-<table>
+<div class="table-wrap"><table>
   <thead>
     <tr>
       <th>Run</th><th>Strategy</th><th>Params</th><th>Period</th>
@@ -20,7 +20,7 @@
     </tr>
   {% endfor %}
   </tbody>
-</table>
+</table></div>
 {% else %}
 <p class="muted">No runs yet. Run <code>plab backtest &lt;strategy&gt; --start YYYY-MM-DD</code>.</p>
 {% endif %}

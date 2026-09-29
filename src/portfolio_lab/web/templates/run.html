@@ -2,8 +2,8 @@
 {% block title %}{{ meta.strategy }} · Portfolio lab{% endblock %}
 {% block head %}<script src="/vendor/plotly.min.js" defer></script>{% endblock %}
 {% block content %}
-<h1>{{ meta.strategy }}
-  <span class="muted">{% for k, v in meta.params.items() if v is not none %}{{ k }}={{ v }} {% endfor %}</span></h1>
+<h1>{{ meta.label or meta.strategy }}</h1>
+<p class="muted">Parameters: {% for k, v in meta.params.items() %}{{ k }}={{ v }}{% if not loop.last %} · {% endif %}{% else %}none{% endfor %}</p>
 {% if meta.description %}<p class="lede">{{ meta.description }}</p>{% endif %}
 <p class="muted">{{ meta.start }} → {{ meta.end }} · rebalance {{ meta.schedule }} · benchmark {{ meta.benchmark }}
   · run {{ meta.run_id }}{% if meta.git_sha %} · code {{ meta.git_sha }}{% endif %}</p>
@@ -18,14 +18,17 @@
   {% endfor %}
 </div>
 
+<h2>Growth of $1</h2>
 <div id="equity" class="chart"></div>
-<div id="drawdown" class="chart"></div>
-{% if weights_chart %}<div id="weights" class="chart"></div>{% endif %}
+<h2>Drawdown</h2>
+<div id="drawdown" class="chart short"></div>
+{% if weights_chart %}<h2>Target weights over time <span class="muted">(top 20 names)</span></h2>
+<div id="weights" class="chart auto"></div>{% endif %}
 <h2 id="holdings">Current target holdings <span class="muted">({{ n_positions }} positions{% if n_positions > holdings|length %}, top {{ holdings|length }} shown{% endif %})</span></h2>
-<table>
+<div class="table-wrap"><table>
   <thead><tr><th>Symbol</th><th class="num">Weight</th></tr></thead>
   <tbody>{% for h in holdings %}<tr><td>{{ h.symbol }}</td><td class="num">{{ h.weight | pct(2) }}</td></tr>{% endfor %}</tbody>
-</table>
+</table></div>
 
 
 <h2>Caveats</h2>
@@ -37,7 +40,7 @@
 
 <script>
   document.addEventListener("DOMContentLoaded", () => {
-    const opts = {responsive: true, displaylogo: false};
+    const opts = window.PLOT_CONFIG;
     for (const [id, fig] of [["equity", {{ equity | safe }}], ["drawdown", {{ drawdown | safe }}]{% if weights_chart %}, ["weights", {{ weights_chart | safe }}]{% endif %}]) {
       Plotly.newPlot(id, fig.data, fig.layout, opts);
     }

@@ -4,7 +4,7 @@
 <h1>Data status <span class="badge {{ freshness }}">prices {{ freshness }}</span></h1>
 
 <h2>Data jobs</h2>
-<table>
+<div class="table-wrap"><table>
   <thead><tr><th>Job</th><th>Finished (UTC)</th><th>Details</th><th>Issues</th></tr></thead>
   <tbody>
   {% for job in jobs %}
@@ -18,10 +18,10 @@
     <tr><td colspan="4" class="muted">No jobs have run yet.</td></tr>
   {% endfor %}
   </tbody>
-</table>
+</table></div>
 
 <h2>Scheduler</h2>
-<table>
+<div class="table-wrap"><table>
   <thead><tr><th>Job</th><th>Last success (UTC)</th><th>Last session</th><th>Last error</th></tr></thead>
   <tbody>
   {% for name, s in scheduler.items() %}
@@ -35,5 +35,5 @@
     <tr><td colspan="4" class="muted">The scheduler has not run yet.</td></tr>
   {% endfor %}
   </tbody>
-</table>
+</table></div>
 {% endblock %}

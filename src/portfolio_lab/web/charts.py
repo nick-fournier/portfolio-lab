@@ -4,11 +4,14 @@ import numpy as np
 import plotly.graph_objects as go
 import polars as pl
 
+# Titles live in the page (HTML headings), not in the figure, and the legend sits below the
+# plot area, so neither can cover the data on narrow (mobile) screens.
 _LAYOUT = {
-    "margin": {"l": 50, "r": 20, "t": 40, "b": 40},
+    "margin": {"l": 45, "r": 10, "t": 10, "b": 10},
     "template": "plotly_white",
-    "legend": {"orientation": "h", "y": 1.08},
+    "legend": {"orientation": "h", "yanchor": "top", "y": -0.12, "xanchor": "left", "x": 0},
     "hovermode": "x unified",
+    "font": {"size": 11},
 }
 
 
@@ -19,7 +22,7 @@ def equity_figure(daily: pl.DataFrame, strategy: str, benchmark: str) -> str:
     if "benchmark_ret" in daily.columns:
         bench = np.cumprod(1 + daily["benchmark_ret"].to_numpy())
         fig.add_scatter(x=daily["date"].to_list(), y=bench.tolist(), name=benchmark)
-    fig.update_layout(title="Growth of $1", yaxis_type="log")
+    fig.update_layout(yaxis_type="log")
     return fig.to_json()
 
 
@@ -29,7 +32,7 @@ def drawdown_figure(daily: pl.DataFrame) -> str:
     drawdown = nav / np.maximum.accumulate(np.r_[1.0, nav])[1:] - 1
     fig = go.Figure(layout=_LAYOUT)
     fig.add_scatter(x=daily["date"].to_list(), y=drawdown.tolist(), fill="tozeroy", name="drawdown")
-    fig.update_layout(title="Drawdown", yaxis_tickformat=".0%", showlegend=False)
+    fig.update_layout(yaxis_tickformat=".0%", showlegend=False)
     return fig.to_json()
 
 
@@ -64,7 +67,7 @@ def weights_figure(weights: pl.DataFrame, top: int = 20) -> str | None:
         ),
         layout=_LAYOUT,
     )
-    fig.update_layout(title=f"Target weights, top {len(names)} names", height=120 + 22 * len(names))
+    fig.update_layout(height=80 + 22 * len(names), hovermode="closest")
     return fig.to_json()
 
 
@@ -89,5 +92,5 @@ def comparison_figure(series: list[tuple[str, pl.DataFrame]], benchmark: str) ->
             name=f"{benchmark} (benchmark)",
             line={"color": "#6e7781", "dash": "dot"},
         )
-    fig.update_layout(title="Growth of $1, latest run of each strategy", yaxis_type="log")
+    fig.update_layout(yaxis_type="log")
     return fig.to_json()
