@@ -16,6 +16,7 @@ dependencies = [
     "polars>=1.9",
     "pydantic-settings>=2.5",
     "pyportfolioopt>=1.5.6",
+    "scikit-learn>=1.5",
     "typer>=0.12",
     "uvicorn>=0.30",
 ]

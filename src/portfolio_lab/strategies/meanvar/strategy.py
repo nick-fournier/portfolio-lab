@@ -21,15 +21,15 @@ from portfolio_lab.strategies.meanvar.optimize import optimize
 #: What each forecast model really computes, for the run explanation.
 _MODEL_TEXT = {
     "historical_mean": (
-        "Each stock's average annual return over the past year. This is extrapolation, not "
+        "Each stock's average annual return over the past {span}. This is extrapolation, not "
         "a prediction: it assumes last year's return continues."
     ),
     "ar1_logret": (
-        "An AR(1) model fitted to each stock's past year of daily returns. AR(1) means "
+        "An AR(1) model fitted to each stock's past {span} of daily returns. AR(1) means "
         "autoregressive with one lag: the next return is predicted from the latest return "
         "times a fitted coefficient, plus an average. Daily returns have almost no "
         "day-to-day memory, so the coefficient is near zero and the forecast collapses to "
-        "roughly the trailing one-year average: extrapolation, not a prediction."
+        "roughly the trailing {adj} average: extrapolation, not a prediction."
     ),
     "arima320_price": (
         "The original optimizer's ARIMA(3,2,0) on price levels. ARIMA(p, d, q) reads: p = 3, "
@@ -97,6 +97,9 @@ class MeanVar:
 
     def explain(self) -> dict[str, str]:
         """Plain-language description of a run (see ``strategies.explain``)."""
+        years = round(self.lookback / 252)
+        span = "year" if years <= 1 else f"{years} years"
+        adj = "one-year" if years <= 1 else f"{years}-year"
         screen = (
             f" Only companies with a Piotroski F-score of {self.min_fscore}+ from their latest "
             "annual report are considered, before taking the most liquid."
@@ -112,7 +115,7 @@ class MeanVar:
         signal = (
             "the legacy ARIMA price trend"
             if self.model == "arima320_price"
-            else "each stock's trailing one-year return"
+            else f"each stock's trailing {adj} return"
         )
         return {
             "summary": (
@@ -120,13 +123,13 @@ class MeanVar:
                 f"{signal} as its expected return."
             ),
             "candidates": explain.candidates(self.top_n)
-            + " Stocks missing more than 5% of the past year's prices are skipped."
+            + f" Stocks missing more than 5% of the past {span}'s prices are skipped."
             + screen,
-            "signal": _MODEL_TEXT[self.model]
+            "signal": _MODEL_TEXT[self.model].format(span=span, adj=adj)
             + " Forecasts are capped at +500% a year. The Signals page shows how well this "
             "ranking has actually predicted returns.",
             "construction": (
-                "Estimates how the candidates move together from the past year of daily prices "
+                f"Estimates how the candidates move together from the past {span} of daily prices "
                 f"(a shrunk covariance), then picks the long-only weights with {objective}. No "
                 f"stock above {self.max_weight:.0%}, fully invested; if no mix beats cash it "
                 "falls back to the lowest-risk mix. In practice it favors stocks with high "
@@ -141,7 +144,7 @@ class MeanVar:
             "related": (
                 "Same candidates as momentum (pool=100): momentum ranks by the 12-month return "
                 "excluding the last month and equal-weights the top 20; meanvar uses the full "
-                "trailing year and weights by expected return, volatility and co-movement "
+                f"trailing {span} and weights by expected return, volatility and co-movement "
                 f"({self.max_weight:.0%} cap). The AR(1) and trailing-average runs hold almost "
                 "identical portfolios."
             ),

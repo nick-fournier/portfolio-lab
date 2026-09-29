@@ -242,6 +242,34 @@ for _key, _label in _FACTORS.items():
         "unclear",
     )
 
+_MODEL_WHY = (
+    "Trained each January only on earlier months, then judged on the following year it never "
+    "saw; see the Models page for how reliable its calls were."
+)
+GLOSSARY |= {
+    "model: fscore": Entry(
+        "The F-score turned into a probability of beating the median stock (a one-input "
+        "logistic regression): the baseline the models must beat.",
+        _MODEL_WHY,
+    ),
+    "model: cfo_to_assets": Entry(
+        "Cash flow to assets, the best single trait, turned into a probability of beating the "
+        "median stock.",
+        _MODEL_WHY,
+    ),
+    "model: logistic": Entry(
+        "Logistic regression on every stock trait as a monthly percentile: each trait pushes "
+        "the probability of beating the median up or down on its own (additive).",
+        _MODEL_WHY,
+    ),
+    "model: gbm": Entry(
+        "Gradient-boosted decision trees on the same traits plus the market environment; can "
+        "learn thresholds and combinations (e.g. a trait that only matters in some "
+        "conditions).",
+        _MODEL_WHY,
+    ),
+}
+
 EXPECT_TEXT = {
     "higher": "higher is better",
     "lower": "lower is better",

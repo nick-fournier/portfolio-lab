@@ -108,13 +108,27 @@
   later revisions), each stock's sensitivity to them, and the market's own valuation. It
   measures which traits pay off under which conditions; it does not time the market.</p>
 
+<h2>7. Models</h2>
+<p>Instead of one hand-built score, <a href="/models">models</a> learn how to combine every
+  trait into a probability that a stock beats the median stock over the next month or
+  quarter: a logistic regression (each trait adds or subtracts on its own) and gradient-boosted
+  trees (which can learn thresholds and conditions). Each is trained every January only on
+  earlier months and judged on the following year, and its probabilities are re-mapped with
+  past outcomes so a stated 55% means 55%.</p>
+<p>The honest lesson so far: no single stock's direction over the next month can be called
+  with much confidence; calibrated probabilities stay near 50 to 55%. The edge is small and
+  statistical, so it has to come from many positions at once, and flagging likely laggards
+  has been more reliable than picking winners.</p>
+
 <h2>Roadmap</h2>
 <ol>
   <li><b>Foundation</b> (done): data, backtests, baselines, the original optimizer rebuilt,
     dead companies included, and a scoreboard that tests predictions directly.</li>
-  <li><b>Long value portfolio</b> (in progress): fundamentals and market context (done), then
-    models that learn how to combine the traits into a probability of beating the market, and
-    a monthly portfolio built from the confident calls.</li>
+  <li><b>Long value portfolio</b> (in progress): fundamentals, market context and models
+    (done), then a monthly portfolio across all eligible stocks, built on a factor risk model
+    and the models' calls. A sequence model (attention over each company's filing history
+    and the environment) is on hold until the tree models show there is structure for it
+    to find.</li>
   <li><b>Short-term trader</b> (next): trades held for hours to days, sized by how reliably the
     direction can be called. Lead-lag between stocks was tested first: related stocks do move
     together after a big move, but within about a minute, too fast to act on.</li>

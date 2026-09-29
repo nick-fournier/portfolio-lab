@@ -518,6 +518,7 @@ dependencies = [
     { name = "polars" },
     { name = "pydantic-settings" },
     { name = "pyportfolioopt" },
+    { name = "scikit-learn" },
     { name = "typer" },
     { name = "uvicorn" },
 ]
@@ -542,6 +543,7 @@ requires-dist = [
     { name = "polars", specifier = ">=1.9" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "pyportfolioopt", specifier = ">=1.5.6" },
+    { name = "scikit-learn", specifier = ">=1.5" },
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]

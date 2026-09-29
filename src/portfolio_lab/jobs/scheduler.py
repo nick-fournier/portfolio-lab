@@ -59,6 +59,7 @@ JOBS: tuple[Job, ...] = (
     Job("scheduled_backtests", tasks.scheduled_backtests_task, "weekly"),
     Job("scoreboard", tasks.scoreboard_task, "weekly"),
     Job("context", tasks.context_task, "weekly"),
+    Job("models", tasks.models_task, "weekly"),
 )
 
 

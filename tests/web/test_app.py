@@ -199,3 +199,31 @@ def test_context_page(client, tmp_path):
     for expected in ("Today's conditions", "$80.00", "+11%", "calm", "below bonds",
                      "Which traits work when", "+0.040", "The caution dial"):  # fmt: skip
         assert expected in page, expected
+
+
+def test_models_page(client, tmp_path):
+    assert "No model results yet" in client.get("/models").text
+    folder = tmp_path / "results" / "models"
+    folder.mkdir(parents=True)
+    row = {"horizon": 21, "months": 60, "auc": 0.52, "ic": 0.04, "ic_t": 3.0, "brier": 0.25,
+           "ece": 0.02, "up_share": 0.1, "up_hit": 0.52, "down_share": 0.1, "down_hit": 0.55,
+           "up_months_ok": 0.6, "top10_hit": 0.53, "bottom10_hit": 0.56, "top10_months_ok": 0.6,
+           "worst_year_auc": 0.505}  # fmt: skip
+    rows = [
+        row | {"model": "gbm", "pool": "all"},
+        row | {"model": "gbm+cal", "pool": "all", "ece": 0.01},
+        row | {"model": "gbm", "pool": "top500"},
+    ]
+    pl.DataFrame(rows).write_parquet(folder / "summary.parquet")
+    pl.DataFrame(
+        {"model": ["gbm", "gbm"], "horizon": [21, 21], "bin": [0, 1], "predicted": [0.45, 0.55],
+         "realized": [0.47, 0.53], "n": [100, 100]}
+    ).write_parquet(folder / "calibration.parquet")  # fmt: skip
+    pl.DataFrame(
+        {"feature": ["cfo_to_assets"], "auc_drop": [0.004], "model": ["gbm"], "horizon": [21]}
+    ).write_parquet(folder / "importance.parquet")
+    page = client.get("/models").text
+    for expected in ("Next month", "All eligible stocks", "500 most liquid stocks", "0.520",
+                     "53.0%", "→ 0.010", "Does a stated probability come true?",
+                     "What the tree model relies on"):  # fmt: skip
+        assert expected in page, expected
