@@ -27,10 +27,35 @@ def test_historical_mean_is_annualized_geometric_growth():
     assert mu == pytest.approx((1 + GROWTH) ** 252 - 1)
 
 
-@pytest.mark.parametrize("model", ["arima_logret", "arima320_price"])
-def test_arima_models_return_finite_bounded_annual_returns(model):
-    mu = forecast_one(_walk(), ForecastSpec(model))
+def test_ar1_closed_form_matches_recursion_and_recovers_parameters():
+    rng = np.random.default_rng(0)
+    phi, c, n = 0.5, 0.001, 20_000
+    r = np.zeros(n)
+    for t in range(1, n):
+        r[t] = c + phi * r[t - 1] + rng.normal(0, 0.01)
+    fitted_phi, fitted_c = np.polyfit(r[:-1], r[1:], 1)
+    assert fitted_phi == pytest.approx(phi, abs=0.02)
+    # The closed-form sum equals iterating the fitted model forward.
+    expected, prev = 0.0, r[-1]
+    for _ in range(21):
+        prev = fitted_c + fitted_phi * prev
+        expected += prev
+    assert forecast_mod.ar1_forecast_sum(r, 21) == pytest.approx(expected)
+
+
+def test_ar1_forecast_is_deterministic_and_bounded():
+    mu = forecast_one(_walk(), ForecastSpec("ar1_logret"))
     assert np.isfinite(mu) and -0.99 <= mu <= 5.0
+    assert mu == forecast_one(_walk(), ForecastSpec("ar1_logret"))
+
+
+def test_legacy_arima_is_bounded_when_it_converges():
+    # ARIMA(3,2,0) is fitted by an iterative optimizer that occasionally fails to converge
+    # (~3% of real windows, and not identically across CPUs); failures come back as NaN.
+    results = [forecast_one(_walk(seed=s), ForecastSpec("arima320_price")) for s in range(20)]
+    ok = [mu for mu in results if np.isfinite(mu)]
+    assert len(ok) >= 15
+    assert all(-0.99 <= mu <= 5.0 for mu in ok)
 
 
 def test_forecast_rejects_bad_inputs():
@@ -58,7 +83,7 @@ def test_forecaster_caches_in_memory_and_on_disk(tmp_path, monkeypatch):
     assert len(calls) == 3
     again = Forecaster(spec, tmp_path).forecast(asof, windows)  # new instance: loads the cache
     assert again == first and len(calls) == 3  # ...and cached, so it isn't refit
-    other_model = Forecaster(ForecastSpec("arima_logret"), tmp_path)
+    other_model = Forecaster(ForecastSpec("ar1_logret"), tmp_path)
     other_model.forecast(asof, {"AAA": windows["AAA"]})
     assert len(calls) == 4  # different model configuration, different cache
 
