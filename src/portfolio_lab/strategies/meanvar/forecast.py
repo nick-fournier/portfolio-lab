@@ -5,7 +5,9 @@ prices, so optimizer inputs are in consistent units (the legacy optimizer mixed 
 forecasts with an annual risk-free rate):
 
 - ``arima320_price``: ARIMA(3,2,0) on price levels, the legacy model (kept for comparison;
-  it extrapolates recent trend).
+  it extrapolates recent trend). It is an AR(3) on second differences with no constant, so
+  it is fitted by least squares; this matches statsmodels' maximum-likelihood fit (checked
+  to 3 decimals on the coefficients) without its occasional convergence failures.
 - ``ar1_logret``: AR(1) on daily log returns, fitted by least squares (closed form, so it
   can't fail to converge and gives the same answer on every CPU), forecast analytically
   over the horizon. It replaced ARIMA(1,0,1) fitted by maximum likelihood, whose optimizer
@@ -39,7 +41,8 @@ TRADING_DAYS = 252
 #: destabilizing the optimizer (the per-name weight cap limits their influence anyway).
 MU_BOUNDS = (-0.99, 5.0)
 #: Bump when model code changes, so cached forecasts from old code are not reused.
-MODEL_VERSION = 1
+#: v2: ARIMA(3,2,0) fitted by least squares instead of statsmodels' MLE.
+MODEL_VERSION = 2
 #: Thread-count variables for numpy's math backends, pinned to 1 in worker processes.
 _THREAD_ENV_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
 
@@ -82,6 +85,30 @@ def ar1_forecast_sum(returns: np.ndarray, horizon: int) -> float:
     return float(horizon * mu + (returns[-1] - mu) * phi * (1 - phi**horizon) / (1 - phi))
 
 
+def ar_diff_forecast(prices: np.ndarray, horizon: int, order: int = 3, d: int = 2) -> float:
+    """Price level ``horizon`` steps ahead from an ARIMA(order, d, 0) fitted by least squares.
+
+    Differences the prices ``d`` times, regresses each difference on its ``order`` lags (no
+    constant, as in statsmodels' ARIMA with ``d > 0``), iterates the fitted recursion
+    forward, then integrates back to a price level. Only ``d = 2`` integration is needed
+    here (the legacy model).
+    """
+    if d != 2:
+        raise ValueError("only second differences (d=2) are supported")
+    series = np.diff(prices, n=d)
+    n = len(series)
+    lags = np.column_stack([series[order - 1 - k : n - 1 - k] for k in range(order)])
+    coef, *_ = np.linalg.lstsq(lags, series[order:], rcond=None)
+    history = list(series[-order:])
+    for _ in range(horizon):
+        history.append(float(np.dot(coef, history[-1 : -order - 1 : -1])))
+    diff1, level = prices[-1] - prices[-2], prices[-1]
+    for second_diff in history[order:]:
+        diff1 += second_diff
+        level += diff1
+    return float(level)
+
+
 def forecast_one(prices: np.ndarray, spec: ForecastSpec) -> float:
     """Annualized expected return for one symbol, or NaN if the model fails.
 
@@ -97,12 +124,9 @@ def forecast_one(prices: np.ndarray, spec: ForecastSpec) -> float:
             if spec.model == "historical_mean":
                 annual = (prices[-1] / prices[0]) ** (TRADING_DAYS / (len(prices) - 1)) - 1
             elif spec.model == "arima320_price":
-                from statsmodels.tsa.arima.model import ARIMA  # noqa: PLC0415 - heavy; only here
-
-                fit = ARIMA(prices, order=(3, 2, 0)).fit()
-                if not fit.mle_retvals.get("converged", True):
-                    return np.nan
-                expected = fit.forecast(steps=spec.horizon)[-1]
+                expected = ar_diff_forecast(prices, spec.horizon)
+                if expected <= 0:
+                    return float(MU_BOUNDS[0])  # extrapolated through zero: maximally bearish
                 annual = (expected / prices[-1]) ** (TRADING_DAYS / spec.horizon) - 1
             else:  # ar1_logret
                 log_return = ar1_forecast_sum(np.diff(np.log(prices)), spec.horizon)
