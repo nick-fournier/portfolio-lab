@@ -75,7 +75,7 @@ def pages(base: str) -> list[str]:
     """
     runs = urllib.request.urlopen(f"{base}/runs").read().decode()
     run_pages = list(dict.fromkeys(re.findall(r'href="(/runs/[^"#]+)"', runs)))
-    return ["/", "/runs", *run_pages, "/signals", "/status", "/about"]
+    return ["/", "/runs", *run_pages, "/signals", "/context", "/status", "/about"]
 
 
 def main() -> int:

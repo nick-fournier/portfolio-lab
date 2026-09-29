@@ -174,3 +174,26 @@ def test_run_page_explains_the_run(tmp_path):
                      "largest 1 shown", "150.0%", "Compared with related strategies"):  # fmt: skip
         assert expected in page, expected
     assert "Equal-weights last year" in TestClient(create_app(tmp_path)).get("/").text
+
+
+def test_context_page(client, tmp_path):
+    assert "No market context yet" in client.get("/context").text
+    day = date(2024, 1, 31)
+    (tmp_path / "macro").mkdir(exist_ok=True)
+    pl.DataFrame(
+        {"date": [day], "oil": [80.0], "oil_chg3m": [0.1], "oil_pct": [0.6], "vix": [15.0],
+         "vix_pct": [0.2], "equity_risk_premium": [-0.01]}
+    ).write_parquet(tmp_path / "macro" / "environment.parquet")  # fmt: skip
+    pl.DataFrame(
+        {"trait": ["roa"], "condition": ["VIX (vs history)"], "bucket": ["calm"],
+         "months": [30], "mean_ic": [0.04], "t": [2.5]}
+    ).write_parquet(tmp_path / "results" / "context_conditions.parquet")  # fmt: skip
+    pl.DataFrame(
+        {"condition": ["VIX (vs history)"], "bucket": ["calm"], "months_ahead": [3],
+         "samples": [30], "mean_return": [0.02], "share_positive": [0.7],
+         "mean_volatility": [0.15], "mean_drawdown": [-0.05]}
+    ).write_parquet(tmp_path / "results" / "context_dial.parquet")  # fmt: skip
+    page = client.get("/context").text
+    for expected in ("Today's conditions", "$80.00", "+11%", "calm", "below bonds",
+                     "Which traits work when", "+0.040", "The caution dial"):  # fmt: skip
+        assert expected in page, expected

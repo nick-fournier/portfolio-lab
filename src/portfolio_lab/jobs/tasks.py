@@ -8,6 +8,7 @@ import logging
 from datetime import date
 from typing import Any
 
+import numpy as np
 import polars as pl
 
 from portfolio_lab.backtest.costs import CostModel
@@ -19,11 +20,14 @@ from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic, write_status
 from portfolio_lab.data.ingest.delisted import ingest_delisted
 from portfolio_lab.data.ingest.fundamentals import ingest_fundamentals
+from portfolio_lab.data.ingest.macro import ingest_macro
 from portfolio_lab.data.ingest.prices import update_prices, verify_prices
 from portfolio_lab.data.ingest.rates import ingest_rates
 from portfolio_lab.data.ingest.universe import current_symbols, ingest_universe
 from portfolio_lab.data.sources.alpaca import make_client
 from portfolio_lab.data.sources.edgar import annual
+from portfolio_lab.research.conditions import caution_dial, conditional_ic
+from portfolio_lab.research.context import STOCK_FEATURES, environment, sensitivities, tailwinds
 from portfolio_lab.research.features import FEATURES, build_features
 from portfolio_lab.research.fundamentals import filing_states
 from portfolio_lab.research.panel import Panel
@@ -62,6 +66,7 @@ SCOREBOARD_SIGNALS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("fscore", {}),
     # Every feature of the monthly panel, predicting the next month and the next quarter.
     *(("feature", {"column": c, "horizon": h}) for h in (21, 63) for c in FEATURES),
+    *(("feature", {"column": c, "horizon": h}) for h in (21, 63) for c in STOCK_FEATURES),
 )
 #: Worker processes for model fits: orange's four fast A76 cores (more workers land on the
 #: slow A55 cores and measured slower).
@@ -124,6 +129,16 @@ def daily_ingest_task(settings: Settings, full: bool = False) -> dict:
     }
 
 
+#: FRED's API allows 120 requests a minute.
+FRED_REQUESTS_PER_MINUTE = 100
+
+
+def macro_task(settings: Settings) -> dict:
+    """Refresh the FRED market and economic context series."""
+    with RateLimitedClient(max_per_minute=FRED_REQUESTS_PER_MINUTE) as client:
+        return ingest_macro(settings, client)
+
+
 def delisted_task(settings: Settings) -> dict:
     """Find stocks delisted since the history start and backfill their prices."""
     with public_client(settings) as public, make_client(settings) as alpaca:
@@ -156,16 +171,29 @@ def fundamentals_task(settings: Settings, force: bool = False) -> dict:
 
 
 def features_task(settings: Settings) -> dict:
-    """Rebuild the monthly point-in-time feature panel from states, profiles and prices."""
+    """Rebuild the monthly point-in-time feature panel and market environment.
+
+    Fundamentals, profiles and prices give the stock features; with FRED context series
+    ingested, the environment table is written and each stock's factor sensitivities and
+    tailwinds are added (see ``research.context``).
+    """
     paths = DataPaths(settings.data_dir)
     companies = paths.fundamentals_companies
+    panel = Panel.load(settings.data_dir)
     features = build_features(
-        Panel.load(settings.data_dir),
+        panel,
         pl.read_parquet(paths.fundamentals_states),
         pl.read_parquet(paths.fundamentals_tickers),
         pl.read_parquet(companies) if companies.exists() else None,
         pl.read_parquet(paths.fscores) if paths.fscores.exists() else None,
     )
+    if paths.macro.exists():
+        observations = pl.read_parquet(paths.macro)
+        dates = features["date"].unique().sort().to_list()
+        env = environment(observations, dates, features)
+        write_parquet_atomic(env, paths.environment)
+        stock_context = tailwinds(sensitivities(panel, observations, dates), env)
+        features = features.join(stock_context, on=["date", "symbol"], how="left")
     write_parquet_atomic(features, paths.features)
     covered = features.select(pl.col("earnings_yield").is_not_null().mean()).item()
     status = {
@@ -277,3 +305,19 @@ def scoreboard_task(
     status = {"signals": table["signal"].n_unique(), "periods": int(table["periods"].max())}
     write_status(settings.data_dir, "scoreboard", status)
     return {"summary": table.to_dicts()}
+
+
+def context_task(settings: Settings) -> dict:
+    """Measure trait payoffs and forward market risk by prevailing conditions."""
+    paths = DataPaths(settings.data_dir)
+    env = pl.read_parquet(paths.environment)
+    by_condition = conditional_ic(pl.read_parquet(paths.scoreboard), env)
+    write_parquet_atomic(by_condition, paths.context_conditions)
+    panel = Panel.load(settings.data_dir)
+    market = np.nan_to_num(panel.field("ret_cc")[:, panel.symbol_index["SPY"]])
+    dial = caution_dial(env, panel.dates, market, panel.date_index)
+    write_parquet_atomic(dial, paths.context_dial)
+    status = {"conditions_rows": by_condition.height, "dial_rows": dial.height,
+              "latest": env["date"].max()}  # fmt: skip
+    write_status(settings.data_dir, "context", status)
+    return status

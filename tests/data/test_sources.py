@@ -6,7 +6,7 @@ import pytest
 
 from portfolio_lab.core.http import RateLimitedClient
 from portfolio_lab.data.sources.alpaca import end_param, fetch_bars
-from portfolio_lab.data.sources.fred import parse_dtb3
+from portfolio_lab.data.sources.fred import CONTEXT_SERIES, fetch_series, parse_dtb3
 
 
 def _bar(t, c):
@@ -114,3 +114,25 @@ def test_fetch_bars_isolates_unnamed_bad_symbols():
         client, ["AAA", "BBB", "3UW:DU", "CCC", "DDD"], date(2024, 3, 8), date(2024, 3, 8)
     )
     assert sorted(df["symbol"]) == ["AAA", "BBB", "CCC", "DDD"]
+
+
+def test_fred_first_release_uses_publication_date_and_market_series_next_day():
+    seen = []
+
+    def handler(request):
+        query = parse_qs(urlparse(str(request.url)).query)
+        seen.append(query)
+        obs = [
+            {"date": "2024-01-01", "value": "3.7", "realtime_start": "2024-02-02"},
+            {"date": "2024-02-01", "value": ".", "realtime_start": "2024-03-08"},
+        ]
+        return httpx.Response(200, json={"observations": obs})
+
+    client = RateLimitedClient(transport=httpx.MockTransport(handler))
+    unrate = fetch_series(client, "UNRATE", "k")
+    assert seen[0]["output_type"] == ["4"]
+    assert unrate.rows() == [("UNRATE", date(2024, 1, 1), 3.7, date(2024, 2, 2))]
+    oil = fetch_series(client, "DCOILWTICO", "k")
+    assert "output_type" not in seen[1]
+    assert oil["available"].to_list() == [date(2024, 1, 2)]  # known the next day
+    assert CONTEXT_SERIES["VIXCLS"].lag_days == 0

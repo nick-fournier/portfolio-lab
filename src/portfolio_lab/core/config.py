@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     alpaca_data_url: str = "https://data.alpaca.markets"
     alpaca_requests_per_minute: int = 180
     edgar_user_agent: str = "portfolio-lab nichfournier@gmail.com"
+    fred_api_key: SecretStr | None = None
     benchmark_symbols: tuple[str, ...] = ("SPY", "QQQ", "IWM")
     log_level: str = "INFO"
 

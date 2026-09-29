@@ -72,11 +72,16 @@ def _rank_ic(scores: np.ndarray, returns: np.ndarray) -> float:
 
 
 def score_date(scores: dict[str, float], forward: np.ndarray, panel: Panel) -> dict | None:
-    """IC and top/bottom-fifth returns for one date's scores (``None`` if too few names)."""
+    """IC and top/bottom-fifth returns for one date's scores.
+
+    ``None`` if too few names, or if every score is the same (no ranking to judge).
+    """
     scores = {s: v for s, v in scores.items() if np.isfinite(v)}
     if len(scores) < MIN_NAMES:
         return None
     x = np.array(list(scores.values()))
+    if np.ptp(x) == 0:
+        return None
     y = forward[[panel.symbol_index[s] for s in scores]]
     # Quintiles by score quantile, so tied scores (e.g. F-scores) land in the same group.
     hi, lo = np.quantile(x, 0.8), np.quantile(x, 0.2)

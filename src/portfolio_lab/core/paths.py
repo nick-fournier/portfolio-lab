@@ -45,6 +45,26 @@ class DataPaths:
         return self.root / "rates" / "dtb3.parquet"
 
     @property
+    def macro(self) -> Path:
+        """FRED context series: observations with the date each became known."""
+        return self.root / "macro" / "observations.parquet"
+
+    @property
+    def environment(self) -> Path:
+        """Monthly point-in-time market environment (``research.context``)."""
+        return self.root / "macro" / "environment.parquet"
+
+    @property
+    def context_conditions(self) -> Path:
+        """Trait payoffs (IC) by market condition (``research.conditions``)."""
+        return self.root / "results" / "context_conditions.parquet"
+
+    @property
+    def context_dial(self) -> Path:
+        """Forward market return and risk by market condition (the caution dial)."""
+        return self.root / "results" / "context_dial.parquet"
+
+    @property
     def edgar_bulk(self) -> Path:
         """Downloaded SEC ``companyfacts.zip`` (about 1.4 GB, replaced when it changes)."""
         return self.root / "raw" / "edgar" / "companyfacts.zip"

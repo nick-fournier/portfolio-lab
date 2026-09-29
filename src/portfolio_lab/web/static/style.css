@@ -30,6 +30,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .chart.auto { height: auto; }
 .table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .table-wrap td, .table-wrap th { white-space: nowrap; }
+/* Tables whose first column is a long label: let the label wrap so numbers stay in view. */
+.table-wrap.labelled td:first-child, .table-wrap.labelled td:last-child { white-space: normal; }
+.table-wrap.labelled td:first-child { min-width: 9rem; }
 select { font: inherit; padding: 0.2rem 0.4rem; }
 .lede { font-size: 1.05rem; max-width: 75ch; line-height: 1.5; }
 .filters { display: flex; gap: 1.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
