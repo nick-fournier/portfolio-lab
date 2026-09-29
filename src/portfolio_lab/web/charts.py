@@ -12,7 +12,16 @@ _LAYOUT = {
     "legend": {"orientation": "h", "yanchor": "top", "y": -0.12, "xanchor": "left", "x": 0},
     "hovermode": "x unified",
     "font": {"size": 11},
-}
+    # 12 distinct colors (Plotly's default has 10, so an 11th series repeated the first).
+    "colorway": [
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b",
+        "#e377c2", "#17becf", "#bcbd22", "#393b79", "#ad494a", "#637939",
+    ],
+}  # fmt: skip
+#: Thin lines, so charts with many series stay readable where they cross.
+_LINE = {"width": 1.4}
+#: Style of the market reference line (the benchmark, or buy-and-hold of it).
+_REFERENCE = {"color": "#6e7781", "dash": "dot", "width": 1.4}
 
 
 def equity_figure(daily: pl.DataFrame, strategy: str, benchmark: str) -> str:
@@ -71,26 +80,37 @@ def weights_figure(weights: pl.DataFrame, top: int = 20) -> str | None:
     return fig.to_json()
 
 
-def comparison_figure(series: list[tuple[str, pl.DataFrame]], benchmark: str) -> str | None:
+def comparison_figure(
+    series: list[tuple[str, pl.DataFrame, bool, bool]], benchmark: str | None
+) -> str | None:
     """Growth of $1 for several runs on one log-scale chart, plus the benchmark.
 
     Args:
-        series: ``(label, daily)`` pairs, one per run.
-        benchmark: Benchmark label; its curve comes from the run covering the most days.
+        series: ``(label, daily, visible, reference)`` per run. Hidden runs can be shown
+            from the legend; reference runs (buy-and-hold of the benchmark) are drawn in the
+            benchmark's grey dotted style.
+        benchmark: Benchmark label, or ``None`` to leave it out (e.g. when a buy-and-hold
+            run of it is already drawn); its curve comes from the run covering the most days.
     """
     if not series:
         return None
     fig = go.Figure(layout=_LAYOUT)
-    for label, daily in series:
-        fig.add_scatter(x=daily["date"].to_list(), y=daily["nav"].to_list(), name=label)
-    longest = max((daily for _, daily in series), key=lambda d: d.height)
-    if "benchmark_ret" in longest.columns:
+    for label, daily, visible, reference in series:
+        fig.add_scatter(
+            x=daily["date"].to_list(),
+            y=daily["nav"].to_list(),
+            name=label,
+            line=_REFERENCE if reference else _LINE,
+            visible=True if visible else "legendonly",
+        )
+    longest = max((s[1] for s in series), key=lambda d: d.height)
+    if benchmark and "benchmark_ret" in longest.columns:
         bench = np.cumprod(1 + longest["benchmark_ret"].to_numpy())
         fig.add_scatter(
             x=longest["date"].to_list(),
             y=bench.tolist(),
             name=f"{benchmark} (benchmark)",
-            line={"color": "#6e7781", "dash": "dot"},
+            line=_REFERENCE,
         )
     fig.update_layout(yaxis_type="log")
     return fig.to_json()
@@ -101,7 +121,11 @@ def cumulative_ic_figure(scores: pl.DataFrame) -> str:
     fig = go.Figure(layout=_LAYOUT)
     for (signal,), rows in sorted(scores.sort("date").group_by("signal", maintain_order=True)):
         fig.add_scatter(
-            x=rows["date"].to_list(), y=rows["ic"].cum_sum().to_list(), name=signal, mode="lines"
+            x=rows["date"].to_list(),
+            y=rows["ic"].cum_sum().to_list(),
+            name=signal,
+            mode="lines",
+            line=_LINE,
         )
     fig.add_hline(y=0, line={"color": "#6e7781", "width": 1})
     return fig.to_json()
