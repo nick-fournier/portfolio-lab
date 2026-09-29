@@ -27,7 +27,15 @@ log = logging.getLogger(__name__)
 SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("buy_hold", {}),
     ("equal_weight", {}),
+    # Control for meanvar: the same candidates (100 most liquid), equally weighted.
+    ("equal_weight", {"top_n": 100}),
+    ("meanvar", {"model": "arima_logret"}),
+    ("meanvar", {"model": "arima320_price"}),
+    ("meanvar", {"model": "historical_mean"}),
 )
+#: Worker processes for model fits: orange's four fast A76 cores (more workers land on the
+#: slow A55 cores and measured slower).
+FORECAST_WORKERS = 4
 #: Start date for scheduled backtests (one year after data starts, for lookbacks).
 SCHEDULED_START = date(2017, 1, 3)
 #: Runs kept per configuration; older ones are deleted after each scheduled refresh.
@@ -105,6 +113,11 @@ def backtest_task(
         The run id and its metrics.
     """
     strat = create(strategy, **(params or {}))
+    # Runtime resources for strategies that fit models (not strategy parameters).
+    if hasattr(strat, "cache_dir"):
+        strat.cache_dir = DataPaths(settings.data_dir).forecast_cache
+    if hasattr(strat, "workers"):
+        strat.workers = FORECAST_WORKERS
     panel = Panel.load(settings.data_dir, end=end)
     config = BacktestConfig(
         start=start,
@@ -121,7 +134,7 @@ def backtest_task(
 def scheduled_backtests_task(settings: Settings) -> dict:
     """Re-run the baseline backtests through the latest data, then prune old runs."""
     runs = {
-        name: backtest_task(settings, name, SCHEDULED_START, params=params)[0]
+        f"{name} {params}".strip(): backtest_task(settings, name, SCHEDULED_START, params=params)[0]
         for name, params in SCHEDULED_BACKTESTS
     }
     pruned = prune_runs(settings.data_dir, keep=RUNS_KEPT_PER_CONFIG)

@@ -1,0 +1,88 @@
+"""Mean-variance portfolio optimization with PyPortfolioOpt.
+
+Ports the legacy optimizer with its bugs fixed: covariance is estimated from *daily*
+prices with ``frequency=252`` (the legacy code applied the daily default to monthly
+prices), expected returns and the risk-free rate are both annual, and missing data is
+handled per symbol instead of dropping every date on which any symbol is missing.
+"""
+
+import logging
+
+import pandas as pd
+from pypfopt import EfficientFrontier, objective_functions
+from pypfopt.exceptions import OptimizationError
+from pypfopt.risk_models import CovarianceShrinkage
+
+log = logging.getLogger(__name__)
+
+OBJECTIVES = ("max_sharpe", "min_volatility", "max_quadratic_utility")
+TRADING_DAYS = 252
+#: Weights below this are dropped; the dropped sliver is held as cash.
+WEIGHT_CUTOFF = 1e-4
+
+
+def _within_bounds(weights: dict[str, float], cap: float) -> dict[str, float]:
+    """Clip solver output to ``[0, cap]`` and scale it to sum to at most 1.
+
+    Solvers satisfy constraints only to a tolerance, e.g. returning weights summing to
+    1.0026; the backtest engine rightly rejects anything over budget.
+    """
+    clipped = {s: min(float(w), cap) for s, w in weights.items() if w > 0}
+    total = sum(clipped.values())
+    return {s: w / total for s, w in clipped.items()} if total > 1 else clipped
+
+
+def _solve(ef: EfficientFrontier, objective: str, risk_free: float, risk_aversion: float) -> None:
+    """Run the requested objective on ``ef`` (raises if infeasible)."""
+    if objective == "max_sharpe":
+        ef.max_sharpe(risk_free_rate=risk_free)
+    elif objective == "max_quadratic_utility":
+        ef.add_objective(objective_functions.L2_reg, gamma=0.1)
+        ef.max_quadratic_utility(risk_aversion=risk_aversion)
+    else:
+        ef.min_volatility()
+
+
+def optimize(
+    mu: pd.Series,
+    prices: pd.DataFrame,
+    risk_free: float,
+    objective: str = "max_sharpe",
+    max_weight: float = 0.10,
+    risk_aversion: float = 1.0,
+) -> dict[str, float]:
+    """Long-only mean-variance weights for the symbols in ``mu``.
+
+    Args:
+        mu: Annualized expected return per symbol.
+        prices: Daily adjusted prices (dates x symbols) covering ``mu``'s symbols.
+        risk_free: Annual risk-free rate.
+        objective: One of :data:`OBJECTIVES`.
+        max_weight: Cap on any single weight (raised to ``1/n`` if infeasibly low).
+        risk_aversion: Risk aversion for ``max_quadratic_utility``.
+
+    Returns:
+        Weights summing to 1 (less sub-cutoff slivers left in cash), or an empty dict (all
+        cash) if no solution is found. If max-Sharpe is infeasible (e.g. every expected
+        return is below the risk-free rate), falls back to minimum volatility.
+    """
+    if objective not in OBJECTIVES:
+        raise ValueError(f"unknown objective {objective!r}; choose from {OBJECTIVES}")
+    symbols = [s for s in mu.index if s in prices.columns]
+    if len(symbols) < 2:
+        return {}
+    cov = CovarianceShrinkage(prices[symbols], frequency=TRADING_DAYS).ledoit_wolf()
+    cap = max(max_weight, 1.0 / len(symbols))
+
+    for attempt in dict.fromkeys((objective, "min_volatility")):
+        ef = EfficientFrontier(mu[symbols], cov, weight_bounds=(0, cap))
+        try:
+            _solve(ef, attempt, risk_free, risk_aversion)
+        except (OptimizationError, ValueError) as exc:
+            log.debug("%s failed (%s); falling back", attempt, exc)
+            continue
+        # No rounding; weights below the cutoff are dropped and their sliver stays in cash.
+        weights = ef.clean_weights(cutoff=WEIGHT_CUTOFF, rounding=None)
+        return _within_bounds(weights, cap)
+    log.warning("no feasible portfolio for %d symbols; holding cash", len(symbols))
+    return {}

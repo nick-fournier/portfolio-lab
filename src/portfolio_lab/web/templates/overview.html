@@ -14,7 +14,7 @@
   {% for r in runs %}
   <div class="strategy">
     <h3>{{ labels[r.meta.run_id] }}</h3>
-    {% if r.meta.description %}<p>{{ r.meta.description }}</p>{% endif %}
+    {% if r.meta.summary or r.meta.description %}<p>{{ r.meta.summary or r.meta.description }}</p>{% endif %}
     <div class="stats">
       <div><span class="muted">CAGR</span><b>{{ r.metrics.cagr | pct }}</b></div>
       <div><span class="muted">Sharpe</span><b>{{ r.metrics.sharpe | num }}</b></div>

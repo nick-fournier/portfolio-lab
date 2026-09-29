@@ -35,10 +35,15 @@
 
 <h2>4. Strategies</h2>
 <ul>
-  <li><b>Live:</b> the two baselines, buy-and-hold SPY and equal weight.</li>
-  <li><b>Next:</b> mean-variance optimization (return forecasts fed into the efficient frontier,
-    the original optimizer's idea done properly), then a Piotroski F-score value filter computed
-    from SEC filings as of the date each filing was public.</li>
+  <li><b>Baselines:</b> buy-and-hold SPY, and equal weight (all eligible stocks, or the most
+    liquid ones).</li>
+  <li><b>Mean-variance:</b> the original optimizer's idea done properly. Return forecasts
+    (the legacy ARIMA on prices, ARIMA on returns, or a plain trailing average) feed the
+    efficient frontier over the 100 most liquid stocks. So far the forecasts add nothing over
+    the trailing average, and the edge over the market comes from concentrating in recent
+    winners: a momentum tilt that survivorship bias flatters, so it is an upper bound.</li>
+  <li><b>Next:</b> a Piotroski F-score value filter computed from SEC filings as of the date
+    each filing was public.</li>
 </ul>
 
 <h2>Roadmap</h2>

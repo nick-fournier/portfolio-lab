@@ -1,0 +1,167 @@
+import os
+from dataclasses import dataclass
+from datetime import date
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from portfolio_lab.backtest.engine import BacktestConfig, _params, describe, label, run
+from portfolio_lab.research.dataview import DataView
+from portfolio_lab.strategies.base import create
+from portfolio_lab.strategies.meanvar import forecast as forecast_mod
+from portfolio_lab.strategies.meanvar.forecast import Forecaster, ForecastSpec, forecast_one
+from portfolio_lab.strategies.meanvar.optimize import _within_bounds, optimize
+
+GROWTH = 0.0004  # daily
+
+
+def _walk(n=252, seed=0, drift=GROWTH, vol=0.01):
+    rng = np.random.default_rng(seed)
+    return 100 * np.cumprod(1 + rng.normal(drift, vol, n))
+
+
+def test_historical_mean_is_annualized_geometric_growth():
+    prices = 100 * (1 + GROWTH) ** np.arange(253)
+    mu = forecast_one(prices, ForecastSpec("historical_mean"))
+    assert mu == pytest.approx((1 + GROWTH) ** 252 - 1)
+
+
+@pytest.mark.parametrize("model", ["arima_logret", "arima320_price"])
+def test_arima_models_return_finite_bounded_annual_returns(model):
+    mu = forecast_one(_walk(), ForecastSpec(model))
+    assert np.isfinite(mu) and -0.99 <= mu <= 5.0
+
+
+def test_forecast_rejects_bad_inputs():
+    assert np.isnan(forecast_one(_walk(10), ForecastSpec()))  # too short
+    assert np.isnan(forecast_one(np.r_[_walk(100), -1.0], ForecastSpec()))  # non-positive
+    with pytest.raises(ValueError, match="unknown forecast model"):
+        ForecastSpec("crystal_ball")
+
+
+def test_forecaster_caches_in_memory_and_on_disk(tmp_path, monkeypatch):
+    calls = []
+    real = forecast_mod.forecast_one
+
+    def counting(prices, spec):
+        calls.append(1)
+        return real(prices, spec) if prices[0] > 50 else np.nan
+
+    monkeypatch.setattr(forecast_mod, "forecast_one", counting)
+    windows = {"AAA": _walk(seed=1), "BBB": _walk(seed=2), "BAD": _walk(seed=3) / 10}
+    spec = ForecastSpec("historical_mean")
+    asof = date(2024, 1, 31)
+
+    first = Forecaster(spec, tmp_path).forecast(asof, windows)
+    assert set(first) == {"AAA", "BBB"}  # the failed fit is omitted...
+    assert len(calls) == 3
+    again = Forecaster(spec, tmp_path).forecast(asof, windows)  # new instance: loads the cache
+    assert again == first and len(calls) == 3  # ...and cached, so it isn't refit
+    other_model = Forecaster(ForecastSpec("arima_logret"), tmp_path)
+    other_model.forecast(asof, {"AAA": windows["AAA"]})
+    assert len(calls) == 4  # different model configuration, different cache
+
+
+def _prices(n_symbols=12, n=252):
+    data = {f"S{i:02d}": _walk(n, seed=i, drift=0.0002 * i) for i in range(n_symbols)}
+    return pd.DataFrame(data, index=pd.bdate_range("2023-01-02", periods=n))
+
+
+def test_optimize_respects_bounds_and_budget():
+    prices = _prices()
+    mu = pd.Series({s: 0.05 + 0.02 * i for i, s in enumerate(prices.columns)})
+    weights = optimize(mu, prices, risk_free=0.03, max_weight=0.2)
+    assert sum(weights.values()) == pytest.approx(1.0, abs=1e-3)
+    assert max(weights.values()) <= 0.2 + 1e-6
+    assert set(weights) <= set(prices.columns)
+
+
+def test_optimize_falls_back_when_max_sharpe_is_infeasible():
+    prices = _prices()
+    mu = pd.Series(-0.05, index=prices.columns)  # every forecast below the risk-free rate
+    weights = optimize(mu, prices, risk_free=0.05, max_weight=0.2)
+    assert sum(weights.values()) == pytest.approx(1.0, abs=1e-3)
+
+
+def test_optimize_edge_cases():
+    prices = _prices(n_symbols=3)
+    mu = pd.Series({"S00": 0.1, "S01": 0.2, "S02": 0.3})
+    weights = optimize(mu, prices, risk_free=0.0, max_weight=0.1)  # cap raised to 1/3
+    assert sum(weights.values()) == pytest.approx(1.0, abs=1e-3)
+    assert optimize(mu[["S00"]], prices, risk_free=0.0) == {}
+    with pytest.raises(ValueError, match="unknown objective"):
+        optimize(mu, prices, risk_free=0.0, objective="yolo")
+
+
+def test_meanvar_strategy_on_panel(make_panel):
+    panel = make_panel(symbols=[f"S{i:02d}" for i in range(12)])
+    strategy = create("meanvar", model="historical_mean", max_weight=0.2)
+    view = DataView(panel, 200)
+    weights = strategy.target_weights(view)
+    assert weights and sum(weights.values()) == pytest.approx(1.0, abs=1e-3)
+    assert set(weights) <= set(view.eligible())
+    assert max(weights.values()) <= 0.2 + 1e-6
+
+
+def test_meanvar_params_exclude_runtime_fields(tmp_path):
+    strategy = create("meanvar", top_n="50")
+    strategy.cache_dir, strategy.workers = tmp_path, 4
+    params = _params(strategy)
+    assert params["top_n"] == 50
+    assert "cache_dir" not in params and "workers" not in params
+
+
+@dataclass
+class Closing:
+    schedule: str = "M"
+    name: str = "closing"
+    closed: bool = False
+
+    def target_weights(self, view):
+        return {}
+
+    def close(self):
+        self.closed = True
+
+
+def test_engine_closes_strategies(make_panel):
+    panel = make_panel()
+    strategy = Closing()
+    run(strategy, panel, BacktestConfig(panel.dates[10], panel.dates[40]))
+    assert strategy.closed
+
+
+def test_pool_workers_are_pinned_to_one_math_thread(monkeypatch):
+    # Workers start lazily on the first task, so the cap must still be set afterwards;
+    # without it each worker starts a thread per core (measured ~9x slower on orange).
+    for var in forecast_mod._THREAD_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+    forecaster = Forecaster(ForecastSpec("historical_mean"), workers=2)
+    forecaster._executor()
+    try:
+        assert all(os.environ[var] == "1" for var in forecast_mod._THREAD_ENV_VARS)
+    finally:
+        forecaster.close()
+
+
+def test_solver_tolerance_is_cleaned_up():
+    # e.g. a solver returning weights that sum to 1.0026 and slightly exceed the cap
+    cleaned = _within_bounds({"A": 0.1003, "B": 0.5, "C": 0.4023, "D": 0.0}, cap=0.5)
+    assert sum(cleaned.values()) == pytest.approx(1.0)
+    assert max(cleaned.values()) <= 0.5 and "D" not in cleaned
+    small = {"A": 0.3, "B": 0.3}
+    assert _within_bounds(small, cap=0.5) == small  # under budget: left alone (cash)
+
+
+def test_label_shows_only_non_default_params():
+    assert label(create("meanvar")) == "meanvar"
+    assert label(create("meanvar", model="historical_mean", top_n=50)) == (
+        "meanvar (model=historical_mean, top_n=50)"
+    )
+
+
+def test_describe_summary_only():
+    summary = describe(create("meanvar"), summary_only=True)
+    assert summary.startswith("Mean-variance optimization") and "momentum" not in summary
+    assert "momentum" in describe(create("meanvar"))

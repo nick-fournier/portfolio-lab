@@ -19,7 +19,7 @@ import inspect
 import logging
 import os
 import subprocess
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from datetime import date
 
 import numpy as np
@@ -97,20 +97,28 @@ def validate_weights(
 
 def _params(strategy: Strategy) -> dict:
     """Strategy parameters for the run's metadata."""
-    if is_dataclass(strategy):
-        skip = ("name", "schedule", "description", "signal", "construct")
-        return {k: v for k, v in asdict(strategy).items() if k not in skip}
-    return {}
+    if not is_dataclass(strategy):
+        return {}
+    skip = {"name", "schedule", "description", "signal", "construct"}
+    return {
+        f.name: getattr(strategy, f.name)
+        for f in fields(strategy)
+        if f.name not in skip and f.metadata.get("param", True)
+    }
 
 
 _DOC_SECTIONS = ("Args:", "Returns:", "Raises:", "Attributes:", "Example")
 
 
-def describe(strategy: Strategy) -> str:
+def describe(strategy: Strategy, summary_only: bool = False) -> str:
     """Plain-text description for the dashboard.
 
     Uses a ``description`` attribute if set, else the class docstring's summary line and
     extended description (everything before its ``Args:``-style sections).
+
+    Args:
+        strategy: The strategy.
+        summary_only: Return just the first paragraph (the one-line summary).
     """
     cls = type(strategy)
     doc = getattr(strategy, "description", None) or inspect.getdoc(cls) or ""
@@ -121,7 +129,20 @@ def describe(strategy: Strategy) -> str:
         if paragraph.lstrip().startswith(_DOC_SECTIONS):
             break
         prose.append(" ".join(paragraph.split()))
+        if summary_only:
+            break
     return " ".join(prose).replace("``", "")
+
+
+def label(strategy: Strategy) -> str:
+    """Short display name: the strategy name plus parameters that differ from defaults."""
+    if not is_dataclass(strategy):
+        return strategy.name
+    defaults = {f.name: f.default for f in fields(strategy)}
+    changed = {k: v for k, v in _params(strategy).items() if defaults.get(k) != v}
+    return strategy.name + (
+        f" ({', '.join(f'{k}={v}' for k, v in changed.items())})" if changed else ""
+    )
 
 
 def _git_sha() -> str | None:
@@ -242,7 +263,11 @@ def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
     if len(window) < 2:
         raise ValueError(f"need at least two sessions between {config.start} and {config.end}")
     first, last = window[0], window[-1]
-    daily, weight_rows, liquidations = _simulate(strategy, panel, config, first, last)
+    try:
+        daily, weight_rows, liquidations = _simulate(strategy, panel, config, first, last)
+    finally:
+        if callable(close := getattr(strategy, "close", None)):
+            close()  # e.g. worker pools
 
     columns = ["date", "nav", "ret", "turnover", "cost", "cash", "holdings"]
     daily_df = pl.DataFrame(daily, schema=columns, orient="row")
@@ -263,7 +288,9 @@ def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
     metrics["forced_liquidations"] = float(liquidations)
     meta = {
         "strategy": strategy.name,
+        "summary": describe(strategy, summary_only=True),
         "description": describe(strategy),
+        "label": label(strategy),
         "params": _params(strategy),
         "schedule": strategy.schedule,
         "start": panel.dates[first],

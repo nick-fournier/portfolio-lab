@@ -16,7 +16,9 @@ MAX_COMPARED = 8
 
 
 def run_label(meta: dict) -> str:
-    """Short label for a run: strategy name plus any non-default parameters."""
+    """Short label for a run: the engine's label, else the name plus all set parameters."""
+    if meta.get("label"):
+        return meta["label"]
     params = [f"{k}={v}" for k, v in sorted(meta.get("params", {}).items()) if v is not None]
     return meta["strategy"] + (f" ({', '.join(params)})" if params else "")
 
