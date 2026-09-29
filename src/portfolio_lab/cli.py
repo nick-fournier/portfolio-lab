@@ -145,6 +145,12 @@ def backtest_cmd(
         typer.echo(f"  {key:>20}: {value:,.4f}")
 
 
+@app.command("features")
+def features_cmd() -> None:
+    """Rebuild the monthly point-in-time feature panel."""
+    typer.echo(tasks.features_task(get_settings()))
+
+
 @app.command("scoreboard")
 def scoreboard_cmd(
     signal: Annotated[

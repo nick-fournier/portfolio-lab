@@ -4,7 +4,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from portfolio_lab.core.calendar import sessions
+from portfolio_lab.core.calendar import rebalance_dates, sessions
 from portfolio_lab.core.config import Settings
 from portfolio_lab.research.panel import EligibilityRules, Panel
 
@@ -45,9 +45,17 @@ def make_panel():
         rules = EligibilityRules(min_price=1, min_dollar_volume=0, adv_window=5, min_history=5)
         panel = Panel.from_long(prices, symbols, rates, rules)
         panel.fundamentals = make_fundamentals(symbols, dates)
+        panel.features = make_features(symbols, dates)
         return panel
 
     return factory
+
+
+def make_features(symbols, dates):
+    """Synthetic monthly feature rows: earnings_yield grows with the symbol's position."""
+    month_ends = rebalance_dates(list(dates), "M")
+    rows = [(d, s, 0.01 * (k + 1)) for d in month_ends for k, s in enumerate(symbols)]
+    return pl.DataFrame(rows, schema=["date", "symbol", "earnings_yield"], orient="row")
 
 
 def make_fundamentals(symbols, dates):

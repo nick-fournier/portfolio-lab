@@ -33,11 +33,11 @@ def _facts(cik=1, drop=()):
     ]:
         for end in years:
             rows += [
-                (cik, tag, end, float(v), filed, accn, form)
+                (cik, tag, end, float(v), filed, accn, form, None)
                 for tag, v in YEARS[end].items()
                 if tag not in drop
             ]
-    rows.append((cik, "NetIncomeLoss", FY2, 40.0, FILED_C, "C", "10-K/A"))
+    rows.append((cik, "NetIncomeLoss", FY2, 40.0, FILED_C, "C", "10-K/A", None))
     return pl.DataFrame(rows, schema=FACT_SCHEMA, orient="row")
 
 
@@ -72,8 +72,8 @@ def test_bank_without_current_assets_or_gross_profit():
 def test_missing_long_term_debt_counts_as_zero_when_liabilities_reported():
     facts = _facts(drop=("LongTermDebt",))
     extra = pl.DataFrame(
-        [(1, "Liabilities", end, 500.0, FILED_B, "B", "10-K") for end in (FY2, FY1)]
-        + [(1, "Liabilities", FY0, 500.0, FILED_A, "A", "10-K")],
+        [(1, "Liabilities", end, 500.0, FILED_B, "B", "10-K", None) for end in (FY2, FY1)]
+        + [(1, "Liabilities", FY0, 500.0, FILED_A, "A", "10-K", None)],
         schema=FACT_SCHEMA,
         orient="row",
     )
@@ -85,7 +85,7 @@ def test_tag_priority_within_a_filing():
         [
             _facts(),
             pl.DataFrame(
-                [(1, "ProfitLoss", FY2, 999.0, FILED_B, "B", "10-K")],
+                [(1, "ProfitLoss", FY2, 999.0, FILED_B, "B", "10-K", None)],
                 schema=FACT_SCHEMA,
                 orient="row",
             ),

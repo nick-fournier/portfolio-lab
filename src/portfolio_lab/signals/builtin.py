@@ -65,10 +65,12 @@ class Momentum:
     Args:
         lookback: Sessions in the window (about 12 months).
         skip: Most recent sessions left out (about 1 month).
+        horizon: Sessions ahead it predicts.
     """
 
     lookback: int = 252
     skip: int = 21
+    horizon: int = 21
     name: str = "momentum"
 
     def score(self, view: DataView, symbols: Sequence[str]) -> Scores:
@@ -79,13 +81,15 @@ class Momentum:
 @register("reversal")
 @dataclass
 class Reversal:
-    """Short-term reversal: minus the return over the past month.
+    """Short-term reversal: minus the return over the past ``lookback`` sessions.
 
     Args:
         lookback: Sessions in the window.
+        horizon: Sessions ahead it predicts (use ``lookback`` for a like-for-like test).
     """
 
     lookback: int = 21
+    horizon: int = 21
     name: str = "reversal"
 
     def score(self, view: DataView, symbols: Sequence[str]) -> Scores:
@@ -100,9 +104,11 @@ class LowVol:
 
     Args:
         lookback: Sessions of returns.
+        horizon: Sessions ahead it predicts.
     """
 
     lookback: int = 252
+    horizon: int = 21
     name: str = "low_vol"
 
     def score(self, view: DataView, symbols: Sequence[str]) -> Scores:
@@ -116,10 +122,35 @@ class LowVol:
 @register("fscore")
 @dataclass
 class FScore:
-    """Piotroski F-score from the latest annual report filed before the decision date."""
+    """Piotroski F-score from the latest annual report filed before the decision date.
 
+    Args:
+        horizon: Sessions ahead it predicts.
+    """
+
+    horizon: int = 21
     name: str = "fscore"
 
     def score(self, view: DataView, symbols: Sequence[str]) -> Scores:
         """F-score (0-9) per symbol that has one."""
         return {s: float(f) for s, f in view.fscores(symbols).items()}
+
+
+@register("feature")
+@dataclass
+class Feature:
+    """One column of the monthly feature panel (``research.features``) as a signal.
+
+    Args:
+        column: Feature name, e.g. ``earnings_yield``.
+        horizon: Sessions ahead it predicts.
+    """
+
+    column: str = "earnings_yield"
+    horizon: int = 21
+    name: str = "feature"
+
+    def score(self, view: DataView, symbols: Sequence[str]) -> Scores:
+        """The feature's latest value per symbol (missing values left out)."""
+        rows = view.features(symbols, [self.column]).drop_nulls()
+        return dict(zip(rows["symbol"], rows[self.column].cast(float), strict=True))

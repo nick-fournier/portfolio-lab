@@ -38,6 +38,9 @@ def test_sessions_back():
 def test_rebalance_dates():
     days = sessions(date(2024, 1, 1), date(2024, 3, 31))
     assert rebalance_dates(days, "M") == [date(2024, 1, 31), date(2024, 2, 29), date(2024, 3, 28)]
+    assert rebalance_dates(sessions(date(2024, 1, 1), date(2024, 7, 31)), "Q") == [
+        date(2024, 3, 28), date(2024, 6, 28), date(2024, 7, 31)
+    ]  # fmt: skip
     weekly = rebalance_dates(days, "W")
     assert weekly[0] == date(2024, 1, 5)
     assert date(2024, 3, 28) in weekly  # Good Friday week ends Thursday

@@ -131,6 +131,24 @@ class DataView:
             latest = latest.filter(pl.col("symbol").is_in(list(symbols)))
         return dict(zip(latest["symbol"], latest["fscore"].cast(int), strict=True))
 
+    def features(self, symbols: Sequence[str], columns: Sequence[str]) -> pl.DataFrame:
+        """The latest monthly feature row on or before ``asof`` for each symbol.
+
+        Feature rows are built from data known at their date's close (see
+        ``research.features``), so rows dated ``asof`` are visible.
+
+        Returns:
+            symbol plus ``columns``; empty if the panel has no features.
+        """
+        table = self._panel.features
+        if table is None:
+            return pl.DataFrame(schema={"symbol": pl.String})
+        past = table.filter(pl.col("date") <= self.asof)
+        if past.is_empty():
+            return pl.DataFrame(schema={"symbol": pl.String})
+        latest = past.filter(pl.col("date") == past["date"].max())
+        return latest.filter(pl.col("symbol").is_in(list(symbols))).select("symbol", *columns)
+
     def risk_free(self) -> float:
         """Annual risk-free rate as of the decision date (fraction, e.g. 0.05)."""
         return float(self._panel.rf_daily[self._index] * TRADING_DAYS)

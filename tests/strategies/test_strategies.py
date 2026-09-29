@@ -36,9 +36,15 @@ def _poisoned(panel: Panel, after: int, seed: int = 1) -> Panel:
             pl.lit(asof).alias("filed"), pl.lit(9, dtype=dtype).alias("fscore")
         )
         fundamentals = pl.concat([fundamentals.filter(pl.col("filed") < asof), future, extra])
-    return Panel(
+    poisoned = Panel(
         panel.dates, panel.symbols, fields, eligible, rf, panel.universe, fundamentals=fundamentals
     )
+    if panel.features is not None:  # garbage in every feature row dated after asof
+        numeric = [c for c, t in panel.features.schema.items() if t.is_numeric()]
+        poisoned.features = panel.features.with_columns(
+            pl.when(pl.col("date") > asof).then(-1e9).otherwise(pl.col(c)).alias(c) for c in numeric
+        )
+    return poisoned
 
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))

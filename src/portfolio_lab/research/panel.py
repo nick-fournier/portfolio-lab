@@ -86,6 +86,7 @@ class Panel:
         self.universe = frozenset(universe)
         self.fundamentals = fundamentals.sort("filed") if fundamentals is not None else None
         self.n_delisted = 0  # dead stocks added to the universe (set by ``load``)
+        self.features: pl.DataFrame | None = None  # monthly feature panel (set by ``load``)
         self.symbols = list(symbols)
         self.date_index = {d: i for i, d in enumerate(self.dates)}
         self.symbol_index = {s: j for j, s in enumerate(self.symbols)}
@@ -227,6 +228,8 @@ class Panel:
         panel = cls.from_long(lf.collect(), universe, rates, rules, fell_to_otc)
         if paths.fscores.exists():
             panel.fundamentals = pl.read_parquet(paths.fscores).sort("filed")
+        if paths.features.exists():
+            panel.features = pl.read_parquet(paths.features).sort("date")
         panel.n_delisted = dead.height
         return panel
 

@@ -23,9 +23,12 @@ from portfolio_lab.data.ingest.prices import update_prices, verify_prices
 from portfolio_lab.data.ingest.rates import ingest_rates
 from portfolio_lab.data.ingest.universe import current_symbols, ingest_universe
 from portfolio_lab.data.sources.alpaca import make_client
+from portfolio_lab.data.sources.edgar import annual
+from portfolio_lab.research.features import FEATURES, build_features
+from portfolio_lab.research.fundamentals import filing_states
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.piotroski import build_fscores, fscores_by_symbol
-from portfolio_lab.research.scoreboard import evaluate, summarize
+from portfolio_lab.research.scoreboard import HORIZON, evaluate, summarize
 from portfolio_lab.signals import base as signals
 from portfolio_lab.strategies.base import create
 
@@ -57,6 +60,8 @@ SCOREBOARD_SIGNALS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("reversal", {}),
     ("low_vol", {}),
     ("fscore", {}),
+    # Every feature of the monthly panel, predicting the next month and the next quarter.
+    *(("feature", {"column": c, "horizon": h}) for h in (21, 63) for c in FEATURES),
 )
 #: Worker processes for model fits: orange's four fast A76 cores (more workers land on the
 #: slow A55 cores and measured slower).
@@ -134,7 +139,7 @@ def fundamentals_task(settings: Settings, force: bool = False) -> dict:
         summary = ingest_fundamentals(settings, client, symbols, force=force)
     facts = pl.read_parquet(paths.fundamentals_facts)
     tickers = pl.read_parquet(paths.fundamentals_tickers)
-    scores = fscores_by_symbol(build_fscores(facts), tickers)
+    scores = fscores_by_symbol(build_fscores(annual(facts)), tickers)
     write_parquet_atomic(scores, paths.fscores)
     status = {
         "filings_scored": scores.height,
@@ -144,7 +149,33 @@ def fundamentals_task(settings: Settings, force: bool = False) -> dict:
     }
     write_status(settings.data_dir, "fscores", status)
     log.info("fscores: %d filings for %d symbols", status["filings_scored"], status["symbols"])
-    return {"fundamentals": summary, "fscores": status}
+    states = filing_states(facts)
+    write_parquet_atomic(states, paths.fundamentals_states)
+    log.info("fundamentals: %d filing states", states.height)
+    return {"fundamentals": summary, "fscores": status, "states": states.height}
+
+
+def features_task(settings: Settings) -> dict:
+    """Rebuild the monthly point-in-time feature panel from states, profiles and prices."""
+    paths = DataPaths(settings.data_dir)
+    companies = paths.fundamentals_companies
+    features = build_features(
+        Panel.load(settings.data_dir),
+        pl.read_parquet(paths.fundamentals_states),
+        pl.read_parquet(paths.fundamentals_tickers),
+        pl.read_parquet(companies) if companies.exists() else None,
+        pl.read_parquet(paths.fscores) if paths.fscores.exists() else None,
+    )
+    write_parquet_atomic(features, paths.features)
+    covered = features.select(pl.col("earnings_yield").is_not_null().mean()).item()
+    status = {
+        "rows": features.height,
+        "months": features["date"].n_unique(),
+        "latest": features["date"].max(),
+        "with_fundamentals": round(float(covered), 3),
+    }
+    write_status(settings.data_dir, "features", status)
+    return status
 
 
 def verify_task(settings: Settings, sample: int = 50) -> dict:
@@ -204,7 +235,12 @@ def scheduled_backtests_task(settings: Settings) -> dict:
 
 
 def signal_label(name: str, params: dict[str, Any]) -> str:
-    """Display name for a signal configuration, e.g. ``forecast (model=ar1_logret)``."""
+    """Display name for a signal configuration, e.g. ``forecast (model=ar1_logret)``.
+
+    Features are named by their column (the horizon shows in the scoreboard's sections).
+    """
+    if name == "feature":
+        return params["column"]
     return name + (f" ({', '.join(f'{k}={v}' for k, v in params.items())})" if params else "")
 
 
@@ -233,9 +269,11 @@ def scoreboard_task(
         kept = pl.read_parquet(paths.scoreboard).filter(
             ~pl.col("signal").is_in(scores["signal"].unique().to_list())
         )
-        scores = pl.concat([kept, scores])
+        if "horizon" not in kept.columns:  # stored before horizons existed: all monthly
+            kept = kept.with_columns(pl.lit(HORIZON, pl.Int64).alias("horizon"))
+        scores = pl.concat([kept.select(scores.columns), scores])
     write_parquet_atomic(scores.sort("signal", "pool", "date"), paths.scoreboard)
     table = summarize(scores)
-    status = {"signals": table["signal"].n_unique(), "months": int(table["months"].max())}
+    status = {"signals": table["signal"].n_unique(), "periods": int(table["periods"].max())}
     write_status(settings.data_dir, "scoreboard", status)
     return {"summary": table.to_dicts()}

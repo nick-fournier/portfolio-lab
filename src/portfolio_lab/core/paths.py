@@ -51,8 +51,13 @@ class DataPaths:
 
     @property
     def fundamentals_facts(self) -> Path:
-        """Annual 10-K facts for the universe's companies, with filing dates."""
-        return self.root / "fundamentals" / "facts.parquet"
+        """10-K and 10-Q facts for the universe's companies, with filing dates."""
+        return self.root / "fundamentals" / "company_facts.parquet"
+
+    @property
+    def fundamentals_companies(self) -> Path:
+        """Company profiles from the SEC: name, SIC industry code, fiscal year end."""
+        return self.root / "fundamentals" / "companies.parquet"
 
     @property
     def fundamentals_tickers(self) -> Path:
@@ -63,6 +68,16 @@ class DataPaths:
     def fscores(self) -> Path:
         """Point-in-time Piotroski F-scores by symbol and filing date."""
         return self.root / "fundamentals" / "fscores.parquet"
+
+    @property
+    def fundamentals_states(self) -> Path:
+        """Point-in-time state of every company as of each of its filings."""
+        return self.root / "fundamentals" / "states.parquet"
+
+    @property
+    def features(self) -> Path:
+        """Monthly point-in-time feature panel (``research.features``)."""
+        return self.root / "features" / "monthly.parquet"
 
     @property
     def forecast_cache(self) -> Path:
