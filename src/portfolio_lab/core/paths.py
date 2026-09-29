@@ -69,6 +69,11 @@ class DataPaths:
         """Cached return forecasts, one folder per model configuration."""
         return self.root / "cache" / "forecasts"
 
+    @property
+    def scoreboard(self) -> Path:
+        """Signal scoreboard: per-date rank IC and quintile returns for every signal."""
+        return self.root / "results" / "scoreboard.parquet"
+
     @staticmethod
     def year_partition(dataset: Path, year: int) -> Path:
         """Return the parquet file for ``year`` within a year-partitioned dataset."""

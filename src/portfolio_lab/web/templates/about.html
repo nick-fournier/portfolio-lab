@@ -87,6 +87,14 @@
   move for a different reason: the SEC's ticker map only covers current companies, so dead ones
   have no F-score and are never picked. That part of the bias remains.</p>
 
+<h2>5. Signals</h2>
+<p>A backtest mixes the prediction with everything done to it afterwards (optimizer, costs,
+  position limits), so a weak forecast can hide behind a good optimizer. The
+  <a href="/signals">signal scoreboard</a> tests predictions directly: every month each signal
+  ranks the stocks, and the ranking is scored against the next month's returns. It covers the
+  forecast models and classic anomalies (momentum, short-term reversal, low volatility,
+  Piotroski quality), which are the bar any new model has to clear.</p>
+
 <h2>Roadmap</h2>
 <ol>
   <li><b>Foundation</b> (this site): data, backtests, baselines, and the original optimizer rebuilt.</li>

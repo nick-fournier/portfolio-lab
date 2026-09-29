@@ -39,7 +39,7 @@ def pages(base: str) -> list[str]:
     """Paths to check: the fixed pages plus the first run's detail page."""
     runs = urllib.request.urlopen(f"{base}/runs").read().decode()
     first_run = re.findall(r'href="(/runs/[^"#]+)"', runs)[:1]
-    return ["/", "/runs", *first_run, "/status", "/about"]
+    return ["/", "/runs", *first_run, "/signals", "/status", "/about"]
 
 
 def main() -> int:

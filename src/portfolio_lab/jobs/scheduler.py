@@ -55,6 +55,7 @@ JOBS: tuple[Job, ...] = (
     Job("fundamentals", tasks.fundamentals_task, "weekly"),
     Job("delisted", tasks.delisted_task, "weekly"),
     Job("scheduled_backtests", tasks.scheduled_backtests_task, "weekly"),
+    Job("scoreboard", tasks.scoreboard_task, "weekly"),
 )
 
 
