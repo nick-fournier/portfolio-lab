@@ -3,5 +3,8 @@
 Importing this package registers every built-in strategy in ``base.REGISTRY``.
 """
 
-from portfolio_lab.strategies import baselines  # noqa: F401  (registers strategies)
+from portfolio_lab.strategies import (
+    baselines,  # noqa: F401  (registers strategies)
+    momentum,  # noqa: F401
+)
 from portfolio_lab.strategies.meanvar import strategy as _meanvar  # noqa: F401
