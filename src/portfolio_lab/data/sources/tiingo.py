@@ -86,13 +86,18 @@ def exclude_reason(tiingo_ticker: str) -> str | None:
 def dead_stocks(
     tickers: pl.DataFrame, current: set[str], since: date, before: date
 ) -> pl.DataFrame:
-    """Stocks that stopped trading in ``[since, before)`` and are not listed today.
+    """Stocks not listed today that left their exchange on or after ``since``.
+
+    A stock whose final venue is OTC counts as dead even if it still trades there (SVB
+    still quotes as ``SIVBQ``); one whose final venue is an exchange must have stopped
+    trading before ``before``, so a listing missing from today's directory by lag is not
+    mistaken for a dead one.
 
     Args:
         tickers: Parsed Tiingo list.
         current: Symbols in today's directory (these are handled by the daily universe).
         since: Earliest last-trading date of interest (the start of our price history).
-        before: Tickers still trading on or after this date are treated as alive.
+        before: Exchange-listed tickers trading on or after this date are treated as alive.
 
     Returns:
         symbol, exchange (final venue), start, end, ``fell_to_otc``, ``exclude_reason`` and
@@ -105,7 +110,7 @@ def dead_stocks(
         & pl.col("symbol").str.contains(r"^[A-Z][A-Z0-9.]*$")
         & (pl.col("currency") == "USD")
         & (pl.col("end") >= since)
-        & (pl.col("end") < before)
+        & ((pl.col("end") < before) | ~pl.col("exchange").is_in(list(EXCHANGES)))
         & ~pl.col("symbol").is_in(list(current))
     ).unique(subset="symbol", keep="last")
     reasons = [exclude_reason(t) for t in candidates["tiingo_ticker"]]

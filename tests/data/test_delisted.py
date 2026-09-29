@@ -22,6 +22,7 @@ ROWS = [
     "SPYX,NYSE ARCA,ETF,USD,2016-01-02,2024-02-15",  # not a stock
     "OLD,NYSE,Stock,USD,2001-01-02,2012-05-01",  # died before our history
     "ALIVE,NASDAQ,Stock,USD,2001-01-02,2024-03-28",  # still trading
+    "FRCB,PINK,Stock,USD,1990-01-02,2024-03-28",  # bankrupt, still quoted OTC
     "LISTED,NASDAQ,Stock,USD,2001-01-02,2024-02-15",  # in today's directory
     "NODATE,NASDAQ,Stock,USD,,",
 ]
@@ -67,7 +68,8 @@ def test_dead_stocks_filters_and_flags():
         parse_supported_tickers(_zip()), {"LISTED"}, date(2016, 1, 4), date(2024, 3, 14)
     )
     rows = {r["symbol"]: r for r in dead.iter_rows(named=True)}
-    assert set(rows) == {"SIVBQ", "BRK.A", "AAC.U", "ABCDW"}
+    assert set(rows) == {"SIVBQ", "BRK.A", "AAC.U", "ABCDW", "FRCB"}
+    assert rows["FRCB"]["fell_to_otc"]
     assert rows["SIVBQ"]["fell_to_otc"] and rows["SIVBQ"]["included"]
     assert not rows["BRK.A"]["fell_to_otc"] and rows["BRK.A"]["included"]
     assert (rows["AAC.U"]["exclude_reason"], rows["ABCDW"]["exclude_reason"]) == ("unit", "warrant")
@@ -82,10 +84,10 @@ def test_ingest_backfills_once(settings, monkeypatch):
 
     first = ingest_delisted(settings, None, None, today=DAYS[-1])
     # No directory snapshot stored, so LISTED counts as dead too.
-    assert (first["included"], first["fetched_now"], first["with_prices"]) == (3, 3, 1)
+    assert (first["included"], first["fetched_now"], first["with_prices"]) == (4, 4, 1)
     assert first["fell_to_otc"] == 1
     table = pl.read_parquet(DataPaths(settings.data_dir).universe_delisted)
     assert table.filter("has_prices")["symbol"].to_list() == ["SIVBQ"]
 
     second = ingest_delisted(settings, None, None, today=DAYS[-1])
-    assert second["fetched_now"] == 2  # only the ones that still have no prices
+    assert second["fetched_now"] == 0  # each dead stock is tried once

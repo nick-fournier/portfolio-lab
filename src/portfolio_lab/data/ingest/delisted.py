@@ -22,7 +22,7 @@ from portfolio_lab.data.sources.tiingo import dead_stocks, fetch_supported_ticke
 
 log = logging.getLogger(__name__)
 
-#: A ticker still trading within this many sessions is treated as alive.
+#: An exchange-listed ticker still trading within this many sessions is treated as alive.
 ALIVE_SESSIONS = 10
 
 
@@ -59,8 +59,11 @@ def ingest_delisted(
         fetch_supported_tickers(public), listed_today(paths), HISTORY_START, alive_after
     )
 
-    stored = set(stored_extent(paths.prices_daily)["symbol"])
-    todo = [s for s in dead.filter("included")["symbol"] if s not in stored]
+    # Dead stocks never gain history, so each is fetched once, found or not.
+    tried = set(stored_extent(paths.prices_daily)["symbol"])
+    if paths.universe_delisted.exists():
+        tried |= set(pl.read_parquet(paths.universe_delisted).filter("included")["symbol"])
+    todo = [s for s in dead.filter("included")["symbol"] if s not in tried]
     fetched = {}
     if todo:
         log.info("delisted: backfilling %d dead stocks", len(todo))
