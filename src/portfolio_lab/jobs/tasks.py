@@ -8,17 +8,22 @@ import logging
 from datetime import date
 from typing import Any
 
+import polars as pl
+
 from portfolio_lab.backtest.costs import CostModel
 from portfolio_lab.backtest.engine import BacktestConfig, run
 from portfolio_lab.backtest.results import prune_runs, save_run
 from portfolio_lab.core.config import Settings
 from portfolio_lab.core.http import RateLimitedClient
 from portfolio_lab.core.paths import DataPaths
+from portfolio_lab.core.store import write_parquet_atomic, write_status
+from portfolio_lab.data.ingest.fundamentals import ingest_fundamentals
 from portfolio_lab.data.ingest.prices import update_prices, verify_prices
 from portfolio_lab.data.ingest.rates import ingest_rates
 from portfolio_lab.data.ingest.universe import current_symbols, ingest_universe
 from portfolio_lab.data.sources.alpaca import make_client
 from portfolio_lab.research.panel import Panel
+from portfolio_lab.research.piotroski import build_fscores, fscores_by_symbol
 from portfolio_lab.strategies.base import create
 
 log = logging.getLogger(__name__)
@@ -35,10 +40,16 @@ SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("meanvar", {"model": "ar1_logret"}),
     ("meanvar", {"model": "arima320_price"}),
     ("meanvar", {"model": "historical_mean"}),
+    # The original design: a Piotroski quality filter, alone and in front of meanvar.
+    ("piotroski", {}),
+    ("piotroski", {"pool": 100}),
+    ("meanvar", {"min_fscore": 7}),
 )
 #: Worker processes for model fits: orange's four fast A76 cores (more workers land on the
 #: slow A55 cores and measured slower).
 FORECAST_WORKERS = 4
+#: SEC fair-access limit is 10 requests/second; stay well under it.
+EDGAR_REQUESTS_PER_MINUTE = 300
 #: Start date for scheduled backtests (one year after data starts, for lookbacks).
 SCHEDULED_START = date(2017, 1, 3)
 #: Runs kept per configuration; older ones are deleted after each scheduled refresh.
@@ -93,6 +104,28 @@ def daily_ingest_task(settings: Settings, full: bool = False) -> dict:
         "benchmarks": ingest_benchmarks_task(settings, full),
         "rates": ingest_rates_task(settings),
     }
+
+
+def fundamentals_task(settings: Settings, force: bool = False) -> dict:
+    """Refresh SEC fundamentals for the universe and recompute point-in-time F-scores."""
+    paths = DataPaths(settings.data_dir)
+    symbols = current_symbols(paths)
+    headers = {"User-Agent": settings.edgar_user_agent}
+    with RateLimitedClient(headers=headers, max_per_minute=EDGAR_REQUESTS_PER_MINUTE) as client:
+        summary = ingest_fundamentals(settings, client, symbols, force=force)
+    facts = pl.read_parquet(paths.fundamentals_facts)
+    tickers = pl.read_parquet(paths.fundamentals_tickers)
+    scores = fscores_by_symbol(build_fscores(facts), tickers)
+    write_parquet_atomic(scores, paths.fscores)
+    status = {
+        "filings_scored": scores.height,
+        "symbols": scores["symbol"].n_unique(),
+        "with_8_signals": scores.filter(pl.col("n_signals") >= 8).height,
+        "latest_filing": scores["filed"].max(),
+    }
+    write_status(settings.data_dir, "fscores", status)
+    log.info("fscores: %d filings for %d symbols", status["filings_scored"], status["symbols"])
+    return {"fundamentals": summary, "fscores": status}
 
 
 def verify_task(settings: Settings, sample: int = 50) -> dict:

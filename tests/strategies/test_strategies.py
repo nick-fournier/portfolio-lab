@@ -1,4 +1,5 @@
 import numpy as np
+import polars as pl
 import pytest
 
 import portfolio_lab.strategies  # noqa: F401  (registers built-in strategies)
@@ -24,7 +25,18 @@ def _poisoned(panel: Panel, after: int, seed: int = 1) -> Panel:
     eligible[after + 1 :] = rng.random(eligible[after + 1 :].shape) > 0.5
     rf = panel.rf_daily.copy()
     rf[after + 1 :] = 1.0
-    return Panel(panel.dates, panel.symbols, fields, eligible, rf, panel.universe)
+    asof = panel.dates[after]
+    fundamentals = panel.fundamentals
+    if fundamentals is not None:  # rescore filings made from asof on, and add future ones
+        dtype = fundamentals.schema["fscore"]
+        future = fundamentals.filter(pl.col("filed") >= asof).with_columns(
+            pl.lit(0, dtype=dtype).alias("fscore")
+        )
+        extra = fundamentals.with_columns(
+            pl.lit(asof).alias("filed"), pl.lit(9, dtype=dtype).alias("fscore")
+        )
+        fundamentals = pl.concat([fundamentals.filter(pl.col("filed") < asof), future, extra])
+    return Panel(panel.dates, panel.symbols, fields, eligible, rf, panel.universe, fundamentals)
 
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))
@@ -69,3 +81,22 @@ def test_construct_helpers_and_composed(make_panel):
 def test_unknown_strategy():
     with pytest.raises(KeyError, match="unknown strategy"):
         create("nope")
+
+
+def test_piotroski_holds_high_scores_equally(make_panel):
+    panel = make_panel(symbols=[f"S{i:02d}" for i in range(6)], days=400)
+    weights = create("piotroski").target_weights(DataView(panel, ASOF))
+    assert weights == {
+        "S00": pytest.approx(1 / 3),
+        "S02": pytest.approx(1 / 3),
+        "S04": pytest.approx(1 / 3),
+    }
+
+
+def test_meanvar_fscore_filter_limits_candidates(make_panel):
+    panel = make_panel(symbols=[f"S{i:02d}" for i in range(12)], days=400)
+    view = DataView(panel, ASOF)
+    weights = create(
+        "meanvar", model="historical_mean", min_fscore=8, max_weight=0.5
+    ).target_weights(view)
+    assert weights and set(weights) <= {f"S{i:02d}" for i in range(0, 12, 2)}  # the 9-scorers

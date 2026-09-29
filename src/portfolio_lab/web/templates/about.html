@@ -42,17 +42,21 @@
     efficient frontier over the 100 most liquid stocks.</li>
   <li><b>Momentum:</b> equal-weight the 20 biggest winners of the past year (skipping the last
     month), on the same 100 stocks or on every eligible stock.</li>
+  <li><b>Piotroski:</b> the original optimizer's stock filter. From each company's annual
+    reports (SEC XBRL filings, only as of the date each became public), nine signs of improving
+    financial health are scored; the screen equal-weights companies scoring 8 or 9, and can also
+    filter mean-variance's candidates. Banks and foreign filers lack the inputs and are skipped.</li>
 </ul>
 <p><b>What the comparison shows so far.</b> The forecasts add nothing over a plain trailing
   average. Plain momentum on the same 100 stocks earns the same return as mean-variance (about 25%
   a year since 2017), so the return is momentum; what the optimizer adds is risk control, with
   market-level beta and drawdowns instead of momentum's 1.35 beta and -50% drawdown, for a much
   better Sharpe ratio. Momentum across all eligible stocks does badly, so the effect lived in large,
-  liquid names. All of this is flattered by survivorship bias, so treat it as an upper bound.</p>
-<ul>
-  <li><b>Next:</b> a Piotroski F-score value filter computed from SEC filings as of the date
-    each filing was public.</li>
-</ul>
+  liquid names. The Piotroski quality screen, on the same 100 liquid stocks, beats equal-weighting
+  them on return, Sharpe ratio and drawdown (with only about 11 holdings, so it is noisy); across
+  all eligible stocks it barely helps, and in front of mean-variance it lowers return and risk
+  together without improving the Sharpe ratio. All of this is flattered by survivorship bias, so
+  treat absolute numbers as an upper bound; comparisons within the same pool are more reliable.</p>
 
 <h2>Roadmap</h2>
 <ol>

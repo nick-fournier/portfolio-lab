@@ -40,6 +40,26 @@ class DataPaths:
         return self.root / "rates" / "dtb3.parquet"
 
     @property
+    def edgar_bulk(self) -> Path:
+        """Downloaded SEC ``companyfacts.zip`` (about 1.4 GB, replaced when it changes)."""
+        return self.root / "raw" / "edgar" / "companyfacts.zip"
+
+    @property
+    def fundamentals_facts(self) -> Path:
+        """Annual 10-K facts for the universe's companies, with filing dates."""
+        return self.root / "fundamentals" / "facts.parquet"
+
+    @property
+    def fundamentals_tickers(self) -> Path:
+        """Ticker -> CIK map from the SEC, as of the last ingest."""
+        return self.root / "fundamentals" / "tickers.parquet"
+
+    @property
+    def fscores(self) -> Path:
+        """Point-in-time Piotroski F-scores by symbol and filing date."""
+        return self.root / "fundamentals" / "fscores.parquet"
+
+    @property
     def forecast_cache(self) -> Path:
         """Cached return forecasts, one folder per model configuration."""
         return self.root / "cache" / "forecasts"

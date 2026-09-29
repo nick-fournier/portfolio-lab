@@ -35,6 +35,8 @@ class MeanVar:
         lookback: Sessions of history for forecasts and covariance.
         horizon: Forecast horizon in sessions.
         max_weight: Cap on any single weight.
+        min_fscore: If set, only stocks with a Piotroski F-score at least this high are
+            candidates (the original optimizer's filter), before taking the most liquid.
         schedule: Rebalance frequency.
         cache_dir: Forecast cache root, set by the runner (not a strategy parameter).
         workers: Processes used for model fits (not a strategy parameter).
@@ -46,6 +48,7 @@ class MeanVar:
     lookback: int = 252
     horizon: int = 21
     max_weight: float = 0.10
+    min_fscore: int | None = None
     schedule: Frequency = "M"
     name: str = "meanvar"
     cache_dir: Path | None = field(default=None, repr=False, metadata={"param": False})
@@ -58,6 +61,7 @@ class MeanVar:
             int(self.horizon),
         )
         self.max_weight = float(self.max_weight)
+        self.min_fscore = int(self.min_fscore) if self.min_fscore is not None else None
         self._forecaster: Forecaster | None = None
 
     def _get_forecaster(self) -> Forecaster:
@@ -69,7 +73,10 @@ class MeanVar:
 
     def target_weights(self, view: DataView) -> Weights:
         """Forecast the most liquid eligible stocks and optimize their weights."""
-        prices = view.prices(self.lookback, view.top_liquid(self.top_n))
+        among = None
+        if self.min_fscore is not None:
+            among = [s for s, f in view.fscores(view.eligible()).items() if f >= self.min_fscore]
+        prices = view.prices(self.lookback, view.top_liquid(self.top_n, among=among))
         coverage = prices.notna().mean()
         prices = prices.loc[:, coverage >= MIN_COVERAGE].ffill().dropna()
         if prices.shape[1] < 2 or len(prices) < 30:

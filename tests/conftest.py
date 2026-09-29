@@ -40,8 +40,22 @@ def make_panel():
 
     def factory(symbols=("AAA", "BBB", "CCC"), benchmarks=("SPY",), days=300, seed=0):
         prices = make_long_prices([*symbols, *benchmarks], days=days, seed=seed)
-        rates = pl.DataFrame({"date": prices["date"].unique().sort(), "rate": 0.05})
+        dates = prices["date"].unique().sort()
+        rates = pl.DataFrame({"date": dates, "rate": 0.05})
         rules = EligibilityRules(min_price=1, min_dollar_volume=0, adv_window=5, min_history=5)
-        return Panel.from_long(prices, symbols, rates, rules)
+        panel = Panel.from_long(prices, symbols, rates, rules)
+        panel.fundamentals = make_fundamentals(symbols, dates)
+        return panel
 
     return factory
+
+
+def make_fundamentals(symbols, dates):
+    """Synthetic F-scores: a filing every ~250 sessions; every other symbol scores 9."""
+    rows = [
+        (symbol, dates[i], dates[max(i - 40, 0)], 9 if k % 2 == 0 else 5, 9)
+        for k, symbol in enumerate(symbols)
+        for i in range(20, len(dates), 250)
+    ]
+    schema = ["symbol", "filed", "fiscal_end", "fscore", "n_signals"]
+    return pl.DataFrame(rows, schema=schema, orient="row").sort("filed")

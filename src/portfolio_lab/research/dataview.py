@@ -7,12 +7,16 @@ read-only, so a strategy also cannot corrupt data for later decisions.
 """
 
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
+import polars as pl
 
 from portfolio_lab.research.panel import TRADING_DAYS, Panel
+
+#: Scores from filings older than this (about 18 months) are treated as stale.
+MAX_FILING_AGE_DAYS = 550
 
 
 class DataView:
@@ -96,6 +100,36 @@ class DataView:
         """Raw closes on the decision date."""
         names, cols = self._columns(symbols)
         return pd.Series(self._panel.field("close")[self._index, cols], index=names)
+
+    def fscores(
+        self,
+        symbols: Sequence[str] | None = None,
+        min_signals: int = 8,
+        max_age_days: int = MAX_FILING_AGE_DAYS,
+    ) -> dict[str, int]:
+        """Latest Piotroski F-score per symbol from filings made strictly before ``asof``.
+
+        A filing dated ``asof`` is not visible yet (it may arrive after the close), and a
+        score older than ``max_age_days`` (a company that stopped filing) is ignored.
+
+        Args:
+            symbols: Symbols to return (default: all with a score).
+            min_signals: Minimum number of the nine signals that must be computable.
+            max_age_days: Maximum age of the filing behind a score.
+        """
+        table = self._panel.fundamentals
+        if table is None:
+            return {}
+        oldest = self.asof - timedelta(days=max_age_days)
+        latest = (
+            table.filter((pl.col("filed") < self.asof) & (pl.col("filed") >= oldest))
+            .group_by("symbol")
+            .last()
+            .filter(pl.col("n_signals") >= min_signals)
+        )
+        if symbols is not None:
+            latest = latest.filter(pl.col("symbol").is_in(list(symbols)))
+        return dict(zip(latest["symbol"], latest["fscore"].cast(int), strict=True))
 
     def risk_free(self) -> float:
         """Annual risk-free rate as of the decision date (fraction, e.g. 0.05)."""
