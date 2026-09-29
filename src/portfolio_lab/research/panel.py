@@ -62,6 +62,8 @@ class Panel:
         universe: Symbols that may ever be eligible; the rest (benchmarks) are price-only.
         fundamentals: Optional point-in-time scores by symbol and filing date (symbol,
             filed, fscore, n_signals), from ``research.piotroski``.
+        fell_to_otc: Dead stocks whose final venue was OTC (fell off their exchange),
+            which the backtest exits with a delisting return rather than the last price.
     """
 
     def __init__(
@@ -73,17 +75,32 @@ class Panel:
         rf_daily: np.ndarray,
         universe: Iterable[str] = (),
         fundamentals: pl.DataFrame | None = None,
+        fell_to_otc: Iterable[str] = (),
     ):
         self.dates = list(dates)
         self.universe = frozenset(universe)
         self.fundamentals = fundamentals.sort("filed") if fundamentals is not None else None
+        self.n_delisted = 0  # dead stocks added to the universe (set by ``load``)
         self.symbols = list(symbols)
         self.date_index = {d: i for i, d in enumerate(self.dates)}
         self.symbol_index = {s: j for j, s in enumerate(self.symbols)}
         self.fields = dict(fields)
         self.eligible = eligible
         self.rf_daily = rf_daily
-        for array in (*self.fields.values(), self.eligible, self.rf_daily):
+        otc = set(fell_to_otc)
+        self.fell_to_otc = np.array([sym in otc for sym in self.symbols], dtype=bool)
+        # Row of each symbol's last price (-1 if none): later rows mean it never trades again.
+        has_price = np.isfinite(self.fields["close"])
+        self.last_bar = np.where(
+            has_price.any(axis=0), len(self.dates) - 1 - np.argmax(has_price[::-1], axis=0), -1
+        )
+        for array in (
+            *self.fields.values(),
+            self.eligible,
+            self.rf_daily,
+            self.fell_to_otc,
+            self.last_bar,
+        ):
             array.flags.writeable = False
 
     def __repr__(self) -> str:
@@ -101,6 +118,7 @@ class Panel:
         universe: Iterable[str],
         rates: pl.DataFrame | None = None,
         rules: EligibilityRules | None = None,
+        fell_to_otc: Iterable[str] = (),
     ) -> "Panel":
         """Build a panel from long price rows.
 
@@ -109,6 +127,7 @@ class Panel:
             universe: Symbols that may ever be eligible (others are price-only).
             rates: Optional ``date``/``rate`` (annual fraction) risk-free history.
             rules: Eligibility rules; defaults to :class:`EligibilityRules`.
+            fell_to_otc: Dead stocks whose final venue was OTC (see the class docs).
         """
         rules = rules or EligibilityRules()
         universe = set(universe)
@@ -147,7 +166,8 @@ class Panel:
             fields[name] = array
         eligible = np.zeros(shape, dtype=bool)
         eligible[rows, cols] = prices["eligible"].to_numpy()
-        return cls(dates, symbols, fields, eligible, _daily_rates(dates, rates), universe)
+        rf = _daily_rates(dates, rates)
+        return cls(dates, symbols, fields, eligible, rf, universe, fell_to_otc=fell_to_otc)
 
     @classmethod
     def load(
@@ -159,8 +179,9 @@ class Panel:
     ) -> "Panel":
         """Load stocks, benchmarks and rates from the data directory into a panel.
 
-        The universe is the set of symbols currently marked ``included``; history for
-        delisted companies is not available from free sources (survivorship bias).
+        The universe is the set of symbols currently marked ``included`` plus the stocks
+        delisted since 2016 (``universe/delisted.parquet``), so backtests are not limited to
+        today's survivors.
 
         Args:
             data_dir: The data directory (``Settings.data_dir``).
@@ -184,10 +205,16 @@ class Panel:
             lf = lf.filter(pl.col("date") <= end)
         symbols = pl.read_parquet(paths.universe_symbols)
         universe = symbols.filter("included")["symbol"].to_list()
+        dead = pl.DataFrame(schema={"symbol": pl.String, "fell_to_otc": pl.Boolean})
+        if paths.universe_delisted.exists():
+            dead = pl.read_parquet(paths.universe_delisted).filter("included", "has_prices")
+        universe += dead["symbol"].to_list()
+        fell_to_otc = dead.filter("fell_to_otc")["symbol"].to_list()
         rates = pl.read_parquet(paths.rates) if paths.rates.exists() else None
-        panel = cls.from_long(lf.collect(), universe, rates, rules)
+        panel = cls.from_long(lf.collect(), universe, rates, rules, fell_to_otc)
         if paths.fscores.exists():
             panel.fundamentals = pl.read_parquet(paths.fscores).sort("filed")
+        panel.n_delisted = dead.height
         return panel
 
 

@@ -36,7 +36,10 @@ from portfolio_lab.strategies.base import Strategy, Weights
 log = logging.getLogger(__name__)
 
 CAVEATS = (
-    "Survivorship bias: the universe is today's listed stocks; delisted companies are missing.",
+    "Delisted companies come from Tiingo's ticker list; names Alpaca has no bars for "
+    "(mostly ones that only ever traded OTC) are still missing.",
+    "A stock that fell to OTC and never traded on an exchange again is sold at its last "
+    "exchange price plus the delisting return; acquisitions exit at the last price.",
     "Universe classification (ETF, warrant, preferred, ...) is as of the latest snapshot.",
     "Costs are a deterministic model (half-spread + volume-based impact), not real fills.",
 )
@@ -54,6 +57,9 @@ class BacktestConfig:
         max_weight: Largest weight allowed in any single name.
         benchmark: Symbol whose returns are reported alongside the strategy.
         max_missing_days: Consecutive missing bars before a held name is liquidated.
+        delisting_return: Return applied when liquidating a name that fell to OTC and has
+            no later bars (it kept trading OTC, usually far lower; Shumway, 1997, finds
+            about -30%). Use -1.0 for a total loss or 0.0 to exit at the last price.
     """
 
     start: date
@@ -62,6 +68,7 @@ class BacktestConfig:
     max_weight: float = 1.0
     benchmark: str = "SPY"
     max_missing_days: int = 5
+    delisting_return: float = -0.30
 
 
 def validate_weights(
@@ -199,11 +206,16 @@ class _Portfolio:
         self.cash *= 1 + rf_daily
         self.missing = np.where((self.holdings > 0) & ~np.isfinite(ret_cc), self.missing + 1, 0)
 
-    def liquidate_stale(self, max_missing_days: int) -> np.ndarray:
-        """Move names missing bars for ``max_missing_days`` sessions to cash; return them."""
+    def liquidate_stale(self, max_missing_days: int, exit_ret: np.ndarray) -> np.ndarray:
+        """Move names missing bars for ``max_missing_days`` sessions to cash; return them.
+
+        Args:
+            max_missing_days: Consecutive missing bars that trigger a sale.
+            exit_ret: Per-name return applied to the sale (the delisting return, or 0).
+        """
         stale = self.missing >= max_missing_days
         if stale.any():
-            self.cash += float(self.holdings[stale].sum())
+            self.cash += float((self.holdings[stale] * (1 + exit_ret[stale])).sum())
             self.holdings[stale] = 0.0
             self.missing[stale] = 0
         return np.flatnonzero(stale)
@@ -211,8 +223,8 @@ class _Portfolio:
 
 def _simulate(
     strategy: Strategy, panel: Panel, config: BacktestConfig, first: int, last: int
-) -> tuple[list[tuple], list[tuple], int]:
-    """Run the day loop; return daily rows, target-weight rows and forced liquidations."""
+) -> tuple[list[tuple], list[tuple], tuple[int, int]]:
+    """Run the day loop; return daily rows, target-weight rows and liquidation counts."""
     rebalance = {
         panel.date_index[d]
         for d in rebalance_dates(panel.dates[first : last + 1], strategy.schedule)
@@ -221,7 +233,7 @@ def _simulate(
     ret_cc, ret_co, adv = panel.field("ret_cc"), panel.field("ret_co"), panel.field("adv")
     book = _Portfolio(len(panel.symbols), config.costs)
     prev_nav, pending = 1.0, None
-    daily, weight_rows, liquidations = [], [], 0
+    daily, weight_rows, liquidations, delistings = [], [], 0, 0
 
     for i in range(first, last + 1):
         if i > first:
@@ -231,9 +243,12 @@ def _simulate(
                 turnover, cost = book.trade(pending, adv[i - 1])
                 pending = None
             book.intraday(ret_cc[i], ret_co[i], panel.rf_daily[i])
-            stale = book.liquidate_stale(config.max_missing_days)
+            delisted = panel.fell_to_otc & (i > panel.last_bar)
+            exit_ret = np.where(delisted, config.delisting_return, 0.0)
+            stale = book.liquidate_stale(config.max_missing_days, exit_ret)
             if stale.size:
                 liquidations += stale.size
+                delistings += int(delisted[stale].sum())
                 names = [panel.symbols[j] for j in stale]
                 log.debug("liquidating %s on %s after missing bars", names, panel.dates[i])
             nav = book.nav
@@ -248,7 +263,7 @@ def _simulate(
             weights = strategy.target_weights(view)
             pending = validate_weights(weights, view, panel, config.max_weight)
             weight_rows += [(view.asof, s, float(w)) for s, w in sorted(weights.items()) if w > 0]
-    return daily, weight_rows, liquidations
+    return daily, weight_rows, (liquidations, delistings)
 
 
 def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
@@ -264,7 +279,9 @@ def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
         raise ValueError(f"need at least two sessions between {config.start} and {config.end}")
     first, last = window[0], window[-1]
     try:
-        daily, weight_rows, liquidations = _simulate(strategy, panel, config, first, last)
+        daily, weight_rows, (liquidations, delistings) = _simulate(
+            strategy, panel, config, first, last
+        )
     finally:
         if callable(close := getattr(strategy, "close", None)):
             close()  # e.g. worker pools
@@ -286,6 +303,7 @@ def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
         daily_df["holdings"].to_numpy(),
     )
     metrics["forced_liquidations"] = float(liquidations)
+    metrics["otc_delistings"] = float(delistings)
     meta = {
         "strategy": strategy.name,
         "summary": describe(strategy, summary_only=True),
@@ -298,7 +316,9 @@ def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
         "benchmark": config.benchmark,
         "costs": asdict(config.costs),
         "max_weight": config.max_weight,
+        "delisting_return": config.delisting_return,
         "universe_size": len(panel.universe),
+        "delisted_in_universe": panel.n_delisted,
         "data_max_date": panel.dates[-1],
         "git_sha": _git_sha(),
         "caveats": list(CAVEATS),

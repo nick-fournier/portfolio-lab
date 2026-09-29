@@ -46,7 +46,16 @@ def runs_dir(data_dir: Path) -> Path:
 
 #: Metadata that defines *what* was tested. Two runs agreeing on these are the same
 #: configuration, even if they ran on different days, code versions or data.
-CONFIG_KEYS = ("strategy", "params", "schedule", "start", "benchmark", "costs", "max_weight")
+CONFIG_KEYS = (
+    "strategy",
+    "params",
+    "schedule",
+    "start",
+    "benchmark",
+    "costs",
+    "max_weight",
+    "delisting_return",
+)
 
 
 def _canonical(value: Any) -> Any:

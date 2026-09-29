@@ -35,6 +35,11 @@ class DataPaths:
         return self.root / "universe" / "symbols.parquet"
 
     @property
+    def universe_delisted(self) -> Path:
+        """Stocks that stopped trading since the history start, from Tiingo's ticker list."""
+        return self.root / "universe" / "delisted.parquet"
+
+    @property
     def rates(self) -> Path:
         """Risk-free rate history (FRED DTB3)."""
         return self.root / "rates" / "dtb3.parquet"

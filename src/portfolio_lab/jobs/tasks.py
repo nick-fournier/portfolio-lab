@@ -17,6 +17,7 @@ from portfolio_lab.core.config import Settings
 from portfolio_lab.core.http import RateLimitedClient
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic, write_status
+from portfolio_lab.data.ingest.delisted import ingest_delisted
 from portfolio_lab.data.ingest.fundamentals import ingest_fundamentals
 from portfolio_lab.data.ingest.prices import update_prices, verify_prices
 from portfolio_lab.data.ingest.rates import ingest_rates
@@ -106,6 +107,12 @@ def daily_ingest_task(settings: Settings, full: bool = False) -> dict:
     }
 
 
+def delisted_task(settings: Settings) -> dict:
+    """Find stocks delisted since the history start and backfill their prices."""
+    with public_client(settings) as public, make_client(settings) as alpaca:
+        return ingest_delisted(settings, public, alpaca)
+
+
 def fundamentals_task(settings: Settings, force: bool = False) -> dict:
     """Refresh SEC fundamentals for the universe and recompute point-in-time F-scores."""
     paths = DataPaths(settings.data_dir)
@@ -142,6 +149,7 @@ def backtest_task(
     params: dict[str, Any] | None = None,
     notional: float = 100_000,
     max_weight: float = 1.0,
+    delisting_return: float = BacktestConfig.delisting_return,
 ) -> tuple[str, dict[str, float]]:
     """Run one backtest on the stored data and save it.
 
@@ -160,6 +168,7 @@ def backtest_task(
         end=end or panel.dates[-1],
         costs=CostModel(notional=notional),
         max_weight=max_weight,
+        delisting_return=delisting_return,
     )
     result = run(strat, panel, config)
     run_id = save_run(result, settings.data_dir)
