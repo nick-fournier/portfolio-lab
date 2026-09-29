@@ -49,13 +49,35 @@ def test_ar1_forecast_is_deterministic_and_bounded():
     assert mu == forecast_one(_walk(), ForecastSpec("ar1_logret"))
 
 
-def test_legacy_arima_is_bounded_when_it_converges():
-    # ARIMA(3,2,0) is fitted by an iterative optimizer that occasionally fails to converge
-    # (~3% of real windows, and not identically across CPUs); failures come back as NaN.
+def test_legacy_arima_recovers_simulated_coefficients():
+    # ARIMA(3,2,0) == AR(3) on second differences; least squares recovers the coefficients
+    # and its forecast equals iterating them forward and integrating twice.
+    rng = np.random.default_rng(0)
+    true = np.array([-0.5, -0.3, -0.1])
+    d2 = np.zeros(5000)
+    for t in range(3, 5000):
+        d2[t] = true @ d2[t - 3 : t][::-1] + rng.normal(0, 0.1)
+    prices = 100 + np.cumsum(np.cumsum(d2))
+    lags = np.column_stack([d2[2 - k : len(d2) - 1 - k] for k in range(3)])
+    coef, *_ = np.linalg.lstsq(lags, d2[3:], rcond=None)
+    np.testing.assert_allclose(coef, true, atol=0.03)
+
+    hist = list(d2[-3:])
+    for _ in range(5):
+        hist.append(float(coef @ np.array(hist[-1:-4:-1])))
+    diff1, level = prices[-1] - prices[-2], prices[-1]
+    for x in hist[3:]:
+        diff1 += x
+        level += diff1
+    assert forecast_mod.ar_diff_forecast(prices, 5) == pytest.approx(level)
+
+
+def test_legacy_arima_is_finite_bounded_and_deterministic():
     results = [forecast_one(_walk(seed=s), ForecastSpec("arima320_price")) for s in range(20)]
-    ok = [mu for mu in results if np.isfinite(mu)]
-    assert len(ok) >= 15
-    assert all(-0.99 <= mu <= 5.0 for mu in ok)
+    assert all(np.isfinite(mu) and -0.99 <= mu <= 5.0 for mu in results)
+    assert results == [
+        forecast_one(_walk(seed=s), ForecastSpec("arima320_price")) for s in range(20)
+    ]
 
 
 def test_forecast_rejects_bad_inputs():
