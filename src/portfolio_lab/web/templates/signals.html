@@ -60,7 +60,7 @@
     {% for pool in pools %}
     {
       const fig = {{ pool.chart | safe }};
-      Plotly.newPlot("ic-{{ pool.key }}", fig.data, fig.layout, window.PLOT_CONFIG);
+      drawPlot("ic-{{ pool.key }}", fig);
     }
     {% endfor %}
   });

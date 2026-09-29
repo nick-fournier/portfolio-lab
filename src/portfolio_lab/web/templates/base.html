@@ -13,6 +13,29 @@
       displaylogo: false,
       displayModeBar: window.matchMedia("(max-width: 600px)").matches ? false : "hover",
     };
+    // Touch screens never "leave" a chart, so a tapped hover label would stay up. There,
+    // labels show only the tapped point, vanish after a few seconds, and clear when the
+    // page is touched anywhere outside the chart.
+    const TOUCH = window.matchMedia("(hover: none)").matches;
+    const HOVER_MS = 3000;
+    window.drawPlot = (id, fig) => {
+      if (TOUCH) fig.layout.hovermode = "closest";
+      Plotly.newPlot(id, fig.data, fig.layout, window.PLOT_CONFIG);
+    };
+    if (TOUCH) {
+      // Plotly fires no hover event for taps, so time the label from the touch itself.
+      const timers = new Map();
+      document.addEventListener("touchstart", (event) => {
+        for (const el of document.querySelectorAll(".js-plotly-plot")) {
+          clearTimeout(timers.get(el));
+          if (el.contains(event.target)) {
+            timers.set(el, setTimeout(() => Plotly.Fx.unhover(el), HOVER_MS));
+          } else {
+            Plotly.Fx.unhover(el);
+          }
+        }
+      }, {passive: true});
+    }
   </script>
   {% block head %}{% endblock %}
 </head>

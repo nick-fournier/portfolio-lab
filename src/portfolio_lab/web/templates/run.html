@@ -45,9 +45,8 @@
 
 <script>
   document.addEventListener("DOMContentLoaded", () => {
-    const opts = window.PLOT_CONFIG;
     for (const [id, fig] of [["equity", {{ equity | safe }}], ["drawdown", {{ drawdown | safe }}]{% if weights_chart %}, ["weights", {{ weights_chart | safe }}]{% endif %}]) {
-      Plotly.newPlot(id, fig.data, fig.layout, opts);
+      drawPlot(id, fig);
     }
   });
 </script>
