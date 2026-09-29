@@ -145,6 +145,24 @@ def backtest_cmd(
         typer.echo(f"  {key:>20}: {value:,.4f}")
 
 
+@app.command("scoreboard")
+def scoreboard_cmd(
+    signal: Annotated[
+        list[str] | None, typer.Option(help="Only these signals (by name); repeatable.")
+    ] = None,
+) -> None:
+    """Score each signal's monthly rankings against the returns that followed."""
+    only = tuple((n, p) for n, p in tasks.SCOREBOARD_SIGNALS if not signal or n in signal)
+    if not only:
+        raise typer.BadParameter(f"no scoreboard signal named {signal}")
+    result = tasks.scoreboard_task(get_settings(), only)
+    for row in result["summary"]:
+        typer.echo(
+            f"{row['pool']:>6}  {row['signal']:<36} IC {row['mean_ic']:+.3f} "
+            f"(t {row['ic_t']:+.1f}, hit {row['hit']:.0%})  spread {row['spread']:+.1%}"
+        )
+
+
 @app.command("serve")
 def serve_cmd(
     host: Annotated[str, typer.Option(help="Interface to bind.")] = "127.0.0.1",

@@ -25,6 +25,8 @@ from portfolio_lab.data.ingest.universe import current_symbols, ingest_universe
 from portfolio_lab.data.sources.alpaca import make_client
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.piotroski import build_fscores, fscores_by_symbol
+from portfolio_lab.research.scoreboard import evaluate, summarize
+from portfolio_lab.signals import base as signals
 from portfolio_lab.strategies.base import create
 
 log = logging.getLogger(__name__)
@@ -45,6 +47,16 @@ SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("piotroski", {}),
     ("piotroski", {"pool": 100}),
     ("meanvar", {"min_fscore": 7}),
+)
+#: Signals the weekly scoreboard evaluates: mean-variance's forecasts and classic anomalies.
+SCOREBOARD_SIGNALS: tuple[tuple[str, dict[str, Any]], ...] = (
+    ("forecast", {"model": "ar1_logret"}),
+    ("forecast", {"model": "arima320_price"}),
+    ("forecast", {"model": "historical_mean"}),
+    ("momentum", {}),
+    ("reversal", {}),
+    ("low_vol", {}),
+    ("fscore", {}),
 )
 #: Worker processes for model fits: orange's four fast A76 cores (more workers land on the
 #: slow A55 cores and measured slower).
@@ -141,6 +153,15 @@ def verify_task(settings: Settings, sample: int = 50) -> dict:
         return verify_prices(settings, client, DataPaths(settings.data_dir).prices_daily, sample)
 
 
+def _attach_runtime(obj: Any, settings: Settings) -> Any:
+    """Give model-fitting strategies and signals their cache and worker processes."""
+    if hasattr(obj, "cache_dir"):
+        obj.cache_dir = DataPaths(settings.data_dir).forecast_cache
+    if hasattr(obj, "workers"):
+        obj.workers = FORECAST_WORKERS
+    return obj
+
+
 def backtest_task(
     settings: Settings,
     strategy: str,
@@ -156,12 +177,7 @@ def backtest_task(
     Returns:
         The run id and its metrics.
     """
-    strat = create(strategy, **(params or {}))
-    # Runtime resources for strategies that fit models (not strategy parameters).
-    if hasattr(strat, "cache_dir"):
-        strat.cache_dir = DataPaths(settings.data_dir).forecast_cache
-    if hasattr(strat, "workers"):
-        strat.workers = FORECAST_WORKERS
+    strat = _attach_runtime(create(strategy, **(params or {})), settings)
     panel = Panel.load(settings.data_dir, end=end)
     config = BacktestConfig(
         start=start,
@@ -185,3 +201,41 @@ def scheduled_backtests_task(settings: Settings) -> dict:
     pruned = prune_runs(settings.data_dir, keep=RUNS_KEPT_PER_CONFIG)
     log.info("pruned %d old runs", len(pruned))
     return {"runs": runs, "pruned": pruned}
+
+
+def signal_label(name: str, params: dict[str, Any]) -> str:
+    """Display name for a signal configuration, e.g. ``forecast (model=ar1_logret)``."""
+    return name + (f" ({', '.join(f'{k}={v}' for k, v in params.items())})" if params else "")
+
+
+def scoreboard_task(
+    settings: Settings, only: tuple[tuple[str, dict[str, Any]], ...] = SCOREBOARD_SIGNALS
+) -> dict:
+    """Score every signal's monthly rankings against the returns that followed.
+
+    Rewrites ``results/scoreboard.parquet``; with ``only`` a subset, other signals' stored
+    rows are kept.
+    """
+    paths = DataPaths(settings.data_dir)
+    panel = Panel.load(settings.data_dir)
+    frames = []
+    for name, params in only:
+        label = signal_label(name, params)
+        signal = _attach_runtime(signals.create(name, **params), settings)
+        try:
+            frames.append(evaluate(signal, label, panel, SCHEDULED_START))
+        finally:
+            if callable(close := getattr(signal, "close", None)):
+                close()
+        log.info("scoreboard: %s scored", label)
+    scores = pl.concat(frames)
+    if paths.scoreboard.exists():
+        kept = pl.read_parquet(paths.scoreboard).filter(
+            ~pl.col("signal").is_in(scores["signal"].unique().to_list())
+        )
+        scores = pl.concat([kept, scores])
+    write_parquet_atomic(scores.sort("signal", "pool", "date"), paths.scoreboard)
+    table = summarize(scores)
+    status = {"signals": table["signal"].n_unique(), "months": int(table["months"].max())}
+    write_status(settings.data_dir, "scoreboard", status)
+    return {"summary": table.to_dicts()}

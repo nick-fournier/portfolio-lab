@@ -23,19 +23,24 @@ import logging
 import multiprocessing
 import os
 import warnings
+from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import polars as pl
 
 from portfolio_lab.core.store import upsert_parquet
+from portfolio_lab.research.dataview import DataView
 
 log = logging.getLogger(__name__)
 
 MODELS = ("arima320_price", "ar1_logret", "historical_mean")
+#: Share of the lookback window a symbol needs data for to be forecast.
+MIN_COVERAGE = 0.95
 TRADING_DAYS = 252
 #: Forecasts are clipped to this annual range, keeping extreme extrapolations from
 #: destabilizing the optimizer (the per-name weight cap limits their influence anyway).
@@ -134,6 +139,20 @@ def forecast_one(prices: np.ndarray, spec: ForecastSpec) -> float:
         except (ValueError, np.linalg.LinAlgError):
             return np.nan
     return float(np.clip(annual, *MU_BOUNDS)) if np.isfinite(annual) else np.nan
+
+
+def price_windows(view: DataView, symbols: Sequence[str], lookback: int) -> pd.DataFrame:
+    """Trailing adjusted prices for the symbols with enough history to forecast.
+
+    Keeps symbols with bars on at least :data:`MIN_COVERAGE` of the window, carries prices
+    over their gaps, and drops dates before every kept symbol has started.
+
+    Returns:
+        A (dates x symbols) price frame, possibly empty.
+    """
+    prices = view.prices(lookback, symbols)
+    prices = prices.loc[:, prices.notna().mean() >= MIN_COVERAGE].ffill().dropna()
+    return prices
 
 
 def _forecast_task(args: tuple[str, np.ndarray, ForecastSpec]) -> tuple[str, float]:

@@ -94,3 +94,14 @@ def comparison_figure(series: list[tuple[str, pl.DataFrame]], benchmark: str) ->
         )
     fig.update_layout(yaxis_type="log")
     return fig.to_json()
+
+
+def cumulative_ic_figure(scores: pl.DataFrame) -> str:
+    """Running sum of monthly rank IC per signal: a steady climb means persistent skill."""
+    fig = go.Figure(layout=_LAYOUT)
+    for (signal,), rows in sorted(scores.sort("date").group_by("signal", maintain_order=True)):
+        fig.add_scatter(
+            x=rows["date"].to_list(), y=rows["ic"].cum_sum().to_list(), name=signal, mode="lines"
+        )
+    fig.add_hline(y=0, line={"color": "#6e7781", "width": 1})
+    return fig.to_json()

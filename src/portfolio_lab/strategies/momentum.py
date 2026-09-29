@@ -1,11 +1,27 @@
 """Cross-sectional momentum: hold the stocks that rose most over the past year."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from portfolio_lab.core.calendar import Frequency
 from portfolio_lab.research.dataview import DataView
 from portfolio_lab.strategies.base import Weights, register
 from portfolio_lab.strategies.construct import top_k_equal
+
+
+def momentum_scores(
+    view: DataView, symbols: Sequence[str], lookback: int = 252, skip: int = 21
+) -> dict[str, float]:
+    """Each symbol's return from ``lookback`` sessions ago to ``skip`` sessions ago.
+
+    Symbols without a price at the start of the window are left out.
+    """
+    # prices(lookback + 1): the first row is the price `lookback` sessions ago.
+    prices = view.prices(lookback + 1, symbols)
+    if len(prices) <= lookback:
+        return {}  # not enough history yet
+    start, end = prices.iloc[0], prices.iloc[-1 - skip]
+    return (end / start - 1).dropna().to_dict()
 
 
 @register("momentum")
@@ -42,10 +58,4 @@ class Momentum:
     def target_weights(self, view: DataView) -> Weights:
         """Equal weights on the ``hold`` stocks with the highest skip-month return."""
         candidates = view.top_liquid(self.pool) if self.pool else view.eligible()
-        # prices(lookback + 1): the first row is the price `lookback` sessions ago.
-        prices = view.prices(self.lookback + 1, candidates)
-        if len(prices) <= self.lookback:
-            return {}  # not enough history yet
-        start, end = prices.iloc[0], prices.iloc[-1 - self.skip]
-        scores = (end / start - 1).dropna()
-        return top_k_equal(scores.to_dict(), self.hold)
+        return top_k_equal(momentum_scores(view, candidates, self.lookback, self.skip), self.hold)

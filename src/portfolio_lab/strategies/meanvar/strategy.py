@@ -8,11 +8,8 @@ import pandas as pd
 from portfolio_lab.core.calendar import Frequency
 from portfolio_lab.research.dataview import DataView
 from portfolio_lab.strategies.base import Weights, register
-from portfolio_lab.strategies.meanvar.forecast import Forecaster, ForecastSpec
+from portfolio_lab.strategies.meanvar.forecast import Forecaster, ForecastSpec, price_windows
 from portfolio_lab.strategies.meanvar.optimize import optimize
-
-#: Share of the lookback window a symbol needs data for to be considered.
-MIN_COVERAGE = 0.95
 
 
 @register("meanvar")
@@ -76,9 +73,7 @@ class MeanVar:
         among = None
         if self.min_fscore is not None:
             among = [s for s, f in view.fscores(view.eligible()).items() if f >= self.min_fscore]
-        prices = view.prices(self.lookback, view.top_liquid(self.top_n, among=among))
-        coverage = prices.notna().mean()
-        prices = prices.loc[:, coverage >= MIN_COVERAGE].ffill().dropna()
+        prices = price_windows(view, view.top_liquid(self.top_n, among=among), self.lookback)
         if prices.shape[1] < 2 or len(prices) < 30:
             return {}
         windows = {s: prices[s].to_numpy() for s in prices.columns}

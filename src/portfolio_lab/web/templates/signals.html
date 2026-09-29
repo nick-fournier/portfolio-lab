@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Signals · Portfolio lab{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js" defer></script>{% endblock %}
+{% block content %}
+<h1>Signal scoreboard</h1>
+<p class="lede">Does a model actually predict returns? At the end of every month each signal ranks
+  the stocks, using only data up to that day, and the ranking is compared with the returns of the
+  next {{ horizon }} trading days. This tests the prediction on its own, before any optimizer, costs or
+  position limits get involved.</p>
+
+{% if pools %}
+<p class="muted">{{ period[0] }} → {{ period[1] }}, monthly. Dead companies are included; a stock
+  that fell to over-the-counter trading takes a −30% delisting return.</p>
+
+{% for pool in pools %}
+<h2>{{ pool.title }}</h2>
+<div class="table-wrap"><table>
+  <thead><tr>
+    <th>Signal</th><th class="num">Mean IC</th><th class="num">t-stat</th><th class="num">IC &gt; 0</th>
+    <th class="num">Top fifth</th><th class="num">Bottom fifth</th>
+  </tr></thead>
+  <tbody>
+  {% for r in pool.rows %}
+    <tr>
+      <td>{{ r.signal }}</td>
+      <td class="num {{ 'pos' if r.ic_t >= 2 else ('neg' if r.ic_t <= -2 else '') }}">{{ "%+.3f" | format(r.mean_ic) }}</td>
+      <td class="num">{{ "%+.1f" | format(r.ic_t) }}</td>
+      <td class="num">{{ r.hit | pct(0) }}</td>
+      <td class="num">{{ r.top | pct }}</td>
+      <td class="num">{{ r.bottom | pct }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+<h3 class="muted">Cumulative IC</h3>
+<div id="ic-{{ pool.key }}" class="chart tall"></div>
+{% endfor %}
+
+<h2>Reading this</h2>
+<ul class="prose">
+  <li><b>Mean IC</b> is the average monthly rank correlation between a signal's scores and the
+    returns that followed. 0 means no skill; 0.02 to 0.05 is typical of signals worth using,
+    because a small edge repeats across many stocks and months.</li>
+  <li><b>t-stat</b> is the mean IC over its standard error. Beyond about ±2 (colored) it is
+    unlikely to be luck.</li>
+  <li><b>Top / bottom fifth</b> are annualized returns of the highest- and lowest-scored fifth
+    of stocks, equally weighted, before costs. IC compares rankings while these compare
+    averages, so they can disagree: a few huge winners among volatile stocks lift the average
+    of a group whose typical member lost.</li>
+  <li>In the cumulative chart, a steady climb means persistent skill; a flat or wandering line
+    means none.</li>
+</ul>
+{% else %}
+<p class="muted">The scoreboard has not run yet (<code>plab scoreboard</code>).</p>
+{% endif %}
+
+{% if pools %}
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    {% for pool in pools %}
+    {
+      const fig = {{ pool.chart | safe }};
+      Plotly.newPlot("ic-{{ pool.key }}", fig.data, fig.layout, window.PLOT_CONFIG);
+    }
+    {% endfor %}
+  });
+</script>
+{% endif %}
+{% endblock %}
