@@ -1,9 +1,12 @@
 """SEC EDGAR: company fundamentals from XBRL filings, and the ticker-to-CIK map.
 
 The bulk ``companyfacts.zip`` (about 1.4 GB, 20k companies, refreshed nightly by the SEC)
-holds every XBRL fact each company has filed. We keep only **annual** facts from 10-K
-filings for the tags the Piotroski F-score needs, each with its ``filed`` date, so
-research code can reconstruct what was known on any past date.
+holds every XBRL fact each company has filed. We keep the facts from 10-K and 10-Q
+filings for the tags in :data:`TAGS` and :data:`DEI_TAGS`, each with its ``filed`` date,
+so research code can reconstruct what was known on any past date. Flows are kept for
+quarters, six- and nine-month year-to-date periods and fiscal years: cash-flow statements
+are reported year-to-date only, so quarters are differences of consecutive year-to-date
+values. The Piotroski F-score uses only the annual facts (:func:`annual`).
 
 The SEC requires a descriptive User-Agent with contact details on every request.
 """
@@ -11,10 +14,12 @@ The SEC requires a descriptive User-Agent with contact details on every request.
 import json
 import logging
 import zipfile
+from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 from typing import Any
 
+import httpx
 import polars as pl
 
 from portfolio_lab.core.http import RateLimitedClient
@@ -22,6 +27,7 @@ from portfolio_lab.core.http import RateLimitedClient
 log = logging.getLogger(__name__)
 
 BULK_URL = "https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip"
+SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 
 #: us-gaap tags extracted, with whether each is a flow over the fiscal year ("duration") or
@@ -48,9 +54,26 @@ TAGS: dict[str, str] = {
     "LongTermDebtNoncurrent": "instant",
     "LongTermDebt": "instant",
     "LongTermDebtAndCapitalLeaseObligations": "instant",
+    # Valuation, cash and payout.
+    "StockholdersEquity": "instant",
+    "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest": "instant",
+    "CommonStockSharesOutstanding": "instant",
+    "CashAndCashEquivalentsAtCarryingValue": "instant",
+    "DebtCurrent": "instant",
+    "LongTermDebtCurrent": "instant",
+    "OperatingIncomeLoss": "duration",
+    "PaymentsToAcquirePropertyPlantAndEquipment": "duration",
+    "PaymentsOfDividends": "duration",
+    "PaymentsOfDividendsCommonStock": "duration",
 }
+#: Cover-page (``dei``) tags: shares outstanding as of a date close to the filing.
+DEI_TAGS: dict[str, str] = {"EntityCommonStockSharesOutstanding": "instant"}
 ANNUAL_FORMS = frozenset({"10-K", "10-K/A"})
-#: A duration fact counts as a fiscal year if it spans this many days.
+FORMS = ANNUAL_FORMS | {"10-Q", "10-Q/A"}
+#: Duration facts kept, by length in days: quarters, six- and nine-month year-to-date, years.
+QUARTER_DAYS = (80, 100)
+HALF_YEAR_DAYS = (170, 195)
+NINE_MONTH_DAYS = (260, 285)
 YEAR_DAYS = (350, 380)
 
 FACT_SCHEMA = {
@@ -61,42 +84,62 @@ FACT_SCHEMA = {
     "filed": pl.Date,
     "accn": pl.String,
     "form": pl.String,
+    "start": pl.Date,
 }
 
 
-def extract_annual_facts(payload: dict[str, Any], cik: int | None = None) -> list[tuple]:
-    """Annual 10-K facts for :data:`TAGS` from one company's ``companyfacts`` JSON.
+def _kept_span(days: int) -> bool:
+    """Whether a duration of ``days`` is a quarter, six or nine months, or a fiscal year."""
+    spans = (QUARTER_DAYS, HALF_YEAR_DAYS, NINE_MONTH_DAYS, YEAR_DAYS)
+    return any(lo <= days <= hi for lo, hi in spans)
+
+
+def extract_facts(payload: dict[str, Any], cik: int | None = None) -> list[tuple]:
+    """10-K and 10-Q facts for :data:`TAGS` and :data:`DEI_TAGS` from one company's JSON.
 
     Args:
         payload: The parsed JSON of one ``CIK##########.json`` member.
         cik: The company's CIK, used when the payload omits it (some files do).
 
     Returns:
-        Rows in :data:`FACT_SCHEMA` order. Duration facts are kept only when they span a
-        fiscal year; values are in USD, or in shares for share counts.
+        Rows in :data:`FACT_SCHEMA` order (``start`` is null for instant facts). Duration
+        facts are kept for quarters, six and nine months, and fiscal years; values are in
+        USD, or in shares for share counts.
     """
     cik = int(payload.get("cik") or cik or 0)
     if not cik:
         return []
-    gaap = payload.get("facts", {}).get("us-gaap", {})
+    facts = payload.get("facts", {})
     rows = []
-    for tag, kind in TAGS.items():
-        units = gaap.get(tag, {}).get("units", {})
-        for fact in units.get("USD", []) + units.get("shares", []):
-            if fact.get("form") not in ANNUAL_FORMS:
-                continue
-            end = date.fromisoformat(fact["end"])
-            if kind == "duration":
-                if "start" not in fact:
+    for namespace, tags in (("us-gaap", TAGS), ("dei", DEI_TAGS)):
+        section = facts.get(namespace, {})
+        for tag, kind in tags.items():
+            units = section.get(tag, {}).get("units", {})
+            for fact in units.get("USD", []) + units.get("shares", []):
+                if fact.get("form") not in FORMS:
                     continue
-                days = (end - date.fromisoformat(fact["start"])).days
-                if not YEAR_DAYS[0] <= days <= YEAR_DAYS[1]:
-                    continue
-            rows.append(
-                (cik, tag, end, float(fact["val"]), date.fromisoformat(fact["filed"]),
-                 fact["accn"], fact["form"])
-            )  # fmt: skip
+                end = date.fromisoformat(fact["end"])
+                start = None
+                if kind == "duration":
+                    if "start" not in fact:
+                        continue
+                    start = date.fromisoformat(fact["start"])
+                    if not _kept_span((end - start).days):
+                        continue
+                rows.append(
+                    (cik, tag, end, float(fact["val"]), date.fromisoformat(fact["filed"]),
+                     fact["accn"], fact["form"], start)
+                )  # fmt: skip
     return rows
+
+
+def annual(facts: pl.DataFrame) -> pl.DataFrame:
+    """The 10-K facts that describe fiscal years: instants and year-long durations."""
+    days = (pl.col("end") - pl.col("start")).dt.total_days()
+    return facts.filter(
+        pl.col("form").is_in(list(ANNUAL_FORMS))
+        & (pl.col("start").is_null() | days.is_between(*YEAR_DAYS))
+    )
 
 
 def extract_members(zip_path: Path, members: list[str]) -> list[tuple]:
@@ -105,7 +148,7 @@ def extract_members(zip_path: Path, members: list[str]) -> list[tuple]:
         return [
             row
             for m in members
-            for row in extract_annual_facts(json.loads(archive.read(m)), cik=int(m[3:13]))
+            for row in extract_facts(json.loads(archive.read(m)), cik=int(m[3:13]))
         ]
 
 
@@ -147,3 +190,33 @@ def fetch_ticker_map(client: RateLimitedClient) -> pl.DataFrame:
             "cik": [int(r["cik_str"]) for r in rows],
         }
     ).unique(subset="symbol", keep="first")
+
+
+PROFILE_SCHEMA = {
+    "cik": pl.Int64,
+    "name": pl.String,
+    "sic": pl.Int64,
+    "sic_description": pl.String,
+    "fiscal_year_end": pl.String,
+}
+
+
+def fetch_profiles(client: RateLimitedClient, ciks: Sequence[int]) -> pl.DataFrame:
+    """Company name, SIC industry code and fiscal year end from EDGAR's submissions API.
+
+    One request per company; companies the SEC has no record for are skipped.
+    """
+    rows = []
+    for cik in ciks:
+        try:
+            d = client.get_json(SUBMISSIONS_URL.format(cik=cik))
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                raise
+            continue
+        sic = d.get("sic")
+        rows.append(
+            (cik, d.get("name"), int(sic) if sic else None, d.get("sicDescription") or None,
+             d.get("fiscalYearEnd") or None)
+        )  # fmt: skip
+    return pl.DataFrame(rows, schema=PROFILE_SCHEMA, orient="row")

@@ -23,6 +23,7 @@ from portfolio_lab.data.ingest.prices import update_prices, verify_prices
 from portfolio_lab.data.ingest.rates import ingest_rates
 from portfolio_lab.data.ingest.universe import current_symbols, ingest_universe
 from portfolio_lab.data.sources.alpaca import make_client
+from portfolio_lab.data.sources.edgar import annual
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.piotroski import build_fscores, fscores_by_symbol
 from portfolio_lab.research.scoreboard import evaluate, summarize
@@ -134,7 +135,7 @@ def fundamentals_task(settings: Settings, force: bool = False) -> dict:
         summary = ingest_fundamentals(settings, client, symbols, force=force)
     facts = pl.read_parquet(paths.fundamentals_facts)
     tickers = pl.read_parquet(paths.fundamentals_tickers)
-    scores = fscores_by_symbol(build_fscores(facts), tickers)
+    scores = fscores_by_symbol(build_fscores(annual(facts)), tickers)
     write_parquet_atomic(scores, paths.fscores)
     status = {
         "filings_scored": scores.height,

@@ -51,8 +51,13 @@ class DataPaths:
 
     @property
     def fundamentals_facts(self) -> Path:
-        """Annual 10-K facts for the universe's companies, with filing dates."""
-        return self.root / "fundamentals" / "facts.parquet"
+        """10-K and 10-Q facts for the universe's companies, with filing dates."""
+        return self.root / "fundamentals" / "company_facts.parquet"
+
+    @property
+    def fundamentals_companies(self) -> Path:
+        """Company profiles from the SEC: name, SIC industry code, fiscal year end."""
+        return self.root / "fundamentals" / "companies.parquet"
 
     @property
     def fundamentals_tickers(self) -> Path:
