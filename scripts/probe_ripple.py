@@ -19,9 +19,18 @@ splashes doesn't count many times. Peer drift is split into quintiles of trade s
 stock's price (small trades for the price suggest retail trading), share price and
 liquidity; q1 is the smallest.
 
+``--reliability`` (on the saved rows, no recomputation) asks how *dependable* each wave is,
+not just how big. The unit is one splash: the average of its peers (a basket you could
+trade) minus the average of its controls. Per wave day and holding period it reports the
+mean, the hit rate (share of splashes where the basket beat its controls), the reliability
+ratio (mean / standard deviation per splash, a per-bet Sharpe ratio), the t-stat across
+days and the share of calendar years with a positive mean, overall and by link strength,
+peer liquidity, splash direction and splash size.
+
 Usage::
 
     uv run python scripts/probe_ripple.py [--threshold 3] [--peers 20]
+    uv run python scripts/probe_ripple.py --reliability
 """
 
 import argparse
@@ -204,6 +213,91 @@ def report(rows: pl.DataFrame) -> None:
         print(line(f"  q{q + 1}", events.filter(pl.col("q_trade_size") == q)))
 
 
+def splash_baskets(rows: pl.DataFrame, cols: list[str]) -> pl.DataFrame:
+    """Per splash and peer group: mean of the peers in the group minus mean of the controls.
+
+    Adds ``link`` (top5 / 6-20 by correlation rank), ``liq`` (low / mid / high liquidity
+    quintiles 1-2 / 3 / 4-5) and ``size`` (splash size tercile) to the peers first.
+    """
+    keys = ["date", "leader"]
+    leaders = rows.filter(pl.col("kind") == "leader").select(
+        *keys, pl.col("day0").abs().qcut(3, labels=["small", "medium", "large"]).alias("size")
+    )
+    peers = rows.filter(pl.col("kind") == "peer").with_columns(
+        pl.when(pl.col("corr").rank("ordinal", descending=True).over(keys) <= 5)
+        .then(pl.lit("top5"))
+        .otherwise(pl.lit("6-20"))
+        .alias("link"),
+        pl.when(pl.col("q_liquidity") <= 1)
+        .then(pl.lit("low"))
+        .when(pl.col("q_liquidity") == 2)
+        .then(pl.lit("mid"))
+        .otherwise(pl.lit("high"))
+        .alias("liq"),
+    )
+    controls = rows.filter(pl.col("kind") == "control").group_by(keys).agg(pl.col(cols).mean())
+    return peers.join(leaders, on=keys), controls
+
+
+def reliability_line(label: str, peers: pl.DataFrame, controls: pl.DataFrame, cols: list[str]):
+    """One report line: per column, mean bp / hit % / reliability ratio / t, plus years."""
+    keys = ["date", "leader"]
+    basket = peers.group_by(keys).agg(pl.col(cols).mean())
+    excess = basket.join(controls, on=keys, suffix="_c").select(
+        *keys, *[(pl.col(c) - pl.col(f"{c}_c")).alias(c) for c in cols]
+    )
+    cells = []
+    for c in cols:
+        x = excess[c].to_numpy()
+        per_day = excess.group_by("date").agg(pl.col(c).mean())[c].to_numpy()
+        t = per_day.mean() / per_day.std(ddof=1) * np.sqrt(len(per_day))
+        cells.append(
+            f"{x.mean() * 1e4:+6.1f} {np.mean(x > 0):4.0%} {x.mean() / x.std():+.2f} {t:+5.1f}"
+        )
+    years = excess.group_by(pl.col("date").dt.year()).agg(pl.col(cols[-1]).mean())[cols[-1]]
+    return (
+        f"{label:<26}{excess.height:>6} " + " | ".join(cells)
+        + f" | {int((years > 0).sum())}/{len(years)}"
+    )  # fmt: skip
+
+
+def reliability(rows: pl.DataFrame) -> None:
+    """Print how big and how dependable each wave is (see module docs)."""
+    waves = [f"w{h}" for h in range(1, HORIZON + 1)]
+    rows = rows.with_columns(
+        pl.col("d1").alias("w1"),
+        *[(pl.col(f"d{h}") - pl.col(f"d{h - 1}")).alias(f"w{h}") for h in range(2, HORIZON + 1)],
+    )
+    cell = "  mean  hit  ratio     t"
+    print("\nPer splash: peer basket minus control basket. Each cell: mean bp, hit rate,")
+    print("reliability ratio (mean/sd per splash), t across days. Last column: years positive.")
+
+    peers, controls = splash_baskets(rows, [*waves, "d1", "d2", "d3", "d5", "d10"])
+    print("\nWaves: return on each single day after the splash (all peers)")
+    for chunk in (waves[:5], waves[5:]):
+        print(f"{'':<26}{'n':>6} " + " | ".join(f"{c:^{len(cell)}}" for c in chunk) + " | yrs+")
+        print(reliability_line("all peers", peers, controls, chunk))
+
+    holds = ["d1", "d2", "d3", "d5"]
+    print("\nHolding from the splash-day close through day h")
+    print(f"{'':<26}{'n':>6} " + " | ".join(f"{c:^{len(cell)}}" for c in holds) + " | yrs+")
+    print(reliability_line("all peers", peers, controls, holds))
+    for name, col, values in (
+        ("link", "link", ["top5", "6-20"]),
+        ("liquidity", "liq", ["low", "mid", "high"]),
+        ("splash size", "size", ["small", "medium", "large"]),
+    ):
+        for v in values:
+            print(reliability_line(f"{name}: {v}", peers.filter(pl.col(col) == v), controls, holds))
+    for up, direction in ((True, "up"), (False, "down")):
+        subset = peers.filter(pl.col("up") == up)
+        print(reliability_line(f"{direction} splashes", subset, controls, holds))
+        for liq in ("low", "high"):
+            for link in ("top5", "6-20"):
+                cell_peers = subset.filter((pl.col("liq") == liq) & (pl.col("link") == link))
+                print(reliability_line(f"  {liq} liq, {link}", cell_peers, controls, holds))
+
+
 def main() -> None:
     """Find splashes, measure the ripples, save the rows and print the report."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -212,10 +306,17 @@ def main() -> None:
     parser.add_argument("--peers", type=int, default=20)
     parser.add_argument("--window", type=int, default=120)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--reliability", action="store_true", help="report on the saved rows, don't recompute"
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     settings = get_settings()
+    saved = settings.data_dir / "results" / "probes" / "ripple.parquet"
+    if args.reliability:
+        reliability(pl.read_parquet(saved))
+        return
     panel = Panel.load(settings.data_dir)
     volume, trades = trade_fields(panel, settings.data_dir)
     ret = panel.field("ret_cc")
@@ -238,7 +339,7 @@ def main() -> None:
         rows += probe_day(ctx, t, args, rng)
     log.info("%d rows in %.0fs", len(rows), time.time() - t0)
     frame = pl.DataFrame(rows, infer_schema_length=None)
-    write_parquet_atomic(frame, settings.data_dir / "results" / "probes" / "ripple.parquet")
+    write_parquet_atomic(frame, saved)
     report(frame)
 
 
