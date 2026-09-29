@@ -56,7 +56,7 @@ class BacktestConfig:
         costs: Trading cost model.
         max_weight: Largest weight allowed in any single name.
         benchmark: Symbol whose returns are reported alongside the strategy.
-        max_missing_days: Consecutive missing bars before a held name is liquidated.
+        max_missing_days: Consecutive sessions without a trade before a held name is sold.
         delisting_return: Return applied when liquidating a name that fell to OTC and has
             no later bars (it kept trading OTC, usually far lower; Shumway, 1997, finds
             about -30%). Use -1.0 for a total loss or 0.0 to exit at the last price.
@@ -198,13 +198,18 @@ class _Portfolio:
         self.cash = nav_after * (1 - target.sum())
         return turnover, cost
 
-    def intraday(self, ret_cc: np.ndarray, ret_co: np.ndarray, rf_daily: float) -> None:
-        """Apply open-to-close returns and the day's risk-free rate on cash."""
+    def intraday(
+        self, ret_cc: np.ndarray, ret_co: np.ndarray, rf_daily: float, traded: np.ndarray
+    ) -> None:
+        """Apply open-to-close returns and the day's risk-free rate on cash.
+
+        Held names that did not trade (no bar, or a zero-volume one) count a missing day.
+        """
         co = np.where(np.isfinite(ret_co), ret_co, 0.0)
         oc = np.where(np.isfinite(ret_cc), (1 + np.nan_to_num(ret_cc)) / (1 + co) - 1, 0.0)
         self.holdings = self.holdings * (1 + oc)
         self.cash *= 1 + rf_daily
-        self.missing = np.where((self.holdings > 0) & ~np.isfinite(ret_cc), self.missing + 1, 0)
+        self.missing = np.where((self.holdings > 0) & ~traded, self.missing + 1, 0)
 
     def liquidate_stale(self, max_missing_days: int, exit_ret: np.ndarray) -> np.ndarray:
         """Move names missing bars for ``max_missing_days`` sessions to cash; return them.
@@ -242,7 +247,7 @@ def _simulate(
             if pending is not None:
                 turnover, cost = book.trade(pending, adv[i - 1])
                 pending = None
-            book.intraday(ret_cc[i], ret_co[i], panel.rf_daily[i])
+            book.intraday(ret_cc[i], ret_co[i], panel.rf_daily[i], panel.traded[i])
             delisted = panel.fell_to_otc & (i > panel.last_bar)
             exit_ret = np.where(delisted, config.delisting_return, 0.0)
             stale = book.liquidate_stale(config.max_missing_days, exit_ret)

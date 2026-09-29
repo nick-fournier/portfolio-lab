@@ -36,7 +36,9 @@ def _poisoned(panel: Panel, after: int, seed: int = 1) -> Panel:
             pl.lit(asof).alias("filed"), pl.lit(9, dtype=dtype).alias("fscore")
         )
         fundamentals = pl.concat([fundamentals.filter(pl.col("filed") < asof), future, extra])
-    return Panel(panel.dates, panel.symbols, fields, eligible, rf, panel.universe, fundamentals)
+    return Panel(
+        panel.dates, panel.symbols, fields, eligible, rf, panel.universe, fundamentals=fundamentals
+    )
 
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))

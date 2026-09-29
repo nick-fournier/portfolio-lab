@@ -64,9 +64,12 @@ class Panel:
             filed, fscore, n_signals), from ``research.piotroski``.
         fell_to_otc: Dead stocks whose final venue was OTC (fell off their exchange),
             which the backtest exits with a delisting return rather than the last price.
+        traded: Boolean array, same shape: the bar had volume. Halted and dead stocks
+            often keep printing zero-volume bars at a frozen price, which are not trades.
+            Defaults to "has a close".
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 - optional extras are keyword-only
         self,
         dates: list[date],
         symbols: list[str],
@@ -74,8 +77,10 @@ class Panel:
         eligible: np.ndarray,
         rf_daily: np.ndarray,
         universe: Iterable[str] = (),
+        *,
         fundamentals: pl.DataFrame | None = None,
         fell_to_otc: Iterable[str] = (),
+        traded: np.ndarray | None = None,
     ):
         self.dates = list(dates)
         self.universe = frozenset(universe)
@@ -89,15 +94,18 @@ class Panel:
         self.rf_daily = rf_daily
         otc = set(fell_to_otc)
         self.fell_to_otc = np.array([sym in otc for sym in self.symbols], dtype=bool)
-        # Row of each symbol's last price (-1 if none): later rows mean it never trades again.
-        has_price = np.isfinite(self.fields["close"])
+        self.traded = np.isfinite(self.fields["close"]) if traded is None else traded
+        # Row of each symbol's last trade (-1 if none): later rows mean it never trades again.
         self.last_bar = np.where(
-            has_price.any(axis=0), len(self.dates) - 1 - np.argmax(has_price[::-1], axis=0), -1
+            self.traded.any(axis=0),
+            len(self.dates) - 1 - np.argmax(self.traded[::-1], axis=0),
+            -1,
         )
         for array in (
             *self.fields.values(),
             self.eligible,
             self.rf_daily,
+            self.traded,
             self.fell_to_otc,
             self.last_bar,
         ):
@@ -141,6 +149,7 @@ class Panel:
         prices = prices.with_columns(
             (
                 pl.col("symbol").is_in(list(universe))
+                & (pl.col("volume") > 0)
                 & (pl.col("close") > rules.min_price)
                 & (pl.col("adv") > rules.min_dollar_volume)
                 & (pl.col("bars_seen") >= rules.min_history)
@@ -166,8 +175,12 @@ class Panel:
             fields[name] = array
         eligible = np.zeros(shape, dtype=bool)
         eligible[rows, cols] = prices["eligible"].to_numpy()
+        traded = np.zeros(shape, dtype=bool)
+        traded[rows, cols] = (prices["volume"] > 0).fill_null(False).to_numpy()
         rf = _daily_rates(dates, rates)
-        return cls(dates, symbols, fields, eligible, rf, universe, fell_to_otc=fell_to_otc)
+        return cls(
+            dates, symbols, fields, eligible, rf, universe, fell_to_otc=fell_to_otc, traded=traded
+        )
 
     @classmethod
     def load(
