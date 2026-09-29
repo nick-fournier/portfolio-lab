@@ -31,6 +31,7 @@ from portfolio_lab.backtest.results import RunResult
 from portfolio_lab.core.calendar import rebalance_dates
 from portfolio_lab.research.dataview import DataView
 from portfolio_lab.research.panel import Panel
+from portfolio_lab.strategies import explain
 from portfolio_lab.strategies.base import Strategy, Weights
 
 log = logging.getLogger(__name__)
@@ -271,6 +272,42 @@ def _simulate(
     return daily, weight_rows, (liquidations, delistings)
 
 
+#: Holdings shown in a run's worked example.
+EXAMPLE_ROWS = 5
+
+
+def _explanation(strategy: Strategy, config: BacktestConfig) -> dict[str, str]:
+    """The run's plain-language explanation (``strategies.explain``), with execution."""
+    if callable(getattr(strategy, "explain", None)):
+        text = dict(strategy.explain())
+    else:  # e.g. an ad-hoc Composed strategy: fall back to its description
+        text = {"summary": describe(strategy, summary_only=True), "signal": describe(strategy)}
+    text["execution"] = explain.execution(
+        strategy.schedule, config.costs.half_spread_bps, config.costs.notional,
+        config.max_missing_days, config.delisting_return,
+    )  # fmt: skip
+    return text
+
+
+def _example(strategy: Strategy, weights: pl.DataFrame) -> dict | None:
+    """The latest rebalance's largest holdings with the signal values behind them."""
+    if weights.is_empty():
+        return None
+    latest = weights.filter(pl.col("date") == weights["date"].max())
+    top = latest.sort("weight", "symbol", descending=[True, False]).head(EXAMPLE_ROWS)
+    signals = getattr(strategy, "last_signals", None) or {}
+    columns = dict(getattr(strategy, "example_columns", {}))
+    return {
+        "date": latest["date"][0],
+        "holdings": latest.height,
+        "columns": columns,
+        "rows": [
+            {"symbol": s, "weight": w, **{c: signals.get(s, {}).get(c) for c in columns}}
+            for s, w in top.select("symbol", "weight").iter_rows()
+        ],
+    }
+
+
 def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
     """Simulate ``strategy`` over ``panel`` and return the run's results.
 
@@ -307,11 +344,14 @@ def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
         daily_df["turnover"].to_numpy(),
         daily_df["holdings"].to_numpy(),
     )
+    explanation = _explanation(strategy, config)
     metrics["forced_liquidations"] = float(liquidations)
     metrics["otc_delistings"] = float(delistings)
     meta = {
         "strategy": strategy.name,
-        "summary": describe(strategy, summary_only=True),
+        "summary": explanation["summary"],
+        "explain": explanation,
+        "example": _example(strategy, weights_df),
         "description": describe(strategy),
         "label": label(strategy),
         "params": _params(strategy),

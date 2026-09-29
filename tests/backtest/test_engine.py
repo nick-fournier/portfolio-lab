@@ -9,6 +9,7 @@ from portfolio_lab.backtest.engine import BacktestConfig, run, validate_weights
 from portfolio_lab.core.calendar import sessions
 from portfolio_lab.research.dataview import DataView
 from portfolio_lab.research.panel import Panel
+from portfolio_lab.strategies.base import create
 
 DAYS = sessions(date(2024, 1, 2), date(2024, 1, 8))  # 5 sessions
 FLAT_COST = CostModel(half_spread_bps=10, impact_buckets=((float("inf"), 0.0),))
@@ -171,3 +172,25 @@ def test_validate_weights_allows_benchmark_and_cash():
     panel = _panel(zeros, zeros)
     vector = validate_weights({"SPY": 0.3, "A": 0.2}, DataView(panel, 1), panel, max_weight=1.0)
     assert vector.tolist() == [0.2, 0.0, 0.3]
+
+
+def test_run_metadata_explains_the_run_with_a_worked_example():
+    zeros = [[0, 0, 0]] * len(DAYS)
+    panel = _panel(zeros, zeros)
+    strategy = create("momentum", pool=None, hold=2, lookback=2, skip=0)
+    strategy.schedule = "D"
+    result = run(strategy, panel, BacktestConfig(DAYS[0], DAYS[-1], costs=FLAT_COST))
+    ex = result.meta["explain"]
+    assert ex["summary"] == result.meta["summary"]
+    assert "10 bps" in ex["execution"] and "every trading day" in ex["execution"]
+    example = result.meta["example"]
+    assert example["date"] == DAYS[-2]  # the last decision (the final session only closes)
+    assert [r["symbol"] for r in example["rows"]] == ["A", "B"]
+    assert set(example["columns"]) == {"Return, 12 months ago → 1 month ago"}
+
+
+def test_run_without_explain_falls_back_to_the_description():
+    zeros = [[0, 0, 0]] * len(DAYS)
+    result = run(Fixed({"A": 0.5}), _panel(zeros, zeros), BacktestConfig(DAYS[0], DAYS[-1]))
+    assert set(result.meta["explain"]) == {"summary", "signal", "execution"}
+    assert result.meta["example"]["rows"] == [{"symbol": "A", "weight": 0.5}]

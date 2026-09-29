@@ -7,6 +7,7 @@ from portfolio_lab.research.dataview import DataView
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.strategies.base import REGISTRY, Composed, create
 from portfolio_lab.strategies.construct import equal_weight, top_k_equal
+from portfolio_lab.strategies.explain import KEYS
 
 ASOF = 300  # long enough for 12-month lookbacks (panels below have 400 sessions)
 
@@ -108,3 +109,18 @@ def test_meanvar_fscore_filter_limits_candidates(make_panel):
         "meanvar", model="historical_mean", min_fscore=8, max_weight=0.5
     ).target_weights(view)
     assert weights and set(weights) <= {f"S{i:02d}" for i in range(0, 12, 2)}  # the 9-scorers
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_strategy_explains_itself(name, make_panel):
+    """Run pages need plain-language text for every step, and example values for holdings."""
+    strategy = create(name)
+    text = strategy.explain()
+    assert set(text) == set(KEYS)
+    assert all(isinstance(v, str) and len(v) > 10 for v in text.values()), text
+    columns = getattr(strategy, "example_columns", {})
+    if columns:
+        panel = make_panel(symbols=[f"S{i:02d}" for i in range(12)], days=400)
+        weights = strategy.target_weights(DataView(panel, ASOF))
+        assert set(strategy.last_signals) == {s for s, w in weights.items() if w > 0}
+        assert all(set(v) == set(columns) for v in strategy.last_signals.values())

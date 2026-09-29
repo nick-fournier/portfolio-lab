@@ -148,3 +148,29 @@ def test_overview_drops_benchmark_line_duplicated_by_buy_hold(client):
     page = client.get("/").text
     assert "buy_hold (SPY)" in page
     assert "SPY (benchmark)" not in page  # buy_hold already is the SPY line
+
+
+def test_run_page_explains_the_run(tmp_path):
+    days = [date(2024, 1, 2), date(2024, 1, 3)]
+    result = _run("momentum", days)
+    result.meta["explain"] = {
+        "summary": "Equal-weights last year's winners.",
+        "candidates": "The 100 most liquid stocks.",
+        "signal": "Return from 12 months ago to 1 month ago.",
+        "construction": "Top 20, equal weights.",
+        "execution": "Rebalances monthly.",
+        "drivers": "Whether winners keep winning.",
+        "related": "Same candidates as meanvar.",
+    }
+    result.meta["example"] = {
+        "date": days[0],
+        "holdings": 20,
+        "columns": {"Return": "pct"},
+        "rows": [{"symbol": "AAA", "weight": 0.05, "Return": 1.5}],
+    }
+    run_id = save_run(result, tmp_path)
+    page = TestClient(create_app(tmp_path)).get(f"/runs/{run_id}").text
+    for expected in ("How this run works", "Portfolio construction", "Worked example",
+                     "largest 1 shown", "150.0%", "Compared with related strategies"):  # fmt: skip
+        assert expected in page, expected
+    assert "Equal-weights last year" in TestClient(create_app(tmp_path)).get("/").text
