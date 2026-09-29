@@ -25,3 +25,16 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .badge.stale, .badge.missing { color: var(--bad); border-color: var(--bad); }
 .chart { width: 100%; min-height: 320px; }
 select { font: inherit; padding: 0.2rem 0.4rem; }
+.lede { font-size: 1.05rem; max-width: 75ch; line-height: 1.5; }
+.filters { display: flex; gap: 1.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
+.strategies { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
+.strategy { border: 1px solid var(--line); border-radius: 8px; padding: 0.9rem 1rem; }
+.strategy h3 { margin: 0 0 0.3rem; font-size: 1.05rem; }
+.strategy p { margin: 0.3rem 0 0.6rem; line-height: 1.45; }
+.strategy .stats { display: flex; gap: 1.2rem; font-variant-numeric: tabular-nums; }
+.strategy .stats div { display: flex; flex-direction: column; }
+.strategy .links { margin-top: 0.6rem; display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font-size: 0.9rem; }
+.strategy .links > * { white-space: nowrap; }
+.prose { max-width: 75ch; line-height: 1.55; }
+.prose h2 { margin-top: 1.75rem; }
+.prose li { margin-bottom: 0.35rem; }

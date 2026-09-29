@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}About · Portfolio lab{% endblock %}
+{% block content %}
+<div class="prose">
+<h1>How it works</h1>
+<p class="lede">A personal research lab for stock portfolio strategies. It started as a crude
+  "value investing" optimizer (Piotroski F-score filter + efficient frontier); this version rebuilds
+  it on a foundation that can say whether any strategy actually works.</p>
+
+<h2>1. Universe</h2>
+<p>Every common stock and ADR listed on NASDAQ, NYSE and NYSE American, from NASDAQ's official
+  symbol directory, refreshed daily. ETFs, funds, warrants, units, rights, preferred shares and
+  notes are excluded. On any given day a stock is only eligible to hold if, using data up to that
+  day, it closed above $5, traded a median of over $1M a day for the past 60 days, and has at
+  least a year of history.</p>
+
+<h2>2. Prices</h2>
+<p>Daily bars since 2016 from Alpaca's market data (the full consolidated tape), updated every
+  trading evening after 8pm Eastern. Each day stores the prices that actually traded, plus
+  returns adjusted for splits and dividends, so a stock's history never changes when it later
+  splits.</p>
+
+<h2>3. Backtests</h2>
+<ul>
+  <li><b>Walk forward, no peeking.</b> At each rebalance a strategy sees data only up to that
+    day's close. A test re-runs every strategy with all future data scrambled and requires its
+    decisions to be identical.</li>
+  <li><b>Realistic execution.</b> Trades happen at the next day's open. Costs are charged for
+    crossing the spread plus market impact that grows with trade size relative to a stock's
+    volume (at a $100k portfolio). Uninvested cash earns the 3-month Treasury bill rate.</li>
+  <li><b>Honest comparisons.</b> Every strategy is scored against buy-and-hold SPY and an
+    equal-weight portfolio of all eligible stocks: return, volatility, Sharpe ratio, drawdown,
+    and alpha, beta and information ratio versus SPY.</li>
+</ul>
+
+<h2>4. Strategies</h2>
+<ul>
+  <li><b>Live:</b> the two baselines, buy-and-hold SPY and equal weight.</li>
+  <li><b>Next:</b> mean-variance optimization (return forecasts fed into the efficient frontier,
+    the original optimizer's idea done properly), then a Piotroski F-score value filter computed
+    from SEC filings as of the date each filing was public.</li>
+</ul>
+
+<h2>Roadmap</h2>
+<ol>
+  <li><b>Foundation</b> (this site): data, backtests, baselines, and the original optimizer rebuilt.</li>
+  <li><b>Forecasting:</b> attention-based sequence models using market-wide inputs, judged against
+    the same baselines.</li>
+  <li><b>Lead-lag network:</b> do some stocks consistently react later than others to market
+    leaders? Scan every pair for delayed reactions and test whether they persist out of sample.</li>
+</ol>
+
+<h2>Caveats</h2>
+<ul>
+  <li><b>Survivorship bias:</b> free data covers stocks listed today, so companies that went
+    bankrupt or were delisted are missing. That flatters results, especially for small caps.</li>
+  <li>Trading costs are a model, not real fills.</li>
+  <li>This is research, not investment advice.</li>
+</ul>
+
+<h2>Built with</h2>
+<p>Python with polars, DuckDB, statsmodels and PyPortfolioOpt; FastAPI, HTMX and Plotly for this
+  site. It runs on an Orange Pi 5 at home. Source:
+  <a href="https://github.com/nick-fournier/portfolio-lab">github.com/nick-fournier/portfolio-lab</a>.</p>
+</div>
+{% endblock %}

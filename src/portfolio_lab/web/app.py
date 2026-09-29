@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from portfolio_lab.web.routes import runs, status
+from portfolio_lab.web.routes import overview, runs, status
 
 HERE = Path(__file__).parent
 PLOTLY_JS = Path(plotly.__file__).parent / "package_data" / "plotly.min.js"
@@ -55,6 +55,7 @@ def create_app(data_dir: Path) -> FastAPI:
             headers={"Cache-Control": "public, max-age=86400"},
         )
 
+    app.include_router(overview.router)
     app.include_router(runs.router)
     app.include_router(status.router)
     return app

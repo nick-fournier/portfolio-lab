@@ -16,17 +16,20 @@ _RUN_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
 HOLDINGS_SHOWN = 25
 
 
-@router.get("/", response_class=HTMLResponse)
-def index(request: Request, strategy: str | None = None) -> HTMLResponse:
-    """List complete runs, newest first; HTMX requests get only the table."""
-    runs = list_runs(request.app.state.data_dir)
+@router.get("/runs", response_class=HTMLResponse)
+def runs_list(request: Request, strategy: str | None = None, history: bool = False) -> HTMLResponse:
+    """List runs, newest first: the latest per configuration, or every run with ``history``.
+
+    HTMX requests (the filter controls) get only the table.
+    """
+    runs = list_runs(request.app.state.data_dir, latest_only=not history)
     strategies = sorted({r["meta"]["strategy"] for r in runs})
     shown = [r for r in runs if not strategy or r["meta"]["strategy"] == strategy]
     template = "_runs_table.html" if request.headers.get("HX-Request") else "runs.html"
     return request.app.state.templates.TemplateResponse(
         request,
         template,
-        {"runs": shown, "strategies": strategies, "selected": strategy},
+        {"runs": shown, "strategies": strategies, "selected": strategy, "history": history},
     )
 
 

@@ -1,10 +1,21 @@
+from datetime import UTC, datetime, timedelta
+
 import numpy as np
 import polars as pl
 import pytest
 
+from portfolio_lab.backtest import results
 from portfolio_lab.backtest.costs import CostModel
 from portfolio_lab.backtest.metrics import compute
-from portfolio_lab.backtest.results import RunResult, list_runs, load_run, runs_dir, save_run
+from portfolio_lab.backtest.results import (
+    RunResult,
+    config_id,
+    list_runs,
+    load_run,
+    prune_runs,
+    runs_dir,
+    save_run,
+)
 
 
 def test_metrics_constant_return():
@@ -60,3 +71,43 @@ def test_save_list_load_roundtrip(tmp_path):
     assert loaded.daily.equals(_result().daily)
     with pytest.raises(FileNotFoundError):
         load_run(tmp_path, "incomplete")
+
+
+def test_config_id_ignores_when_and_how_a_run_happened():
+    base = {"strategy": "fixed", "params": {"k": 1}, "start": "2020-01-02"}
+    assert config_id(base) == config_id({**base, "git_sha": "abc", "end": "2024-01-01"})
+    assert config_id(base) != config_id({**base, "params": {"k": 2}})
+    assert config_id({**base, "costs": {"notional": 100000}}) == config_id(
+        {**base, "costs": {"notional": 100000.0}}
+    )
+
+
+def test_latest_only_and_prune(tmp_path, monkeypatch):
+
+    t0 = datetime(2024, 1, 1, tzinfo=UTC)
+    for i in range(5):
+        monkeypatch.setattr(
+            results,
+            "datetime",
+            type("T", (), {"now": staticmethod(lambda tz=None, i=i: t0 + timedelta(minutes=i))}),
+        )
+        save_run(_result(), tmp_path)
+    other = _result()
+    other.meta = {**other.meta, "params": {"k": 2}}
+    save_run(other, tmp_path)
+
+    assert len(list_runs(tmp_path)) == 6
+    assert len(list_runs(tmp_path, latest_only=True)) == 2
+    deleted = prune_runs(tmp_path, keep=3)
+    assert len(deleted) == 2
+    remaining = [
+        r["meta"]["created_at"] for r in list_runs(tmp_path) if r["meta"]["params"] == {"k": 1}
+    ]
+    assert remaining == sorted(remaining, reverse=True) and len(remaining) == 3
+    assert remaining[-1].startswith("2024-01-01T00:02")  # the two oldest were pruned
+
+
+def test_same_second_saves_do_not_overwrite(tmp_path):
+    first, second = save_run(_result(), tmp_path), save_run(_result(), tmp_path)
+    assert first != second
+    assert len(list_runs(tmp_path)) == 2

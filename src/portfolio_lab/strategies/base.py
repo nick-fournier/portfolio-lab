@@ -39,12 +39,14 @@ class Composed:
         schedule: Rebalance frequency.
         signal: Maps a view to ``{symbol: score}`` (e.g. expected returns).
         construct: Maps scores and the view to weights.
+        description: One paragraph shown on the dashboard.
     """
 
     name: str
     schedule: Frequency
     signal: Callable[[DataView], dict[str, float]]
     construct: Callable[[dict[str, float], DataView], Weights]
+    description: str = ""
 
     def target_weights(self, view: DataView) -> Weights:
         """Score the universe, then turn the scores into weights."""

@@ -15,6 +15,7 @@ Between rebalances weights drift with returns. A held name with no bar earns zer
 delistings).
 """
 
+import inspect
 import logging
 import os
 import subprocess
@@ -97,8 +98,30 @@ def validate_weights(
 def _params(strategy: Strategy) -> dict:
     """Strategy parameters for the run's metadata."""
     if is_dataclass(strategy):
-        return {k: v for k, v in asdict(strategy).items() if k not in ("name", "schedule")}
+        skip = ("name", "schedule", "description", "signal", "construct")
+        return {k: v for k, v in asdict(strategy).items() if k not in skip}
     return {}
+
+
+_DOC_SECTIONS = ("Args:", "Returns:", "Raises:", "Attributes:", "Example")
+
+
+def describe(strategy: Strategy) -> str:
+    """Plain-text description for the dashboard.
+
+    Uses a ``description`` attribute if set, else the class docstring's summary line and
+    extended description (everything before its ``Args:``-style sections).
+    """
+    cls = type(strategy)
+    doc = getattr(strategy, "description", None) or inspect.getdoc(cls) or ""
+    if is_dataclass(cls) and doc.startswith(f"{cls.__name__}("):
+        doc = ""  # the signature dataclasses generate when there is no docstring
+    prose = []
+    for paragraph in doc.split("\n\n"):
+        if paragraph.lstrip().startswith(_DOC_SECTIONS):
+            break
+        prose.append(" ".join(paragraph.split()))
+    return " ".join(prose).replace("``", "")
 
 
 def _git_sha() -> str | None:
@@ -240,6 +263,7 @@ def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
     metrics["forced_liquidations"] = float(liquidations)
     meta = {
         "strategy": strategy.name,
+        "description": describe(strategy),
         "params": _params(strategy),
         "schedule": strategy.schedule,
         "start": panel.dates[first],

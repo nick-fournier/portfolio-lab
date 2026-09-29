@@ -1,13 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Backtest runs</h1>
-<p>
+<form class="filters" hx-get="/runs" hx-target="#runs" hx-push-url="true" hx-trigger="change">
   <label>Strategy
-    <select name="strategy" hx-get="/" hx-target="#runs" hx-push-url="true">
+    <select name="strategy">
       <option value="">All</option>
       {% for s in strategies %}<option value="{{ s }}" {% if s == selected %}selected{% endif %}>{{ s }}</option>{% endfor %}
     </select>
   </label>
-</p>
+  <label><input type="checkbox" name="history" value="true" {% if history %}checked{% endif %}> Show older runs of the same configuration</label>
+</form>
 <div id="runs">{% include "_runs_table.html" %}</div>
 {% endblock %}

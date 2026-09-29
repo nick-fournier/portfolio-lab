@@ -10,7 +10,7 @@ from typing import Any
 
 from portfolio_lab.backtest.costs import CostModel
 from portfolio_lab.backtest.engine import BacktestConfig, run
-from portfolio_lab.backtest.results import save_run
+from portfolio_lab.backtest.results import prune_runs, save_run
 from portfolio_lab.core.config import Settings
 from portfolio_lab.core.http import RateLimitedClient
 from portfolio_lab.core.paths import DataPaths
@@ -30,6 +30,8 @@ SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
 )
 #: Start date for scheduled backtests (one year after data starts, for lookbacks).
 SCHEDULED_START = date(2017, 1, 3)
+#: Runs kept per configuration; older ones are deleted after each scheduled refresh.
+RUNS_KEPT_PER_CONFIG = 3
 
 
 def public_client(settings: Settings) -> RateLimitedClient:
@@ -117,8 +119,11 @@ def backtest_task(
 
 
 def scheduled_backtests_task(settings: Settings) -> dict:
-    """Re-run the baseline backtests through the latest data."""
-    return {
+    """Re-run the baseline backtests through the latest data, then prune old runs."""
+    runs = {
         name: backtest_task(settings, name, SCHEDULED_START, params=params)[0]
         for name, params in SCHEDULED_BACKTESTS
     }
+    pruned = prune_runs(settings.data_dir, keep=RUNS_KEPT_PER_CONFIG)
+    log.info("pruned %d old runs", len(pruned))
+    return {"runs": runs, "pruned": pruned}
