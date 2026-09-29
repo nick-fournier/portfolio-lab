@@ -85,6 +85,12 @@ def ingest_fundamentals_cmd(
     tasks.fundamentals_task(get_settings(), force)
 
 
+@ingest_app.command("macro")
+def ingest_macro_cmd() -> None:
+    """Refresh the FRED market and economic context series (needs FRED_API_KEY)."""
+    typer.echo(tasks.macro_task(get_settings()))
+
+
 @ingest_app.command("delisted")
 def ingest_delisted_cmd() -> None:
     """Add stocks delisted since 2016 (Tiingo list) and backfill their prices."""
@@ -167,6 +173,12 @@ def scoreboard_cmd(
             f"{row['pool']:>6}  {row['signal']:<36} IC {row['mean_ic']:+.3f} "
             f"(t {row['ic_t']:+.1f}, hit {row['hit']:.0%})  spread {row['spread']:+.1%}"
         )
+
+
+@app.command("context")
+def context_cmd() -> None:
+    """Measure trait payoffs and forward market risk by prevailing market conditions."""
+    typer.echo(tasks.context_task(get_settings()))
 
 
 @app.command("serve")

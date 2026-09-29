@@ -95,13 +95,29 @@
   forecast models and classic anomalies (momentum, short-term reversal, low volatility,
   Piotroski quality), which are the bar any new model has to clear.</p>
 
+<h2>6. Fundamentals and market context</h2>
+<p>Every company's quarterly and annual SEC filings are turned into what was known on each
+  date: trailing-twelve-month profits, cash flow and sales, balance sheets, shares outstanding
+  and industry. From them, each month, every stock gets valuation (earnings, book, cash-flow
+  yields), quality (the raw inputs the F-score condenses, like return on assets, cash flow,
+  accruals, share issuance) and price traits, each tested on the
+  <a href="/signals">scoreboard</a>. Raw profitability ranks stocks better than the packaged
+  F-score, and companies issuing new shares have lagged in 82% of quarters.</p>
+<p>The <a href="/context">market context</a> page adds the economic backdrop: oil, rates,
+  the yield curve, credit spreads, volatility, inflation and jobs (as first published, never
+  later revisions), each stock's sensitivity to them, and the market's own valuation. It
+  measures which traits pay off under which conditions; it does not time the market.</p>
+
 <h2>Roadmap</h2>
 <ol>
-  <li><b>Foundation</b> (this site): data, backtests, baselines, and the original optimizer rebuilt.</li>
-  <li><b>Forecasting:</b> attention-based sequence models using market-wide inputs, judged against
-    the same baselines.</li>
-  <li><b>Lead-lag network:</b> do some stocks consistently react later than others to market
-    leaders? Scan every pair for delayed reactions and test whether they persist out of sample.</li>
+  <li><b>Foundation</b> (done): data, backtests, baselines, the original optimizer rebuilt,
+    dead companies included, and a scoreboard that tests predictions directly.</li>
+  <li><b>Long value portfolio</b> (in progress): fundamentals and market context (done), then
+    models that learn how to combine the traits into a probability of beating the market, and
+    a monthly portfolio built from the confident calls.</li>
+  <li><b>Short-term trader</b> (next): trades held for hours to days, sized by how reliably the
+    direction can be called. Lead-lag between stocks was tested first: related stocks do move
+    together after a big move, but within about a minute, too fast to act on.</li>
 </ol>
 
 <h2>Caveats</h2>

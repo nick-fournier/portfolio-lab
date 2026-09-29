@@ -59,6 +59,7 @@ def test_score_date_perfect_and_inverted_rankings():
         -1.0
     )
     assert score_date(dict(list(perfect.items())[:5]), forward, panel) is None  # too few
+    assert score_date(dict.fromkeys(perfect, 1.0), forward, panel) is None  # no ranking
 
 
 def test_tied_scores_share_a_quintile():
