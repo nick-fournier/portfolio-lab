@@ -8,6 +8,22 @@
   next {{ horizon }} trading days. This tests the prediction on its own, before any optimizer, costs or
   position limits get involved.</p>
 
+<h2>What is IC?</h2>
+<div class="prose">
+<p>The <b>information coefficient</b> measures how well a signal's ranking of stocks matched
+  the ranking of what they actually returned next. For each month:</p>
+<ol>
+  <li>Rank the stocks in the pool by the signal's score (1 = highest predicted return).</li>
+  <li>Rank the same stocks by the return they actually earned over the next month.</li>
+  <li>The IC is the correlation between the two rankings (Spearman rank correlation).</li>
+</ol>
+<p>+1 means the order was predicted perfectly, 0 means no better than shuffling, −1 means
+  exactly backwards. Only the order matters, so one stock that doubles cannot dominate. Each
+  month gives one noisy IC; the table averages them over every month. Useful signals
+  typically average 0.02 to 0.05: small, but repeated across hundreds of stocks and many
+  months.</p>
+</div>
+
 {% if pools %}
 <p class="muted">{{ period[0] }} → {{ period[1] }}, monthly. Dead companies are included; a stock
   that fell to over-the-counter trading takes a −30% delisting return.</p>
@@ -38,9 +54,7 @@
 
 <h2>Reading this</h2>
 <ul class="prose">
-  <li><b>Mean IC</b> is the average monthly rank correlation between a signal's scores and the
-    returns that followed. 0 means no skill; 0.02 to 0.05 is typical of signals worth using,
-    because a small edge repeats across many stocks and months.</li>
+  <li><b>Mean IC</b> is the average IC over every month (see above).</li>
   <li><b>t-stat</b> is the mean IC over its standard error. Beyond about ±2 (colored) it is
     unlikely to be luck.</li>
   <li><b>Top / bottom fifth</b> are annualized returns of the highest- and lowest-scored fifth
