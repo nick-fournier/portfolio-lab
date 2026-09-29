@@ -24,18 +24,28 @@ class Fixed:
         return dict(self.weights)
 
 
-def _panel(ret_cc, ret_co, rf=0.0):
-    """Two stocks A, B plus a price-only SPY, all eligible from day 0."""
+def _panel(ret_cc, ret_co, rf=0.0, fell_to_otc=(), traded=None):
+    """Two stocks A, B plus a price-only SPY, all eligible from day 0 (closes follow ret_cc)."""
     shape = (len(DAYS), 3)
     fields = {
-        "close": np.full(shape, 10.0),
+        "close": np.where(np.isfinite(np.array(ret_cc, dtype=float)), 10.0, np.nan),
         "ret_cc": np.array(ret_cc, dtype=float),
         "ret_co": np.array(ret_co, dtype=float),
         "adv": np.full(shape, 1e12),
     }
     eligible = np.zeros(shape, dtype=bool)
     eligible[:, :2] = True
-    return Panel(DAYS, ["A", "B", "SPY"], fields, eligible, np.full(len(DAYS), rf), ["A", "B"])
+    rf = np.full(len(DAYS), rf)
+    return Panel(
+        DAYS,
+        ["A", "B", "SPY"],
+        fields,
+        eligible,
+        rf,
+        ["A", "B"],
+        fell_to_otc=fell_to_otc,
+        traded=traded,
+    )
 
 
 def test_golden_nav_with_gap_intraday_drift_and_costs():
@@ -83,6 +93,50 @@ def test_held_name_without_bars_is_liquidated():
     assert result.daily["holdings"].to_list() == [2, 2, 1, 1]
 
 
+@pytest.mark.parametrize(
+    ("fell_to_otc", "delisting_return", "a_exit"),
+    [((), -0.30, 1.0), (("A",), -0.30, 0.70), (("A",), -1.0, 0.0), (("A",), 0.0, 1.0)],
+)
+def test_delisting_return_only_for_names_that_fell_to_otc(fell_to_otc, delisting_return, a_exit):
+    # A's last bar is day 1; it never trades again.
+    cc = [[0, 0, 0], [0.0, 0.0, 0]] + [[np.nan, 0.0, 0]] * (len(DAYS) - 2)
+    co = [[0, 0, 0], [0.0, 0.0, 0]] + [[np.nan, 0.0, 0]] * (len(DAYS) - 2)
+    panel = _panel(cc, co, fell_to_otc=fell_to_otc)
+    assert panel.last_bar.tolist() == [1, len(DAYS) - 1, len(DAYS) - 1]
+    config = BacktestConfig(
+        DAYS[0], DAYS[-1], costs=FLAT_COST, max_missing_days=2, delisting_return=delisting_return
+    )
+    result = run(Fixed({"A": 0.5, "B": 0.5}, schedule="M"), panel, config)
+    nav0 = 1 - 0.001
+    assert result.daily["nav"][-1] == pytest.approx(nav0 * 0.5 * (1 + a_exit))
+    assert result.metrics["forced_liquidations"] == 1
+    assert result.metrics["otc_delistings"] == (1 if fell_to_otc else 0)
+    assert result.meta["delisting_return"] == delisting_return
+
+
+def test_gap_before_later_bars_exits_at_last_price_even_if_otc():
+    # A misses days 1-2 but trades again on day 3: a halt, not a delisting.
+    cc = [[0, 0, 0], [np.nan, 0, 0], [np.nan, 0, 0], [0.0, 0, 0], [0.0, 0, 0]]
+    panel = _panel(cc, cc, fell_to_otc=("A",))
+    config = BacktestConfig(DAYS[0], DAYS[-1], costs=FLAT_COST, max_missing_days=2)
+    result = run(Fixed({"A": 0.5, "B": 0.5}, schedule="M"), panel, config)
+    assert result.metrics["otc_delistings"] == 0
+    assert result.daily["nav"][-1] == pytest.approx(1 - 0.001)
+
+
+def test_frozen_zero_volume_bars_count_as_missing():
+    # A halts after day 1 but keeps printing zero-volume bars at a frozen price.
+    zeros = [[0, 0, 0]] * len(DAYS)
+    traded = np.ones((len(DAYS), 3), dtype=bool)
+    traded[2:, 0] = False
+    panel = _panel(zeros, zeros, fell_to_otc=("A",), traded=traded)
+    assert panel.last_bar[0] == 1
+    config = BacktestConfig(DAYS[0], DAYS[-1], costs=FLAT_COST, max_missing_days=2)
+    result = run(Fixed({"A": 0.5, "B": 0.5}, schedule="M"), panel, config)
+    assert result.metrics["otc_delistings"] == 1
+    assert result.daily["nav"][-1] == pytest.approx((1 - 0.001) * 0.5 * 1.7)
+
+
 def test_benchmark_and_metadata():
     zeros = [[0, 0, 0.01]] * len(DAYS)
     panel = _panel(zeros, [[0, 0, 0]] * len(DAYS))
@@ -91,7 +145,7 @@ def test_benchmark_and_metadata():
     assert result.meta["strategy"] == "fixed"
     assert result.meta["description"] == ""  # Fixed has no docstring
     assert result.meta["start"] == DAYS[0] and result.meta["end"] == DAYS[-1]
-    assert any("Survivorship" in c for c in result.meta["caveats"])
+    assert any("Delisted" in c for c in result.meta["caveats"])
     assert result.weights["symbol"].unique().to_list() == ["SPY"]
 
 

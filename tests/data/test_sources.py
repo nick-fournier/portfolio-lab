@@ -84,3 +84,33 @@ def test_fetch_bars_keeps_decimals_after_whole_number_prices():
     )
     df = fetch_bars(client, ["AAA"], days[0], days[-1])
     assert df["close"][-1] == pytest.approx(0.9909)
+
+
+def test_fetch_bars_skips_invalid_symbols():
+    def handler(request: httpx.Request) -> httpx.Response:
+        symbols = parse_qs(urlparse(str(request.url)).query)["symbols"][0].split(",")
+        if "BAD-X" in symbols:
+            return httpx.Response(400, json={"message": "invalid symbol: BAD-X"})
+        return httpx.Response(
+            200, json={"bars": {s: [_bar("2024-03-08T05:00:00Z", 10.0)] for s in symbols}}
+        )
+
+    client = RateLimitedClient(base_url="https://data.test", transport=httpx.MockTransport(handler))
+    df = fetch_bars(client, ["AAA", "BAD-X", "BBB"], date(2024, 3, 8), date(2024, 3, 8))
+    assert sorted(df["symbol"]) == ["AAA", "BBB"]
+
+
+def test_fetch_bars_isolates_unnamed_bad_symbols():
+    def handler(request: httpx.Request) -> httpx.Response:
+        symbols = parse_qs(urlparse(str(request.url)).query)["symbols"][0].split(",")
+        if "3UW:DU" in symbols:
+            return httpx.Response(400, json={"message": "bad request"})
+        return httpx.Response(
+            200, json={"bars": {s: [_bar("2024-03-08T05:00:00Z", 10.0)] for s in symbols}}
+        )
+
+    client = RateLimitedClient(base_url="https://data.test", transport=httpx.MockTransport(handler))
+    df = fetch_bars(
+        client, ["AAA", "BBB", "3UW:DU", "CCC", "DDD"], date(2024, 3, 8), date(2024, 3, 8)
+    )
+    assert sorted(df["symbol"]) == ["AAA", "BBB", "CCC", "DDD"]

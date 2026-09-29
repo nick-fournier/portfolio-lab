@@ -15,6 +15,7 @@ from portfolio_lab.data.ingest.prices import (
     update_prices,
     verify_prices,
 )
+from portfolio_lab.data.sources.alpaca import BAR_SCHEMA
 
 DAYS = sessions(date(2024, 1, 2), date(2024, 3, 28))
 SPLIT_DAY = date(2024, 2, 26)  # 2:1 split: raw price halves from this day
@@ -57,8 +58,7 @@ class FakeProvider:
                     rows.append(
                         (symbol, day, o, max(o, c) * 1.01, min(o, c) * 0.99, c, 1e6, c, 100)
                     )
-        schema = ["symbol", "date", "open", "high", "low", "close", "volume", "vwap", "trade_count"]
-        return pl.DataFrame(rows, schema=schema, orient="row")
+        return pl.DataFrame(rows, schema=BAR_SCHEMA, orient="row")
 
 
 @pytest.fixture

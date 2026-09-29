@@ -85,6 +85,12 @@ def ingest_fundamentals_cmd(
     tasks.fundamentals_task(get_settings(), force)
 
 
+@ingest_app.command("delisted")
+def ingest_delisted_cmd() -> None:
+    """Add stocks delisted since 2016 (Tiingo list) and backfill their prices."""
+    tasks.delisted_task(get_settings())
+
+
 @ingest_app.command("all")
 def ingest_all_cmd(full: Full = False) -> None:
     """Run universe, prices, benchmarks and rates in order."""
@@ -119,6 +125,9 @@ def backtest_cmd(
         float, typer.Option(help="Portfolio size in dollars, for costs.")
     ] = 100_000,
     max_weight: Annotated[float, typer.Option(help="Largest weight in any one name.")] = 1.0,
+    delisting_return: Annotated[
+        float, typer.Option(help="Return on exit for stocks that fell to OTC (-1 = total loss).")
+    ] = -0.30,
 ) -> None:
     """Run a strategy through the walk-forward backtest and save the run."""
     run_id, metrics = tasks.backtest_task(
@@ -129,6 +138,7 @@ def backtest_cmd(
         _parse_params(param or []),
         notional,
         max_weight,
+        delisting_return,
     )
     typer.echo(f"run {run_id}")
     for key, value in metrics.items():

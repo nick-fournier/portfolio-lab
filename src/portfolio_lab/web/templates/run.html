@@ -38,6 +38,11 @@
 <p class="muted">Half-spread {{ meta.costs.half_spread_bps }} bps + volume-based impact at a ${{ meta.costs.notional | num(0) }} portfolio.
   Forced liquidations: {{ metrics.get("forced_liquidations", 0) | num(0) }}.</p>
 
+<h2>Universe</h2>
+<p class="muted">{% if meta.get("delisting_return") is not none %}Includes {{ meta.get("delisted_in_universe", 0) | num(0) }} stocks delisted since 2016.
+  Sales of names that fell to OTC: {{ metrics.get("otc_delistings", 0) | num(0) }}, each at the last exchange price {{ "%+.0f" | format(meta.delisting_return * 100) }}%.
+  {% else %}Survivors only: stocks listed today (run predates the delisted-stock backfill).{% endif %}</p>
+
 <script>
   document.addEventListener("DOMContentLoaded", () => {
     const opts = window.PLOT_CONFIG;

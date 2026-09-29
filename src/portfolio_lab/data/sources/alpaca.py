@@ -6,11 +6,13 @@ truncated in UTC.
 """
 
 import logging
+import re
 from collections.abc import Iterator, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+import httpx
 import polars as pl
 
 from portfolio_lab.core.config import Settings
@@ -109,6 +111,47 @@ def _to_frame(bars: dict[str, list[dict]]) -> pl.DataFrame:
     )
 
 
+_INVALID_SYMBOL = re.compile(r"invalid symbol: ([A-Za-z0-9.$/^=+-]+)")
+
+
+def _fetch_batch(client: RateLimitedClient, batch: list[str], params: dict) -> list[pl.DataFrame]:
+    """Fetch every page for one batch of symbols.
+
+    Alpaca rejects a whole request with HTTP 400 if any symbol is malformed. The offending
+    symbol, when the error names it, is dropped and the rest retried; otherwise the batch is
+    split in half until the bad symbol is isolated and skipped.
+    """
+    batch = list(batch)
+    while batch:
+        frames, page_token = [], None
+        try:
+            while True:
+                query = {**params, "symbols": ",".join(batch)}
+                if page_token:
+                    query["page_token"] = page_token
+                payload = client.get_json(BARS_PATH, query)
+                frames.append(_to_frame(payload.get("bars") or {}))
+                page_token = payload.get("next_page_token")
+                if not page_token:
+                    return frames
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 400:
+                raise
+            match = _INVALID_SYMBOL.search(exc.response.text)
+            if match and match.group(1) in batch:
+                log.warning("alpaca rejected symbol %s; skipping it", match.group(1))
+                batch.remove(match.group(1))
+            elif len(batch) == 1:
+                log.warning("alpaca rejected symbol %s; skipping it", batch[0])
+                return []
+            else:
+                half = len(batch) // 2
+                return _fetch_batch(client, batch[:half], params) + _fetch_batch(
+                    client, batch[half:], params
+                )
+    return []
+
+
 def fetch_bars(
     client: RateLimitedClient,
     symbols: Sequence[str],
@@ -132,27 +175,18 @@ def fetch_bars(
         One row per (symbol, date), sorted, with columns per :data:`BAR_SCHEMA`.
         Symbols without data in the range are simply absent.
     """
+    params = {
+        "timeframe": timeframe,
+        "start": start.isoformat(),
+        "end": end_param(end),
+        "adjustment": adjustment,
+        "feed": "sip",
+        "limit": PAGE_LIMIT,
+        "sort": "asc",
+    }
     frames = []
     for batch in _batches(sorted(set(symbols)), MAX_SYMBOLS_PER_REQUEST):
-        params = {
-            "symbols": ",".join(batch),
-            "timeframe": timeframe,
-            "start": start.isoformat(),
-            "end": end_param(end),
-            "adjustment": adjustment,
-            "feed": "sip",
-            "limit": PAGE_LIMIT,
-            "sort": "asc",
-        }
-        page_token = None
-        while True:
-            payload = client.get_json(
-                BARS_PATH, {**params, **({"page_token": page_token} if page_token else {})}
-            )
-            frames.append(_to_frame(payload.get("bars") or {}))
-            page_token = payload.get("next_page_token")
-            if not page_token:
-                break
+        frames += _fetch_batch(client, batch, params)
         log.debug("fetched %s bars for %d symbols", adjustment, len(batch))
     if not frames:
         return pl.DataFrame(schema=BAR_SCHEMA)

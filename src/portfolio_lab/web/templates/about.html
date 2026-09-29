@@ -11,8 +11,16 @@
 <p>Every common stock and ADR listed on NASDAQ, NYSE and NYSE American, from NASDAQ's official
   symbol directory, refreshed daily. ETFs, funds, warrants, units, rights, preferred shares and
   notes are excluded. On any given day a stock is only eligible to hold if, using data up to that
-  day, it closed above $5, traded a median of over $1M a day for the past 60 days, and has at
-  least a year of history.</p>
+  day, it traded, closed above $5, traded a median of over $1M a day for the past 60 days, and
+  has at least a year of history.</p>
+<p><b>Dead companies too.</b> A universe built from today's listings silently drops every company
+  that went bankrupt, was acquired or was delisted, which flatters backtests (survivorship bias).
+  Tiingo's free ticker list names every stock that stopped trading, and Alpaca still serves their
+  exchange history, so about 4,200 stocks delisted since 2016 are included (SVB, First Republic,
+  Signature Bank, Bed Bath &amp; Beyond, ...). A held stock that is acquired exits at its last
+  price. One that falls to over-the-counter trading and never returns to an exchange exits at its
+  last exchange price minus 30%, the average loss after such delistings found by Shumway (1997);
+  SVB, for example, last traded at $106 before its halt.</p>
 
 <h2>2. Prices</h2>
 <p>Daily bars since 2016 from Alpaca's market data (the full consolidated tape), updated every
@@ -55,8 +63,29 @@
   liquid names. The Piotroski quality screen, on the same 100 liquid stocks, beats equal-weighting
   them on return, Sharpe ratio and drawdown (with only about 11 holdings, so it is noisy); across
   all eligible stocks it barely helps, and in front of mean-variance it lowers return and risk
-  together without improving the Sharpe ratio. All of this is flattered by survivorship bias, so
-  treat absolute numbers as an upper bound; comparisons within the same pool are more reliable.</p>
+  together without improving the Sharpe ratio.</p>
+
+<p><b>How much survivorship bias flattered this.</b> The same backtests (2017 on), first on
+  today's survivors only and then with the dead companies added:</p>
+<table>
+  <thead><tr><th>Strategy</th><th class="num">Survivors only</th><th class="num">With delisted</th><th class="num">Sharpe</th></tr></thead>
+  <tbody>
+    <tr><td>Momentum, all eligible stocks</td><td class="num">6.3%</td><td class="num">2.6%</td><td class="num">0.30&nbsp;→&nbsp;0.22</td></tr>
+    <tr><td>Mean-variance (trailing mean)</td><td class="num">25.1%</td><td class="num">23.9%</td><td class="num">0.94&nbsp;→&nbsp;0.90</td></tr>
+    <tr><td>Mean-variance (AR(1))</td><td class="num">25.1%</td><td class="num">24.2%</td><td class="num">0.93&nbsp;→&nbsp;0.92</td></tr>
+    <tr><td>Mean-variance (legacy ARIMA)</td><td class="num">10.5%</td><td class="num">9.8%</td><td class="num">0.52&nbsp;→&nbsp;0.49</td></tr>
+    <tr><td>Equal weight, all eligible</td><td class="num">10.2%</td><td class="num">9.6%</td><td class="num">0.44&nbsp;→&nbsp;0.42</td></tr>
+    <tr><td>Momentum, 100 most liquid</td><td class="num">25.4%</td><td class="num">24.9%</td><td class="num">0.75&nbsp;→&nbsp;0.74</td></tr>
+    <tr><td>Equal weight, 100 most liquid</td><td class="num">16.0%</td><td class="num">15.8%</td><td class="num">0.68&nbsp;→&nbsp;0.68</td></tr>
+    <tr><td>SPY</td><td class="num">15.1%</td><td class="num">15.1%</td><td class="num">0.74&nbsp;→&nbsp;0.74</td></tr>
+  </tbody>
+</table>
+<p>Annual return (CAGR). The bias was smaller than feared for strategies on large, liquid stocks,
+  under a point a year, because the price and volume filters drop most failing companies before
+  they collapse. It was large where a strategy chases small winners: momentum across all eligible
+  stocks lost more than half its return. The conclusions above hold. The Piotroski results barely
+  move for a different reason: the SEC's ticker map only covers current companies, so dead ones
+  have no F-score and are never picked. That part of the bias remains.</p>
 
 <h2>Roadmap</h2>
 <ol>
@@ -69,8 +98,8 @@
 
 <h2>Caveats</h2>
 <ul>
-  <li><b>Survivorship bias:</b> free data covers stocks listed today, so companies that went
-    bankrupt or were delisted are missing. That flatters results, especially for small caps.</li>
+  <li><b>Survivorship bias, mostly fixed:</b> about 4,200 dead stocks are included, but ones
+    Alpaca has no exchange prices for are still missing, and dead companies have no F-score.</li>
   <li>Trading costs are a model, not real fills.</li>
   <li>This is research, not investment advice.</li>
 </ul>
