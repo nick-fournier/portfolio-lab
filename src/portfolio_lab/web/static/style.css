@@ -48,6 +48,9 @@ select { font: inherit; padding: 0.2rem 0.4rem; }
 .prose h2 { margin-top: 1.75rem; }
 .prose li { margin-bottom: 0.35rem; }
 .steps { padding-left: 1.3rem; }
+.glossary dt { font-weight: 600; margin-top: 0.8rem; scroll-margin-top: 1rem; }
+.glossary dd { margin: 0.2rem 0 0 0; line-height: 1.45; max-width: 75ch; }
+.glossary dt:target, .glossary dt:target + dd { background: #fff8c5; }
 .steps li { margin-bottom: 0.6rem; }
 
 @media (max-width: 600px) {

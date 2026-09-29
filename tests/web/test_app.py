@@ -140,7 +140,9 @@ def test_signals_page(client, tmp_path):
     pl.DataFrame(rows, schema=schema, orient="row").write_parquet(path)
     page = client.get("/signals")
     assert page.status_code == 200
-    for expected in ("What is IC?", "100 most liquid stocks", "momentum", "+0.030"):
+    expected_text = ("What is IC?", "100 most liquid stocks", "momentum", "+0.030", "Glossary",
+                     'href="#g-momentum"', 'id="g-fscore"', "higher is better")  # fmt: skip
+    for expected in expected_text:
         assert expected in page.text
 
 

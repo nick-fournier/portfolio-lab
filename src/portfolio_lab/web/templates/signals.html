@@ -39,7 +39,7 @@
   <tbody>
   {% for r in pool.rows %}
     <tr>
-      <td>{{ r.signal }}</td>
+      <td><a href="#{{ anchor(r.signal) }}">{{ r.signal }}</a></td>
       <td class="num {{ 'pos' if r.ic_t >= 2 else ('neg' if r.ic_t <= -2 else '') }}">{{ "%+.3f" | format(r.mean_ic) }}</td>
       <td class="num">{{ "%+.1f" | format(r.ic_t) }}</td>
       <td class="num">{{ r.hit | pct(0) }}</td>
@@ -66,6 +66,18 @@
   <li>In the cumulative chart, a steady climb means persistent skill; a flat or wandering line
     means none.</li>
 </ul>
+{% if glossary %}
+<h2 id="glossary">Glossary</h2>
+<p class="muted">What each signal measures, why it might predict returns, and which direction
+  research leads us to expect. For "lower is better" signals a negative IC is the expected
+  result.</p>
+<dl class="glossary">
+  {% for g in glossary %}
+  <dt id="{{ g.anchor }}">{{ g.label }} <span class="muted">({{ g.expect }})</span></dt>
+  <dd>{{ g.what }} <span class="muted">Why it might work:</span> {{ g.why }}</dd>
+  {% endfor %}
+</dl>
+{% endif %}
 {% else %}
 <p class="muted">The scoreboard has not run yet (<code>plab scoreboard</code>).</p>
 {% endif %}
