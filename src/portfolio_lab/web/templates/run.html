@@ -4,9 +4,32 @@
 {% block content %}
 <h1>{{ meta.label or meta.strategy }}</h1>
 <p class="muted">Parameters: {% for k, v in meta.params.items() %}{{ k }}={{ v }}{% if not loop.last %} · {% endif %}{% else %}none{% endfor %}</p>
-{% if meta.description %}<p class="lede">{{ meta.description }}</p>{% endif %}
+{% set ex = meta.get("explain") %}
+{% if ex %}<p class="lede">{{ ex.summary }}</p>
+{% elif meta.description %}<p class="lede">{{ meta.description }}</p>{% endif %}
 <p class="muted">{{ meta.start }} → {{ meta.end }} · rebalance {{ meta.schedule }} · benchmark {{ meta.benchmark }}
   · run {{ meta.run_id }}{% if meta.git_sha %} · code {{ meta.git_sha }}{% endif %}</p>
+
+{% if ex %}
+<h2>How this run works</h2>
+<ol class="prose steps">
+  {% for key, title in [("candidates", "Candidates"), ("signal", "Signal"), ("construction", "Portfolio construction"),
+                        ("execution", "Schedule and execution"), ("drivers", "What drives the result")] %}
+  {% if ex.get(key) %}<li><b>{{ title }}.</b> {{ ex[key] }}</li>{% endif %}
+  {% endfor %}
+</ol>
+{% set example = meta.get("example") %}
+{% if example and example.rows %}
+<h3>Worked example <span class="muted">(rebalance of {{ example.date }}, {{ example.holdings }} holding{{ "s" if example.holdings != 1 }}{% if example.holdings > example.rows|length %}, largest {{ example.rows|length }} shown{% endif %})</span></h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>Stock</th>{% for c in example.columns %}<th class="num">{{ c }}</th>{% endfor %}<th class="num">Weight</th></tr></thead>
+  <tbody>{% for r in example.rows %}<tr><td>{{ r.symbol }}</td>
+    {% for c, fmt in example.columns.items() %}<td class="num">{% if r[c] is none %}–{% elif fmt == "pct" %}{{ r[c] | pct }}{% elif fmt == "int" %}{{ r[c] | num(0) }}{% else %}{{ r[c] | num }}{% endif %}</td>{% endfor %}
+    <td class="num">{{ r.weight | pct }}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endif %}
+{% if ex.get("related") %}<p><b>Compared with related strategies.</b> {{ ex.related }}</p>{% endif %}
+{% endif %}
 
 <div class="cards">
   {% for label, key, fmt in [("CAGR", "cagr", "pct"), ("Total return", "total_return", "pct"), ("Volatility", "volatility", "pct"),

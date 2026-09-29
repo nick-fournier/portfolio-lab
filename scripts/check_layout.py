@@ -69,10 +69,13 @@ def hover_clears(page) -> str:
 
 
 def pages(base: str) -> list[str]:
-    """Paths to check: the fixed pages plus the first run's detail page."""
+    """Paths to check: the fixed pages plus each strategy configuration's latest run.
+
+    Run pages differ by strategy (explanations, worked-example columns), so all are checked.
+    """
     runs = urllib.request.urlopen(f"{base}/runs").read().decode()
-    first_run = re.findall(r'href="(/runs/[^"#]+)"', runs)[:1]
-    return ["/", "/runs", *first_run, "/signals", "/status", "/about"]
+    run_pages = list(dict.fromkeys(re.findall(r'href="(/runs/[^"#]+)"', runs)))
+    return ["/", "/runs", *run_pages, "/signals", "/status", "/about"]
 
 
 def main() -> int:

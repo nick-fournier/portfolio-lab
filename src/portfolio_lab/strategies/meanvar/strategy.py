@@ -2,14 +2,42 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import ClassVar
 
 import pandas as pd
 
 from portfolio_lab.core.calendar import Frequency
 from portfolio_lab.research.dataview import DataView
+from portfolio_lab.strategies import explain
 from portfolio_lab.strategies.base import Weights, register
-from portfolio_lab.strategies.meanvar.forecast import Forecaster, ForecastSpec, price_windows
+from portfolio_lab.strategies.meanvar.forecast import (
+    TRADING_DAYS,
+    Forecaster,
+    ForecastSpec,
+    price_windows,
+)
 from portfolio_lab.strategies.meanvar.optimize import optimize
+
+#: What each forecast model really computes, for the run explanation.
+_MODEL_TEXT = {
+    "historical_mean": (
+        "Each stock's average annual return over the past year. This is extrapolation, not "
+        "a prediction: it assumes last year's return continues."
+    ),
+    "ar1_logret": (
+        "An AR(1) model fitted to each stock's past year of daily returns. AR(1) means "
+        "autoregressive with one lag: the next return is predicted from the latest return "
+        "times a fitted coefficient, plus an average. Daily returns have almost no "
+        "day-to-day memory, so the coefficient is near zero and the forecast collapses to "
+        "roughly the trailing one-year average: extrapolation, not a prediction."
+    ),
+    "arima320_price": (
+        "The original optimizer's ARIMA(3,2,0) on price levels. ARIMA(p, d, q) reads: p = 3, "
+        "it looks back at the 3 most recent values; d = 2, it first takes differences twice, "
+        "so it models the change in the price's day-to-day change (the acceleration); q = 0, "
+        "no moving-average terms. So it extrapolates the recent price trend and its curvature."
+    ),
+}
 
 
 @register("meanvar")
@@ -58,8 +86,66 @@ class MeanVar:
             int(self.horizon),
         )
         self.max_weight = float(self.max_weight)
+        self.last_signals: dict[str, dict[str, float]] = {}
         self.min_fscore = int(self.min_fscore) if self.min_fscore is not None else None
         self._forecaster: Forecaster | None = None
+
+    example_columns: ClassVar[dict[str, str]] = {
+        "Expected return (annual)": "pct",
+        "Volatility (annual)": "pct",
+    }
+
+    def explain(self) -> dict[str, str]:
+        """Plain-language description of a run (see ``strategies.explain``)."""
+        screen = (
+            f" Only companies with a Piotroski F-score of {self.min_fscore}+ from their latest "
+            "annual report are considered, before taking the most liquid."
+            if self.min_fscore is not None
+            else ""
+        )
+        objective = {
+            "max_sharpe": "the best expected return per unit of risk (maximum Sharpe ratio "
+            "against the T-bill rate)",
+            "min_volatility": "the lowest risk (minimum volatility), ignoring the forecasts",
+            "max_quadratic_utility": "the best trade-off of expected return against risk",
+        }[self.objective]
+        signal = (
+            "the legacy ARIMA price trend"
+            if self.model == "arima320_price"
+            else "each stock's trailing one-year return"
+        )
+        return {
+            "summary": (
+                f"A mean-variance portfolio of the {self.top_n} most liquid stocks, using "
+                f"{signal} as its expected return."
+            ),
+            "candidates": explain.candidates(self.top_n)
+            + " Stocks missing more than 5% of the past year's prices are skipped."
+            + screen,
+            "signal": _MODEL_TEXT[self.model]
+            + " Forecasts are capped at +500% a year. The Signals page shows how well this "
+            "ranking has actually predicted returns.",
+            "construction": (
+                "Estimates how the candidates move together from the past year of daily prices "
+                f"(a shrunk covariance), then picks the long-only weights with {objective}. No "
+                f"stock above {self.max_weight:.0%}, fully invested; if no mix beats cash it "
+                "falls back to the lowest-risk mix. In practice it favors stocks with high "
+                "trailing returns and low volatility, spread across stocks that don't move "
+                "together."
+            ),
+            "drivers": (
+                "A risk-controlled tilt toward last year's winners: the return comes from "
+                "winners continuing to win (strongly so for large caps in 2017-2026), and the "
+                "optimizer mainly lowers risk compared with plain momentum."
+            ),
+            "related": (
+                "Same candidates as momentum (pool=100): momentum ranks by the 12-month return "
+                "excluding the last month and equal-weights the top 20; meanvar uses the full "
+                "trailing year and weights by expected return, volatility and co-movement "
+                f"({self.max_weight:.0%} cap). The AR(1) and trailing-average runs hold almost "
+                "identical portfolios."
+            ),
+        }
 
     def _get_forecaster(self) -> Forecaster:
         """Create the forecaster lazily, once the runner has set ``cache_dir``/``workers``."""
@@ -78,7 +164,11 @@ class MeanVar:
             return {}
         windows = {s: prices[s].to_numpy() for s in prices.columns}
         mu = pd.Series(self._get_forecaster().forecast(view.asof, windows), dtype=float)
-        return optimize(mu, prices, view.risk_free(), self.objective, self.max_weight)
+        weights = optimize(mu, prices, view.risk_free(), self.objective, self.max_weight)
+        vol = prices.pct_change().std() * TRADING_DAYS**0.5
+        exp_col, vol_col = self.example_columns
+        self.last_signals = {s: {exp_col: float(mu[s]), vol_col: float(vol[s])} for s in weights}
+        return weights
 
     def close(self) -> None:
         """Release the forecaster's worker pool."""
