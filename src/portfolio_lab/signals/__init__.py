@@ -3,4 +3,7 @@
 Importing this package registers every built-in signal in ``base.REGISTRY``.
 """
 
-from portfolio_lab.signals import builtin  # noqa: F401  (registers signals)
+from portfolio_lab.signals import (
+    builtin,  # noqa: F401  (registers signals)
+    leadlag,  # noqa: F401
+)

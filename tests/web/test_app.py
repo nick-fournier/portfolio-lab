@@ -129,16 +129,16 @@ def test_data_freshness():
 def test_signals_page(client, tmp_path):
     assert "has not run yet" in client.get("/signals").text
     rows = [
-        (signal, pool, date(2024, m, 28), 100, ic, 0.02, 0.01)
+        (signal, pool, 21, date(2024, m, 28), 100, ic, 0.02, 0.01)
         for signal, ic in (("momentum", 0.03), ("fscore", -0.01))
         for pool in ("top100", "all")
         for m in (1, 2, 3)
     ]
-    schema = ["signal", "pool", "date", "n", "ic", "top", "bottom"]
+    schema = ["signal", "pool", "horizon", "date", "n", "ic", "top", "bottom"]
     path = tmp_path / "results" / "scoreboard.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame(rows, schema=schema, orient="row").write_parquet(path)
     page = client.get("/signals")
     assert page.status_code == 200
-    for expected in ("100 most liquid stocks", "All eligible stocks", "momentum", "+0.030"):
+    for expected in ("Next month", "100 most liquid stocks", "All eligible stocks", "+0.030"):
         assert expected in page.text

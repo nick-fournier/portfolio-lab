@@ -43,6 +43,20 @@ class DataView:
         """Row of the decision session in the panel."""
         return self._index
 
+    def dates(self, lookback: int) -> list[date]:
+        """The trailing ``lookback`` sessions, ending at the decision date."""
+        return self._panel.dates[self._window(lookback)]
+
+    def earlier(self, sessions_back: int) -> "DataView":
+        """A view of the same panel ``sessions_back`` sessions earlier (never later).
+
+        Raises:
+            ValueError: If ``sessions_back`` is negative.
+        """
+        if sessions_back < 0:
+            raise ValueError("a view can only move back in time")
+        return DataView(self._panel, max(0, self._index - sessions_back))
+
     def _columns(self, symbols: Sequence[str] | None) -> tuple[list[str], list[int]]:
         """Resolve symbols (default: all) to panel column positions, skipping unknown ones."""
         if symbols is None:

@@ -40,7 +40,7 @@
 <script>
   document.addEventListener("DOMContentLoaded", () => {
     const fig = {{ chart | safe }};
-    Plotly.newPlot("compare", fig.data, fig.layout, window.PLOT_CONFIG);
+    drawPlot("compare", fig);
   });
 </script>
 {% endif %}

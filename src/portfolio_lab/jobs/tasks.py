@@ -57,6 +57,13 @@ SCOREBOARD_SIGNALS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("reversal", {}),
     ("low_vol", {}),
     ("fscore", {}),
+    # Short horizons: lead-lag networks, against each stock's own short-term reversal.
+    ("reversal", {"lookback": 1, "horizon": 1}),
+    ("leadlag", {"horizon": 1}),
+    ("leadlag", {"horizon": 1, "mode": "market"}),
+    ("reversal", {"lookback": 5, "horizon": 5}),
+    ("leadlag", {"horizon": 5}),
+    ("leadlag", {"horizon": 5, "mode": "market"}),
 )
 #: Worker processes for model fits: orange's four fast A76 cores (more workers land on the
 #: slow A55 cores and measured slower).
@@ -236,6 +243,6 @@ def scoreboard_task(
         scores = pl.concat([kept, scores])
     write_parquet_atomic(scores.sort("signal", "pool", "date"), paths.scoreboard)
     table = summarize(scores)
-    status = {"signals": table["signal"].n_unique(), "months": int(table["months"].max())}
+    status = {"signals": table["signal"].n_unique(), "periods": int(table["periods"].max())}
     write_status(settings.data_dir, "scoreboard", status)
     return {"summary": table.to_dicts()}

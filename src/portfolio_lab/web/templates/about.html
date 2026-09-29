@@ -90,18 +90,37 @@
 <h2>5. Signals</h2>
 <p>A backtest mixes the prediction with everything done to it afterwards (optimizer, costs,
   position limits), so a weak forecast can hide behind a good optimizer. The
-  <a href="/signals">signal scoreboard</a> tests predictions directly: every month each signal
-  ranks the stocks, and the ranking is scored against the next month's returns. It covers the
-  forecast models and classic anomalies (momentum, short-term reversal, low volatility,
-  Piotroski quality), which are the bar any new model has to clear.</p>
+  <a href="/signals">signal scoreboard</a> tests predictions directly: each signal ranks the
+  stocks at the end of every month, week or day, and the ranking is scored against the returns
+  over the next period. It covers the forecast models and classic anomalies (momentum,
+  short-term reversal, low volatility, Piotroski quality), which are the bar any new model has
+  to clear.</p>
+<p><b>What it shows.</b> None of the return forecasts has real skill: the AR(1) model ranks
+  stocks no better than their trailing average, and neither is distinguishable from luck, while
+  the legacy ARIMA is reliably backwards. Mean-variance's returns came from holding recent
+  large-cap winners in a decade that rewarded them, with the optimizer keeping risk in check.
+  Only Piotroski quality and low volatility show skill, and only across all eligible stocks.</p>
+
+<h2>6. Lead-lag networks</h2>
+<p>Do some stocks consistently follow others a day or a week later? Each month the lab
+  correlates every stock's returns with every other stock's previous-period returns over the
+  past year (about 9 million pairs), keeps each stock's ten strongest leaders, and predicts it
+  from their latest moves. A simpler version uses the biggest stocks as the only leader, the
+  classic "large stocks lead small ones" effect.</p>
+<p><b>Result: essentially nothing at daily or weekly resolution.</b> Individual pair
+  relationships do not persist: the strongest pairs one year keep their direction the next
+  about half the time, a coin flip. The big-stock lead flips sign from year to year. Scored
+  as daily signals, both networks show an IC of 0.003 to 0.008, a quarter to half of a
+  stock's own one-day reversal and too small to survive the cost of trading daily. This
+  matches research showing daily lead-lag in US stocks was arbitraged away decades ago;
+  what is left lives at intraday speeds, which would need minute data.</p>
 
 <h2>Roadmap</h2>
 <ol>
   <li><b>Foundation</b> (this site): data, backtests, baselines, and the original optimizer rebuilt.</li>
   <li><b>Forecasting:</b> attention-based sequence models using market-wide inputs, judged against
     the same baselines.</li>
-  <li><b>Lead-lag network:</b> do some stocks consistently react later than others to market
-    leaders? Scan every pair for delayed reactions and test whether they persist out of sample.</li>
+  <li><b>Lead-lag network</b> (done, see above): no usable effect in daily or weekly data.</li>
 </ol>
 
 <h2>Caveats</h2>

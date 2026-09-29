@@ -3,17 +3,19 @@
 {% block head %}<script src="/vendor/plotly.min.js" defer></script>{% endblock %}
 {% block content %}
 <h1>Signal scoreboard</h1>
-<p class="lede">Does a model actually predict returns? At the end of every month each signal ranks
-  the stocks, using only data up to that day, and the ranking is compared with the returns of the
-  next {{ horizon }} trading days. This tests the prediction on its own, before any optimizer, costs or
-  position limits get involved.</p>
+<p class="lede">Does a model actually predict returns? Each signal predicts a fixed time ahead (a
+  month, a week or a day). At the end of every such period it ranks the stocks, using only data
+  up to that day, and the ranking is compared with the returns over the next period. This tests
+  the prediction on its own, before any optimizer, costs or position limits get involved.</p>
 
-{% if pools %}
-<p class="muted">{{ period[0] }} → {{ period[1] }}, monthly. Dead companies are included; a stock
-  that fell to over-the-counter trading takes a −30% delisting return.</p>
+{% if sections %}
+<p class="muted">{{ period[0] }} → {{ period[1] }}. Dead companies are included; a stock that fell
+  to over-the-counter trading takes a −30% delisting return.</p>
 
-{% for pool in pools %}
-<h2>{{ pool.title }}</h2>
+{% for section in sections %}
+<h2>{{ section.title }} <span class="muted">({{ section.horizon }} trading day{{ "s" if section.horizon > 1 }})</span></h2>
+{% for pool in section.pools %}
+<h3>{{ pool.title }}</h3>
 <div class="table-wrap"><table>
   <thead><tr>
     <th>Signal</th><th class="num">Mean IC</th><th class="num">t-stat</th><th class="num">IC &gt; 0</th>
@@ -32,13 +34,14 @@
   {% endfor %}
   </tbody>
 </table></div>
-<h3 class="muted">Cumulative IC</h3>
+<p class="muted">Cumulative IC</p>
 <div id="ic-{{ pool.key }}" class="chart tall"></div>
+{% endfor %}
 {% endfor %}
 
 <h2>Reading this</h2>
 <ul class="prose">
-  <li><b>Mean IC</b> is the average monthly rank correlation between a signal's scores and the
+  <li><b>Mean IC</b> is the average per-period rank correlation between a signal's scores and the
     returns that followed. 0 means no skill; 0.02 to 0.05 is typical of signals worth using,
     because a small edge repeats across many stocks and months.</li>
   <li><b>t-stat</b> is the mean IC over its standard error. Beyond about ±2 (colored) it is
@@ -54,15 +57,15 @@
 <p class="muted">The scoreboard has not run yet (<code>plab scoreboard</code>).</p>
 {% endif %}
 
-{% if pools %}
+{% if sections %}
 <script>
   document.addEventListener("DOMContentLoaded", () => {
-    {% for pool in pools %}
+    {% for section in sections %}{% for pool in section.pools %}
     {
       const fig = {{ pool.chart | safe }};
-      Plotly.newPlot("ic-{{ pool.key }}", fig.data, fig.layout, window.PLOT_CONFIG);
+      drawPlot("ic-{{ pool.key }}", fig);
     }
-    {% endfor %}
+    {% endfor %}{% endfor %}
   });
 </script>
 {% endif %}

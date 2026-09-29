@@ -2,7 +2,9 @@ r"""Check the dashboard's layout on mobile and desktop viewports.
 
 For every page, at a phone viewport (390x844) and a desktop one (1280x900), it checks that
 the page does not scroll horizontally, that no chart legend covers the plot area, and that
-there are no JavaScript errors. Optionally saves full-page screenshots.
+there are no JavaScript errors. On the phone it also taps a data point on the first chart
+and checks that the hover label appears and then goes away by itself. Optionally saves
+full-page screenshots.
 
 Runs in the Playwright image against a running dashboard (``plab serve``)::
 
@@ -33,6 +35,37 @@ LEGEND_OVERLAP_JS = """() => [...document.querySelectorAll('.js-plotly-plot')].m
     const h = Math.max(0, Math.min(l.bottom, a.bottom) - Math.max(l.top, a.top));
     return Math.round(100 * w * h / (a.width * a.height));
 })"""
+
+# Page coordinates of the middle point of the first chart's first trace (null if no chart).
+FIRST_POINT_JS = """() => {
+    const el = document.querySelector('.js-plotly-plot');
+    if (!el || !el._fullData.length) return null;
+    const trace = el._fullData[0], xa = el._fullLayout.xaxis, ya = el._fullLayout.yaxis;
+    const k = Math.floor(trace.x.length / 2), box = el.getBoundingClientRect();
+    return {
+        x: box.left + xa._offset + xa.l2p(xa.d2l(trace.x[k])),
+        y: box.top + ya._offset + ya.l2p(ya.d2l(trace.y[k])),
+    };
+}"""
+HOVER_LABELS_JS = "() => document.querySelectorAll('.hoverlayer .hovertext').length"
+#: Longer than the page's auto-hide delay for touch hover labels.
+HOVER_WAIT_MS = 3500
+
+
+def hover_clears(page) -> str:
+    """Tap a data point; return ``ok``, ``no-label`` or ``stuck`` (``-`` without a chart)."""
+    point = page.evaluate(FIRST_POINT_JS)
+    if point is None or point["y"] > page.viewport_size["height"]:
+        page.evaluate("p => window.scrollTo(0, p.y - 200)", point) if point else None
+        point = page.evaluate(FIRST_POINT_JS)
+    if point is None:
+        return "-"
+    page.touchscreen.tap(point["x"], point["y"])
+    page.wait_for_timeout(300)
+    if not page.evaluate(HOVER_LABELS_JS):
+        return "no-label"
+    page.wait_for_timeout(HOVER_WAIT_MS)
+    return "stuck" if page.evaluate(HOVER_LABELS_JS) else "ok"
 
 
 def pages(base: str) -> list[str]:
@@ -67,11 +100,12 @@ def main() -> int:
                     "document.documentElement.scrollWidth - document.documentElement.clientWidth"
                 )
                 overlap = [o for o in page.evaluate(LEGEND_OVERLAP_JS) if o]
-                ok = overflow <= 0 and not overlap and not errors
+                hover = hover_clears(page) if mobile else "-"
+                ok = overflow <= 0 and not overlap and not errors and hover in ("ok", "-")
                 failures += not ok
                 print(
                     f"{'ok  ' if ok else 'FAIL'} {device:7} {path[:40]:40} overflow={overflow}px"
-                    f" legend_overlap={overlap} js_errors={len(errors)}"
+                    f" legend_overlap={overlap} js_errors={len(errors)} touch_hover={hover}"
                 )
                 if args.screenshots:
                     name = re.sub(r"\W+", "_", path.strip("/")) or "overview"

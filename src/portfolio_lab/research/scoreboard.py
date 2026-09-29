@@ -1,8 +1,9 @@
 """The signal scoreboard: how well did each signal's ranking predict the returns that followed?
 
-Every month from the start date, each signal scores a pool of stocks using only data up to
-that month's last close, and the scores are compared with each stock's return over the
-next ``horizon`` sessions (about a month, so the samples don't overlap). Per date:
+Each signal declares its ``horizon``: 1 session (a day), 5 (a week) or 21 (a month). At the
+end of every period of that length from the start date, the signal scores a pool of stocks
+using only data up to that close, and the scores are compared with each stock's return
+over the next ``horizon`` sessions, so samples don't overlap. Per date:
 
 - ``ic``: the rank information coefficient, the correlation between the ranking and the
   realized return ranking (Spearman). Zero means no skill; 0.02 to 0.05 is typical of
@@ -21,11 +22,13 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from portfolio_lab.core.calendar import rebalance_dates
+from portfolio_lab.core.calendar import Frequency, rebalance_dates
 from portfolio_lab.research.dataview import DataView
 from portfolio_lab.research.panel import Panel
 
 HORIZON = 21
+#: Evaluation frequency for each supported horizon (sessions).
+FREQUENCY: dict[int, Frequency] = {1: "D", 5: "W", 21: "M"}
 #: Fewest scored stocks for a date to count.
 MIN_NAMES = 20
 #: Candidate pools: the 100 most liquid eligible stocks, and every eligible stock.
@@ -36,6 +39,7 @@ POOLS: dict[str, Callable[[DataView], list[str]]] = {
 SCHEMA = {
     "signal": pl.String,
     "pool": pl.String,
+    "horizon": pl.Int64,
     "date": pl.Date,
     "n": pl.Int64,
     "ic": pl.Float64,
@@ -90,56 +94,63 @@ def evaluate(
     panel: Panel,
     start: date,
     pools: Sequence[str] = tuple(POOLS),
-    horizon: int = HORIZON,
     delisting_return: float = -0.30,
 ) -> pl.DataFrame:
-    """Score ``signal`` at every month end from ``start`` whose forward window is complete.
+    """Score ``signal`` at the end of every period from ``start`` with a complete forward window.
 
     Args:
-        signal: An object with ``score(view, symbols) -> {symbol: score}``.
+        signal: An object with ``score(view, symbols) -> {symbol: score}`` and optionally a
+            ``horizon`` in sessions (default :data:`HORIZON`; one of :data:`FREQUENCY`).
         label: Name stored in the ``signal`` column (e.g. ``forecast (model=ar1_logret)``).
         panel: The data.
         start: First evaluation date.
         pools: Keys of :data:`POOLS` to evaluate.
-        horizon: Forward-return window in sessions.
         delisting_return: Return applied to stocks that fell to OTC in the window.
 
     Returns:
         One row per (pool, date) in :data:`SCHEMA`.
+
+    Raises:
+        ValueError: For an unsupported horizon.
     """
+    horizon = int(getattr(signal, "horizon", HORIZON))
+    if horizon not in FREQUENCY:
+        raise ValueError(f"horizon {horizon} not supported; use one of {sorted(FREQUENCY)}")
     last = len(panel.dates) - 1 - horizon
     days = [d for d in panel.dates[: last + 1] if d >= start]
     rows = []
-    for day in rebalance_dates(days, "M"):
+    for day in rebalance_dates(days, FREQUENCY[horizon]):
         i = panel.date_index[day]
         view = DataView(panel, i)
         forward = forward_returns(panel, i, horizon, delisting_return)
         for pool in pools:
             result = score_date(signal.score(view, POOLS[pool](view)), forward, panel)
             if result:
-                rows.append({"signal": label, "pool": pool, "date": day, **result})
+                rows.append(
+                    {"signal": label, "pool": pool, "horizon": horizon, "date": day, **result}
+                )
     return pl.DataFrame(rows, schema=SCHEMA)
 
 
 def summarize(scores: pl.DataFrame) -> pl.DataFrame:
-    """One row per (signal, pool) with the headline statistics.
+    """One row per (signal, pool, horizon) with the headline statistics.
 
-    Columns: months, names (average scored), mean_ic, ic_t (mean IC over its standard
-    error; above about 2 is unlikely to be luck), hit (share of months with positive IC),
+    Columns: periods, names (average scored), mean_ic, ic_t (mean IC over its standard
+    error; above about 2 is unlikely to be luck), hit (share of periods with positive IC),
     spread (top minus bottom fifth, annualized), top and bottom (each annualized).
     """
-    months_per_year = 12
+    per_year = 252 / pl.col("horizon").first()
     return (
-        scores.group_by("signal", "pool")
+        scores.group_by("signal", "pool", "horizon")
         .agg(
-            pl.len().alias("months"),
+            pl.len().alias("periods"),
             pl.col("n").mean().alias("names"),
             pl.col("ic").mean().alias("mean_ic"),
             (pl.col("ic").mean() / pl.col("ic").std() * pl.len().sqrt()).alias("ic_t"),
             (pl.col("ic") > 0).mean().alias("hit"),
-            ((pl.col("top") - pl.col("bottom")).mean() * months_per_year).alias("spread"),
-            ((1 + pl.col("top")).product() ** (months_per_year / pl.len()) - 1).alias("top"),
-            ((1 + pl.col("bottom")).product() ** (months_per_year / pl.len()) - 1).alias("bottom"),
+            ((pl.col("top") - pl.col("bottom")).mean() * per_year).alias("spread"),
+            ((1 + pl.col("top")).product() ** (per_year / pl.len()) - 1).alias("top"),
+            ((1 + pl.col("bottom")).product() ** (per_year / pl.len()) - 1).alias("bottom"),
         )
-        .sort("pool", "mean_ic", descending=[True, True])
+        .sort(["pool", "horizon", "mean_ic"], descending=[True, False, True])
     )
