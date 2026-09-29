@@ -39,6 +39,11 @@ class DataPaths:
         """Risk-free rate history (FRED DTB3)."""
         return self.root / "rates" / "dtb3.parquet"
 
+    @property
+    def forecast_cache(self) -> Path:
+        """Cached return forecasts, one folder per model configuration."""
+        return self.root / "cache" / "forecasts"
+
     @staticmethod
     def year_partition(dataset: Path, year: int) -> Path:
         """Return the parquet file for ``year`` within a year-partitioned dataset."""
