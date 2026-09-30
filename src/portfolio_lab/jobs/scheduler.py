@@ -56,11 +56,12 @@ JOBS: tuple[Job, ...] = (
     Job("macro", tasks.macro_task, "weekly"),
     Job("features", tasks.features_task, "weekly"),
     Job("delisted", tasks.delisted_task, "weekly"),
+    # Models before the backtests, so model portfolios use this week's predictions.
+    Job("models", tasks.models_task, "weekly"),
     Job("scheduled_backtests", tasks.scheduled_backtests_task, "weekly"),
     Job("make_vs_buy", tasks.make_vs_buy_task, "weekly"),
     Job("scoreboard", tasks.scoreboard_task, "weekly"),
     Job("context", tasks.context_task, "weekly"),
-    Job("models", tasks.models_task, "weekly"),
 )
 
 

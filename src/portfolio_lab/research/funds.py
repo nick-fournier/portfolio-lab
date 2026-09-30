@@ -71,6 +71,8 @@ PAIRS = {
     "meanvar (top_n=500)": "USMV",
     "piotroski (pool=100)": "QUAL",
     "meanvar (min_fscore=7)": "QUAL",
+    "model_portfolio": "VTI",
+    "model_portfolio (pool=500)": "RSP",
 }
 
 METRICS = ("cagr", "volatility", "sharpe", "max_drawdown", "beta", "alpha")

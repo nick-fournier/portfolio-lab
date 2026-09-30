@@ -41,7 +41,7 @@ def test_training_rows_never_overlap_the_test_year():
 def test_walk_forward_learns_the_informative_trait():
     data = _data()
     pred, fitted = walk_forward(data, MODELS["cfo_to_assets"], 21)
-    assert min(fitted) == 2021 and pred["date"].min() >= date(2021, 1, 1)
+    assert min(fitted) == 2020 and pred["date"].min() >= date(2020, 1, 1)
     table = summary(pred).row(0, named=True)
     assert table["auc"] > 0.65 and table["top10_hit"] > 0.7 and table["bottom10_hit"] > 0.7
     noise, _ = walk_forward(data, MODELS["fscore"], 21)

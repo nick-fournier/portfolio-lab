@@ -5,6 +5,7 @@ Importing this package registers every built-in strategy in ``base.REGISTRY``.
 
 from portfolio_lab.strategies import (
     baselines,  # noqa: F401  (registers strategies)
+    model_portfolio,  # noqa: F401
     momentum,  # noqa: F401
     piotroski,  # noqa: F401
 )

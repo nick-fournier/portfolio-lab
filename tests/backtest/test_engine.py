@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from portfolio_lab.backtest.costs import CostModel
-from portfolio_lab.backtest.engine import BacktestConfig, run, validate_weights
+from portfolio_lab.backtest.engine import BacktestConfig, label, run, validate_weights
 from portfolio_lab.core.calendar import sessions
 from portfolio_lab.research.dataview import DataView
 from portfolio_lab.research.panel import Panel
@@ -194,3 +194,8 @@ def test_run_without_explain_falls_back_to_the_description():
     result = run(Fixed({"A": 0.5}), _panel(zeros, zeros), BacktestConfig(DAYS[0], DAYS[-1]))
     assert set(result.meta["explain"]) == {"summary", "signal", "execution"}
     assert result.meta["example"]["rows"] == [{"symbol": "A", "weight": 0.5}]
+
+
+def test_label_includes_a_non_default_schedule():
+    assert label(create("equal_weight", schedule="Q")) == "equal_weight (schedule=Q)"
+    assert label(create("equal_weight")) == "equal_weight"

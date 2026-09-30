@@ -77,6 +77,22 @@ SCOREBOARD_SIGNALS: tuple[tuple[str, dict[str, Any]], ...] = (
     *(("feature", {"column": c, "horizon": h}) for h in (21, 63) for c in FEATURES),
     *(("feature", {"column": c, "horizon": h}) for h in (21, 63) for c in STOCK_FEATURES),
 )
+#: Model portfolios (M11), from when out-of-sample predictions begin. The variants isolate
+#: what each layer adds: excluding likely underperformers, selecting the best, weighting.
+MODEL_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
+    ("model_portfolio", {}),  # exclude the bottom 30%, equal weights, quarterly
+    ("model_portfolio", {"pool": 500}),
+    ("model_portfolio", {"weighting": "equal"}),  # the 100 best-rated
+    ("model_portfolio", {"weighting": "optimized"}),  # risk-aware tilt of the 100 best
+    # Controls: the same pools, equally weighted and rebalanced quarterly, over the same years.
+    ("equal_weight", {"schedule": "Q"}),
+    ("equal_weight", {"top_n": 500, "schedule": "Q"}),
+)
+#: The first session after the first out-of-sample predictions (2020-01-31): model
+#: portfolios and their controls both start fully invested here. Starting earlier would
+#: leave a model portfolio in cash until its first quarterly decision (it sat out the
+#: early-2020 crash by accident and looked far better than it was).
+MODEL_START = date(2020, 2, 3)
 #: Worker processes for model fits: orange's four fast A76 cores (more workers land on the
 #: slow A55 cores and measured slower).
 FORECAST_WORKERS = 4
@@ -261,10 +277,12 @@ def backtest_task(
 
 
 def scheduled_backtests_task(settings: Settings) -> dict:
-    """Re-run the baseline backtests through the latest data, then prune old runs."""
+    """Re-run the baseline and model backtests through the latest data, then prune."""
+    plan = [(n, p, SCHEDULED_START) for n, p in SCHEDULED_BACKTESTS]
+    plan += [(n, p, MODEL_START) for n, p in MODEL_BACKTESTS]
     runs = {
-        f"{name} {params}".strip(): backtest_task(settings, name, SCHEDULED_START, params=params)[0]
-        for name, params in SCHEDULED_BACKTESTS
+        f"{name} {params}".strip(): backtest_task(settings, name, start, params=params)[0]
+        for name, params, start in plan
     }
     pruned = prune_runs(settings.data_dir, keep=RUNS_KEPT_PER_CONFIG)
     log.info("pruned %d old runs", len(pruned))

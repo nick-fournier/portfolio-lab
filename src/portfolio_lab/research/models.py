@@ -33,8 +33,9 @@ from portfolio_lab.research.dataset import (
 )
 from portfolio_lab.research.evaluation import calibrate, calibration_bins, importance, summary
 
-#: At least this many months of training before a year is predicted.
-MIN_TRAIN_MONTHS = 36
+#: At least this many months of training before a year is predicted (two years, so
+#: out-of-sample predictions, and portfolios built on them, start in 2020).
+MIN_TRAIN_MONTHS = 24
 FLAGS = ("no_fundamentals", "no_fscore", "no_context")
 
 
