@@ -227,3 +227,27 @@ def test_models_page(client, tmp_path):
                      "53.0%", "→ 0.010", "Does a stated probability come true?",
                      "What the tree model relies on"):  # fmt: skip
         assert expected in page, expected
+
+
+def test_compare_page(client, tmp_path):
+    assert "No comparison yet" in client.get("/compare").text
+    folder = tmp_path / "results" / "make_vs_buy"
+    folder.mkdir(parents=True)
+    base = {"period": "common", "start": date(2021, 6, 15), "end": date(2024, 1, 3),
+            "volatility": 0.2, "beta": 1.0, "alpha": 0.0}  # fmt: skip
+    pl.DataFrame([
+        base | {"key": "SPY", "name": "S&P 500 (SPDR)", "category": "passive", "cagr": 0.13,
+                "sharpe": 0.61, "max_drawdown": -0.25},
+        base | {"key": "MTUM", "name": "US momentum (iShares)", "category": "factor",
+                "cagr": 0.14, "sharpe": 0.54, "max_drawdown": -0.32},
+        base | {"key": "ours: momentum", "name": "momentum", "category": "ours", "cagr": 0.20,
+                "sharpe": 0.57, "max_drawdown": -0.40},
+    ]).write_parquet(folder / "summary.parquet")  # fmt: skip
+    pl.DataFrame(
+        {"date": [date(2021, 6, 15)] * 3, "key": ["SPY", "MTUM", "ours: momentum"],
+         "growth": [1.0, 1.0, 1.0]}
+    ).write_parquet(folder / "growth.parquet")  # fmt: skip
+    page = client.get("/compare").text
+    for expected in ("Not yet a fair fight", "Head to head", "vs US momentum (iShares) (MTUM)",
+                     "20.0%", "Same period for everyone", "Passive factor funds"):  # fmt: skip
+        assert expected in page, expected

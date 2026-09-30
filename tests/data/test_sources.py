@@ -7,6 +7,7 @@ import pytest
 from portfolio_lab.core.http import RateLimitedClient
 from portfolio_lab.data.sources.alpaca import end_param, fetch_bars
 from portfolio_lab.data.sources.fred import CONTEXT_SERIES, fetch_series, parse_dtb3
+from portfolio_lab.data.sources.tiingo import fetch_fund_history
 
 
 def _bar(t, c):
@@ -136,3 +137,13 @@ def test_fred_first_release_uses_publication_date_and_market_series_next_day():
     assert "output_type" not in seen[1]
     assert oil["available"].to_list() == [date(2024, 1, 2)]  # known the next day
     assert CONTEXT_SERIES["VIXCLS"].lag_days == 0
+
+
+def test_tiingo_fund_history_uses_adjusted_close():
+    rows = [{"date": "2024-01-02T00:00:00.000Z", "close": 15.95, "adjClose": 14.64},
+            {"date": "2024-01-03T00:00:00.000Z", "close": 15.9, "adjClose": 14.59}]  # fmt: skip
+    client = RateLimitedClient(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=rows))
+    )
+    df = fetch_fund_history(client, "FCNTX", "token", date(2024, 1, 1))
+    assert df.rows() == [("FCNTX", date(2024, 1, 2), 14.64), ("FCNTX", date(2024, 1, 3), 14.59)]

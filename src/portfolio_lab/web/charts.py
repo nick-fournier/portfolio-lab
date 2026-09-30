@@ -166,3 +166,38 @@ def importance_figure(table: pl.DataFrame, top: int = 15) -> str:
     fig.update_layout(height=80 + 24 * rows.height, showlegend=False, hovermode="closest",
                       xaxis={"title": "drop in AUC when shuffled"})  # fmt: skip
     return fig.to_json()
+
+
+def growth_figure(
+    growth: pl.DataFrame,
+    names: dict[str, str],
+    visible: set[str],
+    groups: dict[str, str] | None = None,
+    reference: str = "SPY",
+) -> str:
+    """Growth of $1 per series (key); ``visible`` ones are drawn, the rest start hidden.
+
+    The legend lists the drawn series first, then the others under their group title
+    (``groups`` maps key -> group title, in the order the groups should appear).
+    """
+    groups = groups or {}
+    order = list(dict.fromkeys(groups.values()))
+
+    def rank(key: str) -> tuple:
+        group = groups.get(key, "")
+        return (key not in visible, order.index(group) if group in order else len(order),
+                names.get(key, key))  # fmt: skip
+
+    fig = go.Figure(layout=_LAYOUT)
+    by_key = {k: g for (k,), g in growth.sort("date").group_by("key", maintain_order=True)}
+    for key in sorted(by_key, key=rank):
+        rows, shown = by_key[key], key in visible
+        fig.add_scatter(
+            x=rows["date"].to_list(), y=rows["growth"].to_list(), name=names.get(key, key),
+            line=_REFERENCE if key == reference else _LINE,
+            visible=True if shown else "legendonly",
+            legendgroup="shown" if shown else groups.get(key, "other"),
+            legendgrouptitle_text="Drawn" if shown else groups.get(key, "Other"),
+        )  # fmt: skip
+    fig.update_layout(yaxis_type="log", legend={**_LAYOUT["legend"], "groupclick": "toggleitem"})
+    return fig.to_json()

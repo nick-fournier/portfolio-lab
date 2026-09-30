@@ -128,3 +128,28 @@ def dead_stocks(
 def fetch_supported_tickers(client: RateLimitedClient) -> pl.DataFrame:
     """Download and parse Tiingo's public ticker list (about 1 MB)."""
     return parse_supported_tickers(client.get(URL).content)
+
+
+FUND_PRICES_URL = "https://api.tiingo.com/tiingo/daily/{symbol}/prices"
+
+
+def fetch_fund_history(
+    client: RateLimitedClient, symbol: str, token: str, start: date
+) -> pl.DataFrame:
+    """Daily prices adjusted for distributions for one fund (Tiingo covers mutual funds).
+
+    Returns:
+        symbol, date, adj_close.
+    """
+    rows = client.get_json(
+        FUND_PRICES_URL.format(symbol=symbol),
+        {"startDate": start.isoformat(), "token": token},
+    )
+    return pl.DataFrame(
+        {
+            "symbol": [symbol] * len(rows),
+            "date": [date.fromisoformat(r["date"][:10]) for r in rows],
+            "adj_close": [float(r["adjClose"]) for r in rows],
+        },
+        schema={"symbol": pl.String, "date": pl.Date, "adj_close": pl.Float64},
+    )
