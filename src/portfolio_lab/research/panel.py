@@ -87,6 +87,7 @@ class Panel:
         self.fundamentals = fundamentals.sort("filed") if fundamentals is not None else None
         self.n_delisted = 0  # dead stocks added to the universe (set by ``load``)
         self.features: pl.DataFrame | None = None  # monthly feature panel (set by ``load``)
+        self.predictions: pl.DataFrame | None = None  # model predictions (set by ``load``)
         self.symbols = list(symbols)
         self.date_index = {d: i for i, d in enumerate(self.dates)}
         self.symbol_index = {s: j for j, s in enumerate(self.symbols)}
@@ -230,6 +231,9 @@ class Panel:
             panel.fundamentals = pl.read_parquet(paths.fscores).sort("filed")
         if paths.features.exists():
             panel.features = pl.read_parquet(paths.features).sort("date")
+        predictions = paths.models.parent / "forecasts" / "scores.parquet"
+        if predictions.exists():
+            panel.predictions = load_predictions(predictions)
         panel.n_delisted = dead.height
         return panel
 
@@ -244,3 +248,10 @@ def _daily_rates(dates: list[date], rates: pl.DataFrame | None) -> np.ndarray:
         .with_columns(pl.col("rate").fill_null(strategy="forward").fill_null(0.0))
     )
     return aligned["rate"].to_numpy() / TRADING_DAYS
+
+
+def load_predictions(path: Path) -> pl.DataFrame:
+    """Out-of-sample 1-month forecast scores as date, symbol, score (``research.forecasts``)."""
+    return (
+        pl.read_parquet(path).select("date", "symbol", pl.col("trees").alias("score")).sort("date")
+    )

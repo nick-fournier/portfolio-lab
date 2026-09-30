@@ -46,6 +46,7 @@ def make_panel():
         panel = Panel.from_long(prices, symbols, rates, rules)
         panel.fundamentals = make_fundamentals(symbols, dates)
         panel.features = make_features(symbols, dates)
+        panel.predictions = make_predictions(symbols, dates)
         return panel
 
     return factory
@@ -56,6 +57,13 @@ def make_features(symbols, dates):
     month_ends = rebalance_dates(list(dates), "M")
     rows = [(d, s, 0.01 * (k + 1)) for d in month_ends for k, s in enumerate(symbols)]
     return pl.DataFrame(rows, schema=["date", "symbol", "earnings_yield"], orient="row")
+
+
+def make_predictions(symbols, dates):
+    """Synthetic forecast scores at month ends: later symbols rated higher."""
+    month_ends = rebalance_dates(list(dates), "M")
+    rows = [(d, s, k / len(symbols)) for d in month_ends for k, s in enumerate(symbols)]
+    return pl.DataFrame(rows, schema=["date", "symbol", "score"], orient="row")
 
 
 def make_fundamentals(symbols, dates):

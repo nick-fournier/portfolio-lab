@@ -138,7 +138,7 @@ class DataView:
         ``research.features``), so rows dated ``asof`` are visible.
 
         Returns:
-            symbol plus ``columns``; empty if the panel has no features.
+            symbol plus those of ``columns`` the panel has; empty if it has no features.
         """
         table = self._panel.features
         if table is None:
@@ -147,7 +147,27 @@ class DataView:
         if past.is_empty():
             return pl.DataFrame(schema={"symbol": pl.String})
         latest = past.filter(pl.col("date") == past["date"].max())
-        return latest.filter(pl.col("symbol").is_in(list(symbols))).select("symbol", *columns)
+        present = [c for c in columns if c in latest.columns]
+        return latest.filter(pl.col("symbol").is_in(list(symbols))).select("symbol", *present)
+
+    def predictions(self, symbols: Sequence[str]) -> pl.DataFrame:
+        """The latest out-of-sample model predictions on or before ``asof`` per symbol.
+
+        Predictions dated at a month end use only data up to that close (they come from
+        ``research.models.walk_forward``), so rows dated ``asof`` are visible.
+
+        Returns:
+            symbol and ``score`` (the forecast model's predicted return rank for the next
+            month; higher is better); empty if the panel has no predictions.
+        """
+        table = self._panel.predictions
+        if table is None:
+            return pl.DataFrame(schema={"symbol": pl.String})
+        past = table.filter(pl.col("date") <= self.asof)
+        if past.is_empty():
+            return pl.DataFrame(schema={"symbol": pl.String})
+        latest = past.filter(pl.col("date") == past["date"].max())
+        return latest.filter(pl.col("symbol").is_in(list(symbols))).drop("date")
 
     def risk_free(self) -> float:
         """Annual risk-free rate as of the decision date (fraction, e.g. 0.05)."""

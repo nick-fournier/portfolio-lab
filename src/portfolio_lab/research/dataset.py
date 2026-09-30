@@ -16,11 +16,14 @@ from portfolio_lab.research.features import FEATURES
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.scoreboard import forward_returns
 
-HORIZONS = (21, 63)
+#: Label horizons in sessions: a month, a quarter, six months, a year.
+HORIZONS = (21, 63, 126, 252)
 #: Per-stock model inputs.
 STOCK_COLUMNS = (*FEATURES, *STOCK_FEATURES)
 #: Liquidity pool reported separately (the 500 most liquid stocks each month).
 TOP_POOL = 500
+#: Size groups for size-relative labels (tenths by market value each month).
+SIZE_GROUPS = 10
 
 
 def build_dataset(
@@ -35,7 +38,10 @@ def build_dataset(
 
     Returns:
         date, symbol, ``session`` (index into the panel's dates), ``top500``, the stock
-        columns present, ``env_*`` columns, and per horizon ``fwd_{h}``, ``y_{h}`` and
+        columns present, ``env_*`` columns, and per horizon ``fwd_{h}``, ``y_{h}``,
+        ``excess_{h}`` (return minus that month's median), ``size_excess_{h}`` (return minus
+        the median of the stock's size tenth that month; stocks without a market value form
+        their own group), ``rank_{h}`` (percentile of the return that month) and
         ``label_end_{h}`` (null where the future is not yet known).
     """
     columns = [c for c in STOCK_COLUMNS if c in features.columns]
@@ -58,12 +64,28 @@ def build_dataset(
         {"date": [r["date"] for r in labels],
          "session": [panel.date_index[r["date"]] for r in labels]}
     )  # fmt: skip
+    median = {h: pl.col(f"fwd_{h}").median().over("date") for h in HORIZONS}
+    size_group = (
+        (pl.col("log_size").rank() * SIZE_GROUPS / pl.col("log_size").count()).over("date").ceil()
+    )
+    data = data.with_columns(size_group.alias("_size_group"))
     data = data.join(sessions, on="date", how="left").with_columns(
         # Null where the forward return is unknown (the comparison with null is null).
-        (pl.col(f"fwd_{h}") > pl.col(f"fwd_{h}").median().over("date"))
-        .cast(pl.Int8)
-        .alias(f"y_{h}")
-        for h in HORIZONS
+        *[(pl.col(f"fwd_{h}") > median[h]).cast(pl.Int8).alias(f"y_{h}") for h in HORIZONS],
+        # Magnitude: return relative to the median stock, and its rank (0 to 1) that month.
+        *[(pl.col(f"fwd_{h}") - median[h]).alias(f"excess_{h}") for h in HORIZONS],
+        *[
+            (pl.col(f"fwd_{h}") - pl.col(f"fwd_{h}").median().over("date", "_size_group")).alias(
+                f"size_excess_{h}"
+            )
+            for h in HORIZONS
+        ],
+        *[
+            (
+                pl.col(f"fwd_{h}").rank().over("date") / pl.col(f"fwd_{h}").count().over("date")
+            ).alias(f"rank_{h}")
+            for h in HORIZONS
+        ],
     )
     if env is not None:
         numeric = [c for c, t in env.schema.items() if c != "date" and t.is_numeric()]
@@ -71,7 +93,7 @@ def build_dataset(
             env.select("date", *[pl.col(c).alias(f"env_{c}") for c in numeric]),
             on="date", how="left",
         )  # fmt: skip
-    return data.sort("date", "symbol")
+    return data.drop("_size_group").sort("date", "symbol")
 
 
 def _label_frame(panel: Panel, labels: list[dict]) -> pl.DataFrame:

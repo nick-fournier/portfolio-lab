@@ -12,6 +12,7 @@ from portfolio_lab.strategies.base import create
 from portfolio_lab.strategies.meanvar import forecast as forecast_mod
 from portfolio_lab.strategies.meanvar.forecast import Forecaster, ForecastSpec, forecast_one
 from portfolio_lab.strategies.meanvar.optimize import _within_bounds, optimize
+from portfolio_lab.strategies.meanvar.strategy import score_returns
 
 GROWTH = 0.0004  # daily
 
@@ -212,3 +213,16 @@ def test_describe_summary_only():
     summary = describe(create("meanvar"), summary_only=True)
     assert summary.startswith("Mean-variance optimization") and "momentum" not in summary
     assert "momentum" in describe(create("meanvar"))
+
+
+def test_score_returns_tilt_toward_high_scores():
+    vol = pd.Series({"A": 0.2, "B": 0.2, "C": 0.4})
+    trailing = pd.Series({"A": 0.5, "B": -0.1, "C": 0.1})
+    scores = {"A": 0.9, "B": 0.1, "C": 0.5}
+    mu = score_returns(scores, trailing, vol, "score", ic=0.05, base=0.08)
+    assert mu["A"] > mu["C"] > mu["B"]
+    assert mu.mean() == pytest.approx(0.08, abs=0.02)
+    blended = score_returns({"A": 0.1, "B": 0.9}, trailing, vol, "blend", ic=0.05, base=0.08)
+    # A: low score, high trailing return; B: the reverse. Blended, they roughly offset.
+    assert blended["A"] == pytest.approx(blended["B"], abs=0.01)
+    assert set(blended.index) == {"A", "B", "C"}

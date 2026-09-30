@@ -7,13 +7,15 @@ scheduler), the web app factory, or the scheduler loop.
 import json
 from datetime import datetime
 from importlib.metadata import version
+from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 
 from portfolio_lab.core.config import get_settings
 from portfolio_lab.core.log import setup_logging
-from portfolio_lab.jobs import tasks
+from portfolio_lab.data.ingest import sharadar
+from portfolio_lab.jobs import probes, tasks
 
 app = typer.Typer(help="Portfolio lab: ingest data, run backtests, serve the dashboard.")
 ingest_app = typer.Typer(help="Fetch and store market data.")
@@ -117,6 +119,19 @@ def _parse_params(pairs: list[str]) -> dict[str, Any]:
     return params
 
 
+@app.command("ingest-sharadar")
+def ingest_sharadar_cmd(
+    out: Annotated[Path, typer.Option(help="New data directory to write.")],
+    raw: Annotated[
+        Path | None, typer.Option(help="Folder with the bulk zips (default: raw/sharadar).")
+    ] = None,
+) -> None:
+    """Build a separate data directory from Sharadar's full-history bulk files."""
+    settings = get_settings()
+    raw = raw or settings.data_dir / "raw" / "sharadar"
+    typer.echo(sharadar.build(raw, out, settings.data_dir))
+
+
 @app.command("backtest")
 def backtest_cmd(
     strategy: Annotated[str, typer.Argument(help="Registered strategy name.")],
@@ -191,6 +206,73 @@ def models_cmd() -> None:
 def make_vs_buy_cmd() -> None:
     """Compare our strategies with funds anyone can buy (needs TIINGO_API_KEY for mutual funds)."""
     typer.echo(tasks.make_vs_buy_task(get_settings()))
+
+
+@app.command("forecasts")
+def forecasts_cmd() -> None:
+    """Measure direction, magnitude and hurdle forecasts at 1-12 month horizons."""
+    typer.echo(probes.forecasts_task(get_settings()))
+
+
+@app.command("bakeoff")
+def bakeoff_cmd() -> None:
+    """Compare learners (trees, MLP, their average) on the 1-month return rank."""
+    for row in probes.bakeoff_task(get_settings())["learners"]:
+        typer.echo(row)
+
+
+@app.command("pick-test")
+def pick_test_cmd() -> None:
+    """Model variants' top picks vs the 100 most liquid, SPY and meanvar each month."""
+    for row in probes.pick_test_task(get_settings())["summary"]:
+        typer.echo(row)
+
+
+@app.command("health")
+def health_cmd() -> None:
+    """Train the trash-risk score walk-forward and compare it with the F-score filter."""
+    for pool, rows in probes.health_task(get_settings()).items():
+        typer.echo(f"pool {pool}")
+        for row in rows:
+            typer.echo(f"  {row}")
+
+
+@app.command("fscore-models")
+def fscore_models_cmd() -> None:
+    """Build the continuous and learned F-scores walk-forward."""
+    typer.echo(probes.fscore_models_task(get_settings()))
+
+
+@app.command("filter-backtests")
+def filter_backtests_cmd(
+    score: Annotated[
+        list[str] | None, typer.Option(help="Only these scores (no reference runs); repeatable.")
+    ] = None,
+) -> None:
+    """Backtest meanvar behind each F-score model at each cut (after ``plab fscore-models``)."""
+    typer.echo(probes.filter_backtests_task(get_settings(), tuple(score or ())))
+
+
+@app.command("extended-scores")
+def extended_scores_cmd() -> None:
+    """Backtest meanvar behind the continuous F-score with extra health metrics, and PCA."""
+    typer.echo(probes.extended_scores_task(get_settings()))
+
+
+@app.command("make-vs-buy-history")
+def make_vs_buy_history_cmd(
+    raw: Annotated[Path, typer.Option(help="Folder with the Sharadar bulk zips.")],
+) -> None:
+    """Compare funds (since launch) with our strategies since 1999 on the Sharadar history."""
+    typer.echo(tasks.make_vs_buy_history_task(get_settings(), raw))
+
+
+@app.command("model-portfolio")
+def model_portfolio_cmd() -> None:
+    """Refresh 1-month forecast scores, then backtest the model portfolios and controls."""
+    settings = get_settings()
+    typer.echo(probes.forecast_scores_task(settings))
+    typer.echo(probes.model_backtests_task(settings))
 
 
 @app.command("serve")

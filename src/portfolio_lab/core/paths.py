@@ -110,6 +110,16 @@ class DataPaths:
         return self.root / "fundamentals" / "states.parquet"
 
     @property
+    def insider_trades(self) -> Path:
+        """Open-market insider purchases and sales by symbol and filing date (Form 4)."""
+        return self.root / "fundamentals" / "insider_trades.parquet"
+
+    @property
+    def institutional_holders(self) -> Path:
+        """Number of 13F institutional holders by symbol and quarter, with availability date."""
+        return self.root / "fundamentals" / "institutional_holders.parquet"
+
+    @property
     def features(self) -> Path:
         """Monthly point-in-time feature panel (``research.features``)."""
         return self.root / "features" / "monthly.parquet"

@@ -14,7 +14,13 @@ detect them. Features (all floats; null where an input is missing):
 - **Quality** (the raw Piotroski inputs and relatives): return on assets, cash flow to
   assets, accruals, gross profitability, operating margin, leverage, current ratio, and
   their year-on-year changes; share issuance, asset and sales growth.
-- **Price**: 12-1 month momentum, last month's return, volatility, beta, size, liquidity.
+- **Price**: 12-1 month momentum, last month's and last week's return, volatility, beta,
+  size, liquidity; distance from the 52-week high, stock-specific volatility (net of the
+  market) and the trend in liquidity.
+- **Earnings news**: the latest quarter's earnings and revenue change from a year earlier
+  (the difference between consecutive trailing-twelve-month figures), the stock's return
+  relative to the market around the filing, and days since it.
+- **Industry momentum**: the average 1- and 6-month return of the stock's industry.
 - ``fscore`` for comparison, and ``*_ind``: key features as percentiles within the stock's
   industry (SIC major group) on that date.
 """
@@ -44,8 +50,28 @@ FEATURES = (
     "operating_margin", "leverage", "current_ratio", "d_roa", "d_lt_debt", "d_current_ratio",
     "d_gross_margin", "d_asset_turnover", "share_issuance", "asset_growth", "sales_growth",
     "log_size", "mom_12_1", "ret_1m", "volatility", "beta", "log_adv", "fscore",
+    "ret_1w", "high_52w", "idio_vol", "liquidity_trend",
+    "earnings_surprise", "revenue_surprise", "filing_reaction", "days_since_filing",
+    "ind_mom_1m", "ind_mom_6m",
     *(f"{c}_ind" for c in INDUSTRY_RELATIVE),
+    # Ownership (``research.ownership``), where insider and 13F data are available.
+    "insider_buy", "insider_net", "insider_buys", "inst_breadth_1y", "inst_breadth_1q",
 )  # fmt: skip
+#: Features computed from prices; the rest describe the business (``FUNDAMENTAL``).
+PRICE_FEATURES = (
+    "mom_12_1", "ret_1m", "volatility", "beta", "log_adv", "ret_1w", "high_52w", "idio_vol",
+    "liquidity_trend", "filing_reaction", "ind_mom_1m", "ind_mom_6m", "mom_12_1_ind",
+)  # fmt: skip
+FUNDAMENTAL = tuple(f for f in FEATURES if f not in PRICE_FEATURES)
+WEEK = 5
+HALF_YEAR = 126
+#: Sessions before (and one after) the filing counted as its market reaction; earnings
+#: releases usually come a few days before the 10-Q or 10-K.
+REACTION_SESSIONS = 10
+
+
+def _finite(values: np.ndarray) -> np.ndarray:
+    return np.where(np.isfinite(values), values, np.nan)
 
 
 def _price_features(panel: Panel, index: int, cols: np.ndarray) -> dict[str, np.ndarray]:
@@ -58,8 +84,15 @@ def _price_features(panel: Panel, index: int, cols: np.ndarray) -> dict[str, np.
     filled = np.where(np.isfinite(window), window, 0.0)
     spy_c = spy - spy.mean()
     beta = spy_c @ (filled - filled.mean(axis=0)) / (spy_c @ spy_c)
+    residual = (filled - filled.mean(axis=0)) - np.outer(spy_c, beta)
+    adv = panel.field("adv")
     with np.errstate(invalid="ignore", divide="ignore"):
         return {
+            "ret_1w": np.where(enough, growth[-1] / growth[-WEEK - 1] - 1, np.nan),
+            "ret_6m": np.where(enough, growth[-1] / growth[-HALF_YEAR - 1] - 1, np.nan),
+            "high_52w": np.where(enough, growth[-1] / growth.max(axis=0) - 1, np.nan),
+            "idio_vol": np.where(enough, residual.std(axis=0), np.nan),
+            "liquidity_trend": _finite(np.log(adv[index, cols] / adv[index - HALF_YEAR, cols])),
             # growth is relative to the price just before the window (1.0).
             "mom_12_1": np.where(enough, growth[-MONTH - 1] - 1, np.nan),
             "ret_1m": np.where(enough, growth[-1] / growth[-MONTH - 1] - 1, np.nan),
@@ -179,13 +212,63 @@ def _asof(grid: pl.DataFrame, table: pl.DataFrame, max_age: int) -> pl.DataFrame
     ).drop("_visible", "_filed_right")
 
 
+def _with_changes(states: pl.DataFrame) -> pl.DataFrame:
+    """Add each filing's change in trailing-twelve-month earnings and revenue.
+
+    Consecutive quarters' TTM figures differ by the latest quarter minus the same quarter a
+    year earlier, the seasonally adjusted news in the filing. Null unless the previous
+    filing covered the quarter before (80 to 100 days earlier).
+    """
+    states = states.sort("cik", "filed", "accn")
+    prev_end = pl.col("period_end").shift(1).over("cik")
+    quarter = (pl.col("period_end") - prev_end).dt.total_days().is_between(80, 100)
+    return states.with_columns(
+        pl.when(quarter).then(pl.col(c) - pl.col(c).shift(1).over("cik")).alias(f"_d_{c}")
+        for c in ("net_income", "revenue")
+    )
+
+
+def _filing_reaction(grid: pl.DataFrame, panel: Panel) -> pl.Series:
+    """Stock return minus SPY's over the sessions around the latest filing."""
+    index = _total_return_index(panel)
+    dates = np.array(panel.dates, dtype="datetime64[D]")
+    filed = grid["filed"].to_numpy().astype("datetime64[D]")
+    ok = ~np.isnat(filed)
+    at = np.full(grid.height, -1)
+    at[ok] = np.searchsorted(dates, filed[ok], side="right") - 1
+    rows, cols = grid["_row"].to_numpy(), grid["_col"].to_numpy()
+    end = np.minimum(at + 1, rows)
+    begin = at - REACTION_SESSIONS
+    valid = ok & (begin >= 0)
+    b, e = np.where(valid, begin, 0), np.where(valid, end, 0)
+    spy = panel.symbol_index["SPY"]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        stock = index[e, cols] / index[b, cols] - 1
+        market = index[e, spy] / index[b, spy] - 1
+    return pl.Series("filing_reaction", np.where(valid, stock - market, np.nan)).fill_nan(None)
+
+
+def _earnings_news() -> list[pl.Expr]:
+    """Earnings and revenue surprises (scaled) and days since the filing."""
+    c = pl.col
+    return [
+        pl.when(c("market_value") > 0)
+        .then(c("_d_net_income") / c("market_value"))
+        .alias("earnings_surprise"),
+        pl.when(c("revenue_py") > 0)
+        .then(c("_d_revenue") / c("revenue_py"))
+        .alias("revenue_surprise"),
+        (c("date") - c("filed")).dt.total_days().cast(pl.Float64).alias("days_since_filing"),
+    ]
+
+
 def build_features(
     panel: Panel,
     states: pl.DataFrame,
     tickers: pl.DataFrame,
     companies: pl.DataFrame | None = None,
     fscores: pl.DataFrame | None = None,
-    start: date = date(2017, 1, 1),
+    start: date | None = None,
 ) -> pl.DataFrame:
     """Monthly feature panel (see module docs).
 
@@ -195,16 +278,17 @@ def build_features(
         tickers: symbol -> cik map.
         companies: SEC profiles with ``cik`` and ``sic`` (for industry features).
         fscores: Point-in-time F-scores by symbol (symbol, filed, fscore, n_signals).
-        start: First month end.
+        start: First month end (default: the first with a year of price history).
 
     Returns:
         date, symbol, sic2, market_value, the features, and ``fscore``.
     """
-    grid = _price_grid(panel, start)
-    by_symbol = states.join(tickers, on="cik").drop("accn", "form")
+    grid = _price_grid(panel, start or panel.dates[0])
+    by_symbol = _with_changes(states).join(tickers, on="cik").drop("accn", "form")
     grid = _asof(grid, by_symbol, MAX_FILING_AGE_DAYS)
     grid = grid.with_columns(_market_value(grid, panel))
     grid = grid.with_columns(_fundamental_features())
+    grid = grid.with_columns(_filing_reaction(grid, panel), *_earnings_news())
     if fscores is not None:
         scored = fscores.filter(pl.col("n_signals") >= 8).select("symbol", "filed", "fscore")
         scored = scored.with_columns(pl.col("fscore").cast(pl.Float64))
@@ -216,14 +300,20 @@ def build_features(
         group = ("date", "sic2")
         enough = pl.col("sic2").is_not_null() & (pl.len().over(group) >= MIN_INDUSTRY)
         grid = grid.with_columns(
-            pl.when(enough)
-            .then(pl.col(c).rank().over(group) / pl.col(c).count().over(group))
-            .alias(f"{c}_ind")
-            for c in INDUSTRY_RELATIVE
+            *[
+                pl.when(enough)
+                .then(pl.col(c).rank().over(group) / pl.col(c).count().over(group))
+                .alias(f"{c}_ind")
+                for c in INDUSTRY_RELATIVE
+            ],
+            pl.when(enough).then(pl.col("ret_1m").mean().over(group)).alias("ind_mom_1m"),
+            pl.when(enough).then(pl.col("ret_6m").mean().over(group)).alias("ind_mom_6m"),
         )
     lead = ["date", "symbol", *(["sic2"] if "sic2" in grid.columns else []), "market_value"]
     rest = [
         c for c in grid.columns
-        if not c.startswith("_") and c not in by_symbol.columns and c not in (*lead, "close")
+        if not c.startswith("_")
+        and c not in by_symbol.columns
+        and c not in (*lead, "close", "ret_6m")
     ]  # fmt: skip
     return grid.select(*lead, *rest).sort("date", "symbol")

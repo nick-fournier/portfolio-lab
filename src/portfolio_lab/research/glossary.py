@@ -195,6 +195,92 @@ GLOSSARY: dict[str, Entry] = {
         "liquid ones have done better recently.",
         "unclear",
     ),
+    "ret_1w": Entry(
+        "Return over the past week (5 trading days).",
+        "Very short-term reversal: last week's biggest movers partly reverse as temporary "
+        "buying or selling pressure fades.",
+        "lower",
+    ),
+    "high_52w": Entry(
+        "How far the price is below its highest level of the past year (0 = at the high).",
+        "Stocks near their 52-week high keep rising: investors anchor on the high and are slow "
+        "to push the price through it on good news (George and Hwang, 2004).",
+    ),
+    "idio_vol": Entry(
+        "Standard deviation of daily returns over the past year after removing the part "
+        "explained by the market (SPY).",
+        "Stock-specific risk: stocks with large idiosyncratic swings have earned less, "
+        "another lottery-like effect (Ang et al., 2006).",
+        "lower",
+    ),
+    "liquidity_trend": Entry(
+        "Change in the logarithm of median daily dollar volume from six months ago to now.",
+        "Rising trading interest often follows news or attention; its sign for returns is "
+        "mixed (attention can mean buying pressure now and reversal later).",
+        "unclear",
+    ),
+    "earnings_surprise": Entry(
+        "The latest quarter's net income minus the same quarter a year earlier, divided by "
+        f"{_MARKET_VALUE}; from consecutive trailing-twelve-month figures in the filings.",
+        "Post-earnings drift: prices under-react to earnings news, so stocks with good "
+        "surprises keep drifting up for weeks (Ball and Brown, 1968; Bernard and Thomas).",
+    ),
+    "revenue_surprise": Entry(
+        "The latest quarter's revenue minus the same quarter a year earlier, divided by the "
+        "revenue of the twelve months a year earlier.",
+        "Revenue news is harder to manage than earnings, and prices under-react to it too.",
+    ),
+    "filing_reaction": Entry(
+        "The stock's return minus the market's over the 10 trading days before the latest "
+        "10-Q or 10-K filing and the day after (earnings releases usually fall in that window).",
+        "How the market took the latest results. Strong reactions to earnings tend to "
+        "continue (earnings-announcement drift).",
+    ),
+    "days_since_filing": Entry(
+        "Calendar days since the latest 10-Q or 10-K was filed.",
+        "Earnings news is priced in over weeks; drift is strongest soon after the filing. "
+        "Mainly useful in combination with the surprise measures.",
+        "unclear",
+    ),
+    "ind_mom_1m": Entry(
+        "Average return over the past month of the stocks in the same industry (SIC major group).",
+        "Industry news spreads slowly across related stocks, so industries that did well "
+        "keep doing well in the short run (Moskowitz and Grinblatt, 1999).",
+    ),
+    "ind_mom_6m": Entry(
+        "Average return over the past six months of the stocks in the same industry (SIC "
+        "major group).",
+        "Industry momentum: much of stock momentum is industry momentum, which persists for "
+        "months (Moskowitz and Grinblatt, 1999).",
+    ),
+    "insider_buy": Entry(
+        "Open-market purchases by the company's officers, directors and 10% owners over the "
+        f"past six months (Form 4 filings), divided by {_MARKET_VALUE}.",
+        "Insiders sell for many reasons but buy for one: they expect the price to rise. "
+        "Insider purchases have predicted returns, especially in small firms (Lakonishok and "
+        "Lee, 2001).",
+    ),
+    "insider_net": Entry(
+        "Insider open-market purchases minus sales over the past six months, divided by "
+        f"{_MARKET_VALUE}.",
+        "Net insider buying: the purchases carry the signal, the sales mostly noise "
+        "(diversification, taxes), so this is weaker than purchases alone.",
+    ),
+    "insider_buys": Entry(
+        "Logarithm of 1 + the number of insider open-market purchases in the past six months.",
+        "Several insiders buying at once (a cluster) is a stronger signal than one purchase.",
+    ),
+    "inst_breadth_1y": Entry(
+        "Change in the number of institutions holding the stock (13F filings) versus a year "
+        "earlier, counted from 45 days after each quarter end when filings are due.",
+        "Breadth of ownership: when more institutions pile in, returns have tended to follow; "
+        "falling breadth means informed money leaving (Chen, Hong and Stein, 2002).",
+    ),
+    "inst_breadth_1q": Entry(
+        "Change in the number of institutions holding the stock (13F filings) versus a "
+        "quarter earlier, counted from 45 days after each quarter end.",
+        "The recent direction of institutional interest (see inst_breadth_1y).",
+    ),
     # Return forecasts behind mean-variance.
     "forecast (model=historical_mean)": Entry(
         "Each stock's average annual return over the past year.",

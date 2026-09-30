@@ -45,6 +45,13 @@ def _poisoned(panel: Panel, after: int, seed: int = 1) -> Panel:
         poisoned.features = panel.features.with_columns(
             pl.when(pl.col("date") > asof).then(-1e9).otherwise(pl.col(c)).alias(c) for c in numeric
         )
+    if panel.predictions is not None:  # future predictions reversed
+        poisoned.predictions = panel.predictions.with_columns(
+            pl.when(pl.col("date") > asof)
+            .then(-pl.col("score"))
+            .otherwise(pl.col("score"))
+            .alias("score")
+        )
     return poisoned
 
 
