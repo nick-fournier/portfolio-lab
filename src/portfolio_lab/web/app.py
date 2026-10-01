@@ -5,10 +5,14 @@ job status files. It never imports strategy code, so any strategy's runs render 
 way. plotly.js is served from the installed ``plotly`` package; no chart CDN is needed.
 """
 
+import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import plotly
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -37,13 +41,29 @@ def create_app(data_dir: Path) -> FastAPI:
     Args:
         data_dir: The data directory (mounted read-only in production).
     """
-    app = FastAPI(title="Portfolio lab", docs_url=None, redoc_url=None, openapi_url=None)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        # Build the heavy pages in the background, so the first visit is fast.
+        def prewarm() -> None:
+            overview.page_context(Path(data_dir))
+            compare.page_context(Path(data_dir))
+            signals.page_context(Path(data_dir))
+
+        threading.Thread(target=prewarm, daemon=True).start()
+        yield
+
+    app = FastAPI(
+        title="Portfolio lab", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan
+    )
     templates = Jinja2Templates(directory=HERE / "templates")
     templates.env.filters["pct"] = _pct
     templates.env.filters["num"] = _num
+    templates.env.globals["plotly_version"] = plotly.__version__
     app.state.data_dir = Path(data_dir)
     app.state.templates = templates
 
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
     @app.get("/vendor/plotly.min.js", include_in_schema=False)
@@ -52,7 +72,8 @@ def create_app(data_dir: Path) -> FastAPI:
         return FileResponse(
             PLOTLY_JS,
             media_type="text/javascript",
-            headers={"Cache-Control": "public, max-age=86400"},
+            # Pages request it as ?v=<version>, so it can be cached for good.
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
         )
 
     app.include_router(overview.router)

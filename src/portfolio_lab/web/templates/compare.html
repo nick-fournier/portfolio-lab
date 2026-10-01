@@ -1,93 +1,22 @@
 {% extends "base.html" %}
 {% block title %}Make vs buy · Portfolio lab{% endblock %}
-{% block head %}<script src="/vendor/plotly.min.js" defer></script>{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js?v={{ plotly_version }}" defer></script>{% endblock %}
 {% block content %}
 <h1>Make vs buy</h1>
-<p class="lede">Is running our own strategies worth it compared with simply buying a fund?
-  Passive index funds, factor funds, active ETFs, closed-end funds, big active mutual funds and
-  Berkshire Hathaway, measured the same way as our strategies.</p>
+<p class="lede">Our strategies against funds anyone can buy.</p>
+{% if rows %}
+<p class="caveats">Not a fair fight yet: funds are real money after fees; ours are backtests
+  chosen with hindsight, before tax.</p>
 
-<p class="caveats">Not yet a fair fight. The funds are real money after real fees. Our
-  strategies are backtests with modeled trading costs, chosen with hindsight on this same
-  period, paying no management fee and no tax. Monthly rebalancing realizes short-term gains
-  taxed as income, while an index fund defers almost all of its tax. A small edge over a cheap
-  index fund can vanish after tax. Closed-end funds are measured at their market price, which
-  can drift away from the value of their holdings.</p>
-
-{% if periods %}
-{% if pairs %}
-<h2>Head to head <span class="muted">(since {{ common_start }})</span></h2>
-<div class="table-wrap labelled"><table>
-  <thead><tr><th>Ours vs the fund it competes with</th><th class="num">Return / yr</th>
-    <th class="num">Sharpe</th><th class="num">Worst drop</th></tr></thead>
-  <tbody>{% for p in pairs %}
-    <tr><td><b>{{ p.ours.name }}</b></td><td class="num">{{ p.ours.cagr | pct }}</td>
-      <td class="num">{{ p.ours.sharpe | num }}</td><td class="num neg">{{ p.ours.max_drawdown | pct }}</td></tr>
-    <tr><td class="muted">vs {{ p.fund.name }} ({{ p.fund.key }})</td><td class="num">{{ p.fund.cagr | pct }}</td>
-      <td class="num">{{ p.fund.sharpe | num }}</td><td class="num neg">{{ p.fund.max_drawdown | pct }}</td></tr>
-  {% endfor %}</tbody>
-</table></div>
-{% endif %}
-
-{% if chart %}
-<h2>Growth of $1 <span class="muted">(since {{ chart_start }})</span></h2>
-<p class="muted">{% if chart_is_history %}Our strategies backtested on the survivorship-free
-  1998+ history, funds at their real prices, log scale. {% endif %}SPY (dotted), QQQ, the best
-  fund and our three best strategies are drawn; tap a name in the legend to show the others.</p>
+<h2>Growth of $1 <span class="muted">(since {{ since }})</span></h2>
 <div id="growth" class="chart tall"></div>
-{% endif %}
 
-{% for period in periods %}
-<h2>{{ period.title }}</h2>
-<div class="table-wrap wrap-head"><table>
-  <thead><tr><th>Fund or strategy</th><th>Type</th><th class="num">Return / yr</th>
-    <th class="num">Sharpe</th><th class="num">Worst drop</th><th class="num">Volatility</th>
-    <th class="num">Beta</th><th class="num">Alpha vs SPY</th><th class="num">From</th></tr></thead>
-  <tbody>{% for r in period.rows %}<tr{% if r.category == "ours" %} class="ours"{% endif %}>
-    <td>{% if r.category == "ours" %}<b>{{ r.name }}</b>{% else %}{{ r.name }} <span class="muted">{{ r.key }}</span>{% endif %}</td>
-    <td class="muted">{{ categories[r.category] }}</td>
-    <td class="num">{{ r.cagr | pct }}</td><td class="num">{{ r.sharpe | num }}</td>
-    <td class="num neg">{{ r.max_drawdown | pct }}</td><td class="num">{{ r.volatility | pct }}</td>
-    <td class="num">{{ r.beta | num }}</td><td class="num">{{ r.alpha | pct }}</td>
-    <td class="num muted">{{ r.start }}</td></tr>{% endfor %}</tbody>
-</table></div>
-{% endfor %}
-{% if history %}
-<h2>Since 1999, on a survivorship-free history</h2>
-<p class="muted">Backtests on Sharadar's 1998+ data (dead stocks included) against each fund
-  over its own lifetime: the fund's return per year beside ours over exactly the same days.</p>
-<div class="table-wrap"><table>
-  <thead><tr><th>Ours</th><th class="num">Return / yr</th><th class="num">Sharpe</th>
-    <th class="num">Worst drop</th><th class="num">From</th></tr></thead>
-  <tbody>{% for r in history.ours %}<tr class="ours"><td><b>{{ r.name }}</b></td>
-    <td class="num">{{ r.cagr | pct }}</td><td class="num">{{ r.sharpe | num }}</td>
-    <td class="num neg">{{ r.max_drawdown | pct }}</td><td class="num muted">{{ r.start }}</td></tr>{% endfor %}</tbody>
-</table></div>
-<div class="table-wrap wrap-head"><table>
-  <thead><tr><th>Fund</th><th class="num">Since</th><th class="num">Fund / yr</th>
-    <th class="num">Ours / yr, same days</th><th class="num">Edge</th>
-    <th class="num">Fund worst drop</th><th class="num">Ours worst drop</th></tr></thead>
-  <tbody>{% for r in history.funds %}<tr>
-    <td>{{ r.name }} <span class="muted">{{ r.key }}</span></td><td class="num muted">{{ r.start }}</td>
-    <td class="num">{{ r.cagr | pct }}</td><td class="num">{{ r.ours_cagr | pct }}</td>
-    <td class="num">{{ r.edge | pct }}</td><td class="num neg">{{ r.max_drawdown | pct }}</td>
-    <td class="num neg">{{ r.ours_drop | pct }}</td></tr>{% endfor %}</tbody>
-</table></div>
-<p class="muted">"Ours" in the head-to-head is {{ history.ours_name }}.</p>
-{% endif %}
-
-<p class="muted">Fund returns include reinvested distributions and are after the fund's own
-  fees. Ours are after modeled trading costs. Sharpe uses the 3-month T-bill rate; beta and
-  alpha are measured against SPY.</p>
+<h2>Returns</h2>
+{% with show_type=true %}{% include "_horizons.html" %}{% endwith %}
+<script>
+  document.addEventListener("DOMContentLoaded", () => drawPlot("growth", {{ chart | safe }}));
+</script>
 {% else %}
 <p class="muted">No comparison yet (<code>plab make-vs-buy</code>).</p>
-{% endif %}
-
-{% if chart %}
-<script>
-  document.addEventListener("DOMContentLoaded", () => {
-    drawPlot("growth", {{ chart | safe }});
-  });
-</script>
 {% endif %}
 {% endblock %}

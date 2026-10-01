@@ -1,8 +1,14 @@
 """Plotly figures for a backtest run, returned as JSON for plotly.js in the browser."""
 
+import functools
+import json
+
 import numpy as np
 import plotly.graph_objects as go
+import plotly.io as pio
 import polars as pl
+
+from portfolio_lab.web.series import Series, weekly
 
 # Titles live in the page (HTML headings), not in the figure, and the legend sits below the
 # plot area, so neither can cover the data on narrow (mobile) screens.
@@ -24,23 +30,45 @@ _LINE = {"width": 1.4}
 _REFERENCE = {"color": "#6e7781", "dash": "dot", "width": 1.4}
 
 
+#: Zoom buttons on long charts: 1, 5 and 10 years back from the end, and everything.
+RANGE_BUTTONS = {
+    "buttons": [
+        {"count": 1, "label": "1Y", "step": "year", "stepmode": "backward"},
+        {"count": 5, "label": "5Y", "step": "year", "stepmode": "backward"},
+        {"count": 10, "label": "10Y", "step": "year", "stepmode": "backward"},
+        {"step": "all", "label": "Max"},
+    ],
+    "x": 0, "y": 1.02, "xanchor": "left", "yanchor": "bottom", "font": {"size": 11},
+}  # fmt: skip
+
+
 def equity_figure(daily: pl.DataFrame, strategy: str, benchmark: str) -> str:
-    """Growth of $1 for the strategy and its benchmark, log scale."""
-    fig = go.Figure(layout=_LAYOUT)
-    fig.add_scatter(x=daily["date"].to_list(), y=daily["nav"].to_list(), name=strategy)
+    """Growth of $1 for the strategy and its benchmark, log scale, weekly points."""
+    frame = daily.select("date", "nav")
     if "benchmark_ret" in daily.columns:
-        bench = np.cumprod(1 + daily["benchmark_ret"].to_numpy())
-        fig.add_scatter(x=daily["date"].to_list(), y=bench.tolist(), name=benchmark)
-    fig.update_layout(yaxis_type="log")
+        frame = frame.with_columns((1 + daily["benchmark_ret"]).cum_prod().alias("bench"))
+    frame = weekly(frame)
+    fig = go.Figure(layout=_LAYOUT)
+    fig.add_scatter(x=frame["date"].to_list(), y=frame["nav"].round(4).to_list(), name=strategy)
+    if "bench" in frame.columns:
+        fig.add_scatter(
+            x=frame["date"].to_list(), y=frame["bench"].round(4).to_list(), name=benchmark
+        )
+    fig.update_layout(yaxis_type="log", xaxis={"rangeselector": RANGE_BUTTONS})
     return fig.to_json()
 
 
 def drawdown_figure(daily: pl.DataFrame) -> str:
-    """Percentage below the running peak of NAV."""
+    """Percentage below the running peak of NAV (weekly points, each week's low)."""
     nav = daily["nav"].to_numpy()
-    drawdown = nav / np.maximum.accumulate(np.r_[1.0, nav])[1:] - 1
+    frame = daily.select("date").with_columns(
+        pl.Series("drawdown", nav / np.maximum.accumulate(np.r_[1.0, nav])[1:] - 1)
+    )
+    frame = frame.group_by_dynamic("date", every="1w").agg(pl.col("drawdown").min())
     fig = go.Figure(layout=_LAYOUT)
-    fig.add_scatter(x=daily["date"].to_list(), y=drawdown.tolist(), fill="tozeroy", name="drawdown")
+    fig.add_scatter(x=frame["date"].to_list(), y=frame["drawdown"].round(4).to_list(),
+                    fill="tozeroy",
+                    name="drawdown")  # fmt: skip
     fig.update_layout(yaxis_tickformat=".0%", showlegend=False)
     return fig.to_json()
 
@@ -122,7 +150,7 @@ def cumulative_ic_figure(scores: pl.DataFrame) -> str:
     for (signal,), rows in sorted(scores.sort("date").group_by("signal", maintain_order=True)):
         fig.add_scatter(
             x=rows["date"].to_list(),
-            y=rows["ic"].cum_sum().to_list(),
+            y=rows["ic"].cum_sum().round(4).to_list(),
             name=signal,
             mode="lines",
             line=_LINE,
@@ -193,11 +221,58 @@ def growth_figure(
     for key in sorted(by_key, key=rank):
         rows, shown = by_key[key], key in visible
         fig.add_scatter(
-            x=rows["date"].to_list(), y=rows["growth"].to_list(), name=names.get(key, key),
+            x=rows["date"].to_list(), y=rows["growth"].round(4).to_list(), name=names.get(key, key),
             line=_REFERENCE if key == reference else _LINE,
             visible=True if shown else "legendonly",
             legendgroup="shown" if shown else groups.get(key, "other"),
             legendgrouptitle_text="Drawn" if shown else groups.get(key, "Other"),
         )  # fmt: skip
-    fig.update_layout(yaxis_type="log", legend={**_LAYOUT["legend"], "groupclick": "toggleitem"})
+    fig.update_layout(
+        yaxis_type="log",
+        legend={**_LAYOUT["legend"], "groupclick": "toggleitem"},
+        xaxis={"rangeselector": RANGE_BUTTONS},
+    )
     return fig.to_json()
+
+
+@functools.cache
+def _white_template() -> dict:
+    """The plotly_white theme as plain JSON (built once; it is the slow part of a figure)."""
+    return go.layout.Template(pio.templates["plotly_white"]).to_plotly_json()
+
+
+def series_figure(
+    series: list[Series], visible: set[str], groups: dict[str, str] | None = None
+) -> str | None:
+    """Growth of $1 for ``web.series.Series`` objects: weekly points, log scale, zoom buttons.
+
+    Same look as :func:`growth_figure`, but written as plain JSON: building a plotly Figure
+    validates every point, which took about a second for the Compare page.
+    """
+    if not series:
+        return None
+    groups = groups or {}
+    order = list(dict.fromkeys(groups.values()))
+
+    def rank(s: Series) -> tuple:
+        group = groups.get(s.key, "")
+        return (s.key not in visible, order.index(group) if group in order else len(order),
+                s.name)  # fmt: skip
+
+    traces = []
+    for s in sorted(series, key=rank):
+        points = weekly(s.daily)
+        shown = s.key in visible
+        traces.append({
+            "type": "scatter", "mode": "lines", "name": s.name,
+            "x": [d.isoformat() for d in points["date"].to_list()],
+            "y": points["growth"].round(4).to_list(),
+            "line": _REFERENCE if s.key == "SPY" else _LINE,
+            "visible": True if shown else "legendonly",
+            "legendgroup": "shown" if shown else groups.get(s.key, "other"),
+            "legendgrouptitle": {"text": "Drawn" if shown else groups.get(s.key, "Other")},
+        })  # fmt: skip
+    layout = {**_LAYOUT, "yaxis": {"type": "log"}, "xaxis": {"rangeselector": RANGE_BUTTONS},
+              "legend": {**_LAYOUT["legend"], "groupclick": "toggleitem"}}  # fmt: skip
+    layout["template"] = _white_template()
+    return json.dumps({"data": traces, "layout": layout})

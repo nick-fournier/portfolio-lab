@@ -1,12 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Models · Portfolio lab{% endblock %}
-{% block head %}<script src="/vendor/plotly.min.js" defer></script>{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js?v={{ plotly_version }}" defer></script>{% endblock %}
 {% block content %}
 <h1>Models</h1>
-<p class="lede">Instead of one hand-built score, these models learn how to combine every stock
-  trait (and, for the tree model, the market environment) into a probability that the stock
-  beats the median stock over the next month or quarter. Each January a model is trained only
-  on earlier months, then judged on the year it never saw.</p>
+<p class="lede">Models combining every stock trait into a probability of beating the median
+  stock next month or quarter, trained each January on earlier years only.</p>
 
 {% if sections %}
 {% for s in sections %}
@@ -32,33 +30,20 @@
 
 {% if s.calibration %}
 <h3>Does a stated probability come true?</h3>
-<p class="muted">Each point groups a tenth of all predictions by stated probability. On the
-  dotted line a stated 55% comes true 55% of the time; "+cal" is the calibrated version.</p>
+<p class="muted">On the dotted line a stated 55% comes true 55% of the time.</p>
 <div id="cal-{{ s.key }}" class="chart"></div>
 {% endif %}
 {% if s.importance %}
 <h3>What the tree model relies on</h3>
-<p class="muted">How much ranking accuracy falls when one input is shuffled (environment series
-  grouped), averaged over test years. Larger = relied on more.</p>
+<p class="muted">Drop in ranking accuracy when an input is shuffled.</p>
 <div id="imp-{{ s.key }}" class="chart auto"></div>
 {% endif %}
 {% endfor %}
 
-<h2>Reading this</h2>
-<ul class="prose">
-  <li><b>AUC</b>: the chance that, of two stocks, the model rates higher the one that then did
-    better. 0.5 is a coin flip; at monthly horizons 0.52 is a useful edge, because it repeats
-    across thousands of stocks.</li>
-  <li><b>Top / bottom tenth</b>: each month, how often the tenth of stocks rated most likely to
-    beat the median did so, and how often the least likely tenth lagged. This is what a
-    portfolio would hold or avoid, and does not depend on calibration.</li>
-  <li><b>Calibration error</b>: the average gap between stated and realized probabilities; the
-    arrow shows it after calibration (re-mapped using only earlier years' outcomes). Honest
-    probabilities for single stocks sit close to 50%: the reliability comes from breadth, many
-    small edges at once, not from certainty about any one stock.</li>
-  <li>Models are named in the <a href="/signals#glossary">glossary</a>; their monthly IC is also on
-    the <a href="/signals">scoreboard</a>.</li>
-</ul>
+<p class="muted">AUC: chance the model ranks the later winner higher (0.5 = coin flip; 0.52 is a
+  useful monthly edge). Top / bottom tenth: how often the best-rated beat and the worst-rated
+  lagged the median. Calibration error: gap between stated and realized probabilities (arrow:
+  after calibration).</p>
 {% else %}
 <p class="muted">No model results yet (<code>plab models</code>).</p>
 {% endif %}

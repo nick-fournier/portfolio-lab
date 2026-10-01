@@ -1,0 +1,14 @@
+{# Horizon table: rows from web.series.table; set show_type to add the fund type column. #}
+<div class="table-wrap labelled"><table>
+  <thead><tr><th>Strategy or fund</th>{% if show_type %}<th>Type</th>{% endif %}
+    <th class="num">1Y</th><th class="num">5Y</th><th class="num">10Y</th><th class="num">20Y</th>
+    <th class="num">Max</th><th class="num">Worst drop</th><th class="num">Sharpe</th><th class="num">Since</th></tr></thead>
+  <tbody>{% for r in rows %}<tr{% if r.category == "ours" %} class="ours"{% endif %}>
+    <td>{% if r.run_id %}<a href="/runs/{{ r.run_id }}">{{ r.name }}</a>{% else %}{{ r.name }}{% endif %}{% if r.category != "ours" and r.key != r.name %} <span class="muted">{{ r.key }}</span>{% endif %}</td>
+    {% if show_type %}<td class="muted">{{ r.type or "" }}</td>{% endif %}
+    {% for h in ("1Y", "5Y", "10Y", "20Y", "Max") %}<td class="num">{{ r[h] | pct }}</td>{% endfor %}
+    <td class="num neg">{{ r.worst_drop | pct(0) }}</td><td class="num">{{ r.sharpe | num }}</td>
+    <td class="num muted">{{ r.since.year }}</td></tr>{% endfor %}</tbody>
+</table></div>
+<p class="muted">Annual return over each period to the latest date. Ours: backtests after
+  trading costs (1999+ on survivorship-free data where available); funds: after their fees.</p>

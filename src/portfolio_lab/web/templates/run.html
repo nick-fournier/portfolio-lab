@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ meta.strategy }} · Portfolio lab{% endblock %}
-{% block head %}<script src="/vendor/plotly.min.js" defer></script>{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js?v={{ plotly_version }}" defer></script>{% endblock %}
 {% block content %}
 <h1>{{ meta.label or meta.strategy }}</h1>
 <p class="muted">Parameters: {% for k, v in meta.params.items() %}{{ k }}={{ v }}{% if not loop.last %} · {% endif %}{% else %}none{% endfor %}</p>

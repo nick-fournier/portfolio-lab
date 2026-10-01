@@ -2,10 +2,8 @@
 {% block title %}Market context · Portfolio lab{% endblock %}
 {% block content %}
 <h1>Market context</h1>
-<p class="lede">The economic backdrop is the same for every stock, so it can't pick stocks by
-  itself. Here it is measured two ways: which stock traits have paid off under which
-  conditions, and how the market fared after similar conditions. None of this times the
-  market; at most it suggests being "a bit more cautious" while the strategies keep running.</p>
+<p class="lede">Which stock traits paid off in which market conditions, and how the market
+  did after similar conditions.</p>
 
 {% if latest %}
 <h2>Today's conditions <span class="muted">(as of {{ latest }})</span></h2>
@@ -23,21 +21,15 @@
     <td class="num">{{ s.change }}</td>
     <td class="num">{{ (s.pct | pct(0)) if s.pct is not none else "–" }}</td></tr>{% endfor %}</tbody>
 </table></div>
-<p class="muted">Values as known on the date: market prices from the day before, economic
-  releases (inflation, jobs, production) as first published, never later revisions.
-  Percentile: where today's value ranks among all values since 2000 (market earnings yield:
-  since 2017).</p>
+<p class="muted">Values as first published; percentile among all values since 2000.</p>
 {% else %}
 <p class="muted">No market context yet (<code>plab ingest macro</code>, then <code>plab features</code>).</p>
 {% endif %}
 
 {% if conditions %}
 <h2>Which traits work when</h2>
-<p>Each cell is a trait's average monthly IC (how well it ranked next month's returns; see
-  <a href="/signals">Signals</a>) in months when the condition was in that range, then its
-  t-stat and number of months. Colored cells are unlikely to be luck (|t| &gt; 2). There are many
-  cells, so expect a few to look significant by chance; a pattern across a whole row is more
-  convincing than one cell.</p>
+<p class="muted">Average monthly IC of each trait in each condition (t-stat, months); colored
+  if |t| &gt; 2. With this many cells a few will look significant by chance.</p>
 {% for c in conditions %}
 <h3>{{ c.name }}</h3>
 <div class="table-wrap"><table>
@@ -52,13 +44,9 @@
 
 {% if dial %}
 <h2>The caution dial</h2>
-<p>How the market (SPY) did over the following 3 and 12 months, depending on the condition at
-  the time: average return, share of periods that ended positive, and the average worst
-  drop along the way.</p>
-<p class="caveats">Our market data starts in 2016, so this covers one long bull market (about
-  nine years, overlapping windows). Over this sample the textbook warnings pointed the wrong
-  way: "expensive" markets were followed by the best returns. It can describe, not predict;
-  a longer history is needed before it adjusts any portfolio.</p>
+<p class="muted">SPY over the next 3 and 12 months by condition: average return, share
+  positive, average worst drop.</p>
+<p class="caveats">One bull market (2016+) only: descriptive, not predictive.</p>
 {% for d in dial %}
 <h3>{{ d.name }}</h3>
 <div class="table-wrap"><table>

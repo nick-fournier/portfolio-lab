@@ -1,31 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Signals · Portfolio lab{% endblock %}
-{% block head %}<script src="/vendor/plotly.min.js" defer></script>{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js?v={{ plotly_version }}" defer></script>{% endblock %}
 {% block content %}
 <h1>Signal scoreboard</h1>
-<p class="lede">Does a model actually predict returns? Each signal predicts a fixed time ahead (a
-  month or a quarter). At the end of every such period it ranks the stocks, using only data
-  up to that day, and the ranking is compared with the returns over the next period. This tests
-  the prediction on its own, before any optimizer, costs or position limits get involved.</p>
+<p class="lede">How well each signal's stock ranking predicted the next period's returns.</p>
 
 <h2>What is IC?</h2>
-<div class="prose">
-<p>The <b>information coefficient</b> measures how well a signal's ranking of stocks matched
-  the ranking of what they actually returned next. For each date:</p>
-<ol>
-  <li>Rank the stocks in the pool by the signal's score (1 = highest predicted return).</li>
-  <li>Rank the same stocks by the return they actually earned over the next period.</li>
-  <li>The IC is the correlation between the two rankings (Spearman rank correlation).</li>
-</ol>
-<p>+1 means the order was predicted perfectly, 0 means no better than shuffling, −1 means
-  exactly backwards. Only the order matters, so one stock that doubles cannot dominate. Each
-  date gives one noisy IC; the table averages them over every date. Useful signals typically
-  average 0.02 to 0.05: small, but repeated across hundreds of stocks and many periods.</p>
-</div>
+<p class="muted">Each date, the rank correlation between the signal's scores and the returns
+  that followed: +1 perfect, 0 none, −1 backwards. Good signals average 0.02–0.05.</p>
 
 {% if sections %}
-<p class="muted">{{ period[0] }} → {{ period[1] }}. Dead companies are included; a stock that fell
-  to over-the-counter trading takes a −30% delisting return.</p>
+<p class="muted">{{ period[0] }} → {{ period[1] }}, dead companies included.</p>
 
 {% for section in sections %}
 <h2>{{ section.title }} <span class="muted">({{ section.horizon }} trading day{{ "s" if section.horizon > 1 }})</span></h2>
@@ -54,23 +39,13 @@
 {% endfor %}
 {% endfor %}
 
-<h2>Reading this</h2>
-<ul class="prose">
-  <li><b>Mean IC</b> is the average IC over every date (see above).</li>
-  <li><b>t-stat</b> is the mean IC over its standard error. Beyond about ±2 (colored) it is
-    unlikely to be luck.</li>
-  <li><b>Top / bottom fifth</b> are annualized returns of the highest- and lowest-scored fifth
-    of stocks, equally weighted, before costs. IC compares rankings while these compare
-    averages, so they can disagree: a few huge winners among volatile stocks lift the average
-    of a group whose typical member lost.</li>
-  <li>In the cumulative chart, a steady climb means persistent skill; a flat or wandering line
-    means none.</li>
-</ul>
+<p class="muted">t-stat beyond ±2 (colored) is unlikely to be luck. Top / bottom fifth: annual
+  return of the best- and worst-scored fifth, before costs. A steady climb in cumulative IC
+  means persistent skill.</p>
 {% if glossary %}
 <h2 id="glossary">Glossary</h2>
-<p class="muted">What each signal measures, why it might predict returns, and which direction
-  research leads us to expect. For "lower is better" signals a negative IC is the expected
-  result.</p>
+<p class="muted">What each signal measures and why. For "lower is better" signals a negative IC
+  is expected.</p>
 <dl class="glossary">
   {% for g in glossary %}
   <dt id="{{ g.anchor }}">{{ g.label }} <span class="muted">({{ g.expect }})</span></dt>

@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import polars as pl
 import pytest
@@ -67,7 +67,7 @@ def client(tmp_path):
 def test_overview_compares_strategies(client):
     page = client.get("/")
     assert page.status_code == 200
-    for expected in ("equal_weight", "buy_hold", "Growth of $1", "#holdings", "How it works"):
+    for expected in ("equal_weight", "SPY", "Growth of $1", "Returns", "How it works"):
         assert expected in page.text
 
 
@@ -146,10 +146,9 @@ def test_signals_page(client, tmp_path):
         assert expected in page.text
 
 
-def test_overview_drops_benchmark_line_duplicated_by_buy_hold(client):
+def test_overview_lists_the_market_once(client):
     page = client.get("/").text
-    assert "buy_hold (SPY)" in page
-    assert "SPY (benchmark)" not in page  # buy_hold already is the SPY line
+    assert page.count(">SPY<") == 1  # buy-and-hold SPY is the market row, not a strategy
 
 
 def test_run_page_explains_the_run(tmp_path):
@@ -175,7 +174,6 @@ def test_run_page_explains_the_run(tmp_path):
     for expected in ("How this run works", "Portfolio construction", "Worked example",
                      "largest 1 shown", "150.0%", "Compared with related strategies"):  # fmt: skip
         assert expected in page, expected
-    assert "Equal-weights last year" in TestClient(create_app(tmp_path)).get("/").text
 
 
 def test_context_page(client, tmp_path):
@@ -233,40 +231,19 @@ def test_compare_page(client, tmp_path):
     assert "No comparison yet" in client.get("/compare").text
     folder = tmp_path / "results" / "make_vs_buy"
     folder.mkdir(parents=True)
-    base = {"period": "common", "start": date(2021, 6, 15), "end": date(2024, 1, 3),
-            "volatility": 0.2, "beta": 1.0, "alpha": 0.0}  # fmt: skip
-    pl.DataFrame([
-        base | {"key": "SPY", "name": "S&P 500 (SPDR)", "category": "passive", "cagr": 0.13,
-                "sharpe": 0.61, "max_drawdown": -0.25},
-        base | {"key": "MTUM", "name": "US momentum (iShares)", "category": "factor",
-                "cagr": 0.14, "sharpe": 0.54, "max_drawdown": -0.32},
-        base | {"key": "ours: momentum", "name": "momentum", "category": "ours", "cagr": 0.20,
-                "sharpe": 0.57, "max_drawdown": -0.40},
-    ]).write_parquet(folder / "summary.parquet")  # fmt: skip
-    pl.DataFrame(
-        {"date": [date(2021, 6, 15)] * 3, "key": ["SPY", "MTUM", "ours: momentum"],
-         "growth": [1.0, 1.0, 1.0]}
-    ).write_parquet(folder / "growth.parquet")  # fmt: skip
+    days = [date(1999, 1, 4) + timedelta(days=7 * k) for k in range(52 * 12)]
+    growth = {"SPY": 1.08, "MTUM": 1.12, "ours: h": 1.18}  # annual growth rates
+    rows, curves = [], []
+    for key, rate in growth.items():
+        category = {"SPY": "passive", "MTUM": "factor"}.get(key, "ours")
+        rows.append({"key": key, "name": key.removeprefix("ours: "), "category": category,
+                     "period": "full", "start": days[0]})  # fmt: skip
+        curves += [{"date": d, "key": key, "growth": rate ** ((d - days[0]).days / 365.25)}
+                   for d in days]  # fmt: skip
+    pl.DataFrame(rows).write_parquet(folder / "history_summary.parquet")
+    pl.DataFrame(curves).write_parquet(folder / "history_growth.parquet")
     page = client.get("/compare").text
-    for expected in ("Not yet a fair fight", "Head to head", "vs US momentum (iShares) (MTUM)",
-                     "20.0%", "Same period for everyone", "Passive factor funds"):  # fmt: skip
+    for expected in ("Not a fair fight", "Returns", "Passive factor funds", "18.0%", "8.0%",
+                     "since 1999-01-04", ">10Y<", ">20Y<"):  # fmt: skip
         assert expected in page, expected
-    assert "Since 1999" not in page
-    full = {"start": date(1999, 1, 4), "end": date(2026, 9, 30), "volatility": 0.2,
-            "beta": 1.0, "alpha": 0.0, "sharpe": 0.5}  # fmt: skip
-    pl.DataFrame([
-        full | {"key": "SPY", "name": "S&P 500 (SPDR)", "category": "passive", "period": "full",
-                "cagr": 0.087, "max_drawdown": -0.55},
-        full | {"key": "ours: h", "name": "healthy meanvar", "category": "ours",
-                "period": "full", "cagr": 0.173, "max_drawdown": -0.43},
-        full | {"key": "ours: h", "name": "healthy meanvar", "category": "ours",
-                "period": "ours_since:SPY", "cagr": 0.173, "max_drawdown": -0.43},
-    ]).write_parquet(folder / "history_summary.parquet")  # fmt: skip
-    pl.DataFrame(
-        {"date": [date(1999, 1, 4)] * 2, "key": ["SPY", "ours: h"], "growth": [1.0, 1.0]}
-    ).write_parquet(folder / "history_growth.parquet")
-    page = client.get("/compare").text
-    for expected in ("Since 1999", "17.3%", "8.7%", "8.6%", "healthy meanvar",
-                     "since 1999-01-04", "survivorship-free"):  # fmt: skip
-        assert expected in page, expected
-    assert page.count('class="chart tall"') == 1  # one growth chart, now the long history
+    assert page.count('class="chart tall"') == 1
