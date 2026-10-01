@@ -22,6 +22,7 @@ from portfolio_lab.web.routes import (
     context,
     forecasts,
     overview,
+    paper,
     runs,
     signals,
     status,
@@ -93,5 +94,6 @@ def create_app(data_dir: Path) -> FastAPI:
     app.include_router(forecasts.router)
     app.include_router(compare.router)
     app.include_router(taxes.router)
+    app.include_router(paper.router)
     app.include_router(status.router)
     return app

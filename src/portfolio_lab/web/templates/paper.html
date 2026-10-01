@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Paper trading · Portfolio lab{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js" defer></script>{% endblock %}
+{% block content %}
+<h1>Paper trading</h1>
+<p class="lede">The production strategy running on Alpaca's paper account: dummy money, real
+  prices. At each month end it computes the target weights from that day's close and places
+  market orders that fill at the next open, as the backtest assumes. Strategy:
+  <code>{{ strategy }}</code>.</p>
+
+{% if summary %}
+<div class="table-wrap"><table>
+  <tbody>
+    <tr><td>Since</td><td class="num">{{ summary.start }}</td></tr>
+    <tr><td>Equity ({{ summary.date }})</td><td class="num">${{ "{:,.0f}".format(summary.equity) }}</td></tr>
+    <tr><td>Cash</td><td class="num">${{ "{:,.0f}".format(summary.cash) }}</td></tr>
+    <tr><td>Return since start</td><td class="num">{{ summary.ret | pct }}</td></tr>
+  </tbody>
+</table></div>
+
+{% if chart %}
+<h2>Paper vs SPY and the backtest</h2>
+<p class="muted">Growth of $1 since the paper account started. If paper and backtest drift
+  apart, live trading differs from the model (fills, timing, data).</p>
+<div id="growth" class="chart"></div>
+{% endif %}
+
+{% if holdings %}
+<h2>Holdings</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Stock</th><th class="num">Weight now</th><th class="num">Target</th></tr></thead>
+  <tbody>{% for h in holdings %}<tr><td>{{ h.symbol }}</td>
+    <td class="num">{{ h.now | pct if h.now is not none else "–" }}</td>
+    <td class="num">{{ h.target | pct if h.target is not none else "–" }}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endif %}
+
+{% if orders %}
+<h2>Orders of the {{ last_rebalance }} rebalance</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Stock</th><th>Side</th><th class="num">Amount</th><th>Status</th>
+    <th class="num">Fill price</th></tr></thead>
+  <tbody>{% for o in orders %}<tr><td>{{ o.symbol }}</td><td>{{ o.side }}</td>
+    <td class="num">{% if o.notional is not none %}${{ "{:,.0f}".format(o.notional) }}{% elif o.qty is not none %}{{ "%g" | format(o.qty) }} sh{% else %}–{% endif %}</td>
+    <td>{{ o.status }}</td>
+    <td class="num">{{ "%.2f" | format(o.filled_avg_price) if o.filled_avg_price is not none else "–" }}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endif %}
+{% else %}
+<p class="muted">No paper account records yet: the nightly job starts them after the next
+  completed session (<code>plab paper</code> runs it by hand; <code>plab paper --dry-run</code>
+  shows the orders a rebalance would place).</p>
+{% endif %}
+
+{% if chart %}
+<script>
+  document.addEventListener("DOMContentLoaded", () => drawPlot("growth", {{ chart | safe }}));
+</script>
+{% endif %}
+{% endblock %}

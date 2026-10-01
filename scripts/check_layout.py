@@ -85,6 +85,7 @@ def pages(base: str) -> list[str]:
         "/forecasts",
         "/compare",
         "/taxes",
+        "/paper",
         "/status",
         "/about",
     ]

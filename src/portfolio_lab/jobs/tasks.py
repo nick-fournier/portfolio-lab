@@ -43,6 +43,8 @@ from portfolio_lab.research.piotroski import build_fscores, fscores_by_symbol
 from portfolio_lab.research.scoreboard import HORIZON, evaluate, summarize
 from portfolio_lab.signals import base as signals
 from portfolio_lab.strategies.base import create
+from portfolio_lab.trading import paper
+from portfolio_lab.trading.broker import PaperBroker
 
 log = logging.getLogger(__name__)
 
@@ -463,3 +465,21 @@ def make_vs_buy_history_task(settings: Settings, publish: Path | None = None) ->
         write_parquet_atomic(summary, folder / "history_summary.parquet")
         write_parquet_atomic(growth, folder / "history_growth.parquet")
     return {"runs": ours, "series": len(series)}
+
+
+#: The strategy the paper account follows: production.
+PAPER_STRATEGY: tuple[str, dict[str, Any]] = PRODUCTION
+
+
+def paper_task(settings: Settings, dry_run: bool = False) -> dict:
+    """Record the paper account and rebalance it at month ends (``trading.paper``)."""
+    name, params = PAPER_STRATEGY
+    strategy = _attach_runtime(create(name, **params), settings)
+    broker = PaperBroker(settings)
+    try:
+        return paper.run(settings.data_dir, strategy, broker,
+                         refresh=lambda: features_task(settings), dry_run=dry_run)  # fmt: skip
+    finally:
+        broker.close()
+        if callable(close := getattr(strategy, "close", None)):
+            close()
