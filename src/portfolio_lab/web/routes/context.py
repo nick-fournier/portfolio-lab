@@ -1,11 +1,16 @@
-"""Market context page: today's conditions, which traits work when, and the caution dial."""
+"""Market context page: production's market read and today's conditions.
+
+Also how stock traits and the market behaved in similar conditions before.
+"""
 
 import math
+from pathlib import Path
 
 import polars as pl
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
+from portfolio_lab.backtest.results import list_runs
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.research.conditions import CONDITIONS, current_conditions
 
@@ -110,27 +115,57 @@ def _conditions(table: pl.DataFrame) -> list[dict]:
     return out
 
 
+#: What production does in each market state (``research.regimes``).
+STATE_TEXT = {
+    "normal": "Normal market: production holds its usual best-return-per-risk mix.",
+    "bear": "Bear market (S&P 500 below its 200-day average for three month ends and 15%+ off "
+    "its high): production holds its lowest-risk mix.",
+    "rebound": "Rebound (20%+ off the high with fear easing): production holds its candidates "
+    "in equal weights, since beaten-down stocks tend to lead the bounce.",
+}
+
+
+def _market_state(data_dir: Path) -> dict | None:
+    """Production's market read at its latest rebalance (from the run's diagnostics)."""
+    for run in list_runs(data_dir, latest_only=True):
+        meta = run["meta"]
+        if meta["strategy"] != "meanvar" or not meta.get("params", {}).get("bear_defense"):
+            continue
+        states = [g for g in meta.get("diagnostics", {}).get("gauge", []) if "state" in g]
+        if states:
+            last = states[-1]
+            return {"date": last["date"], "state": last["state"],
+                    "text": STATE_TEXT.get(last["state"], "")}  # fmt: skip
+    return None
+
+
 @router.get("/context", response_class=HTMLResponse)
 def context(request: Request) -> HTMLResponse:
     """Render the market context page from the stored environment and measurements."""
-    paths = DataPaths(request.app.state.data_dir)
+    data_dir = request.app.state.data_dir
+    paths = DataPaths(data_dir)
     env = pl.read_parquet(paths.environment) if paths.environment.exists() else None
     has_env = env is not None and env.height > 0
     dial = pl.read_parquet(paths.context_dial) if paths.context_dial.exists() else None
+    now = _now(env) if has_env else []
+    current = {c["condition"]: c["bucket"] for c in now}
+    conditions = (
+        _conditions(pl.read_parquet(paths.context_conditions))
+        if paths.context_conditions.exists() else []
+    )  # fmt: skip
+    for c in conditions:
+        c["current"] = current.get(c["name"])
+        c["dial"] = (
+            dial.filter(pl.col("condition") == c["name"]).to_dicts() if dial is not None else []
+        )
     return request.app.state.templates.TemplateResponse(
         request,
         "context.html",
         {
             "latest": env["date"].max() if has_env else None,
+            "state": _market_state(data_dir),
             "snapshot": _snapshot(env.row(-1, named=True)) if has_env else [],
-            "now": _now(env) if has_env else [],
-            "conditions": _conditions(pl.read_parquet(paths.context_conditions))
-            if paths.context_conditions.exists()
-            else [],
-            "dial": [
-                {"name": n, "rows": dial.filter(pl.col("condition") == n).to_dicts()}
-                for n in CONDITIONS
-                if dial is not None and dial.filter(pl.col("condition") == n).height
-            ],
+            "now": now,
+            "conditions": conditions,
         },
     )

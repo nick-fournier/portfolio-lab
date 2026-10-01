@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from portfolio_lab.core.calendar import last_complete_session
+from portfolio_lab.core.calendar import PRICE_UPDATE_DELAY, last_complete_session
 from portfolio_lab.core.config import Settings
 from portfolio_lab.core.store import write_status
 from portfolio_lab.jobs import tasks
@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 
 STATE_JOB = "scheduler"
 #: Daily ingest waits until 20:00 New York time (4h after the close) for late prints.
-INGEST_BUFFER = timedelta(hours=4)
+INGEST_BUFFER = PRICE_UPDATE_DELAY
 WEEKLY = timedelta(days=7)
 #: After a failure, wait this long before trying the job again.
 RETRY_AFTER = timedelta(minutes=30)

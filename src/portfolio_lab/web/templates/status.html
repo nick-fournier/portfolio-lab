@@ -1,7 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Data status · Portfolio lab{% endblock %}
 {% block content %}
-<h1>Data status <span class="badge {{ freshness }}">prices {{ freshness }}</span></h1>
+<h1>Data status</h1>
+{% set f = freshness %}
+{% if f.state == "missing" %}<p class="lede neg">No prices yet.</p>
+{% else %}<p class="lede">Prices through {{ f.through.strftime("%a %b %-d") }}.
+  {% if f.state == "late" %}<span class="neg">The update due {{ f.next.strftime("%a %b %-d, %-I %p") }} ET hasn't run; see the scheduler below.</span>
+  {% else %}Next update {{ f.next.strftime("%a %b %-d, around %-I %p") }} ET, after that day's close.{% endif %}</p>
+{% endif %}
 
 <h2>Data jobs</h2>
 <div class="table-wrap"><table>

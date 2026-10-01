@@ -11,7 +11,7 @@
 {% if rows %}{% with show_type=false %}{% include "_horizons.html" %}{% endwith %}
 {% else %}<p class="muted">No backtests yet.</p>{% endif %}
 
-<p class="muted">Data through {{ data_through or "–" }} · prices <span class="badge {{ freshness }}">{{ freshness }}</span> · <a href="/status">data status</a> · <a href="/runs">all runs</a></p>
+<p class="muted">Data through {{ data_through or "–" }}{% if freshness.state == "late" %} · <span class="neg">update overdue</span>{% endif %} · <a href="/status">data status</a> · <a href="/runs">all runs</a></p>
 
 {% if chart %}
 <script>

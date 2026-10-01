@@ -1,14 +1,14 @@
 """Data and job status page, plus a health check for the container."""
 
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
-from portfolio_lab.core.calendar import last_complete_session
+from portfolio_lab.core.calendar import NEW_YORK, PRICE_UPDATE_DELAY, next_session, session_close
 
 router = APIRouter()
 
@@ -28,12 +28,29 @@ def _read(path: Path) -> dict[str, Any] | None:
     return json.loads(path.read_text()) if path.exists() else None
 
 
-def data_freshness(prices: dict[str, Any] | None, now: datetime | None = None) -> str:
-    """Return ``"fresh"`` if prices cover the last complete session, else ``"stale"``."""
+#: Prices count as late only once the next scheduled update is this overdue.
+GRACE = timedelta(hours=2)
+
+
+def next_update(through: date) -> datetime:
+    """When prices through ``through`` next update: the next close plus the late-print wait."""
+    return session_close(next_session(through)) + PRICE_UPDATE_DELAY
+
+
+def data_freshness(prices: dict[str, Any] | None, now: datetime | None = None) -> dict:
+    """Prices' state: ``current`` until the next scheduled update is overdue, then ``late``.
+
+    Returns:
+        state (``current``, ``late`` or ``missing``), through (last date with prices) and
+        next (when the next update is due, New York time).
+    """
     if not prices or not prices.get("max_date"):
-        return "missing"
-    expected = last_complete_session(now or datetime.now(UTC))
-    return "fresh" if date.fromisoformat(prices["max_date"]) >= expected else "stale"
+        return {"state": "missing"}
+    through = date.fromisoformat(prices["max_date"])
+    due = next_update(through)
+    late = (now or datetime.now(UTC)) > due + GRACE
+    return {"state": "late" if late else "current", "through": through,
+            "next": due.astimezone(NEW_YORK)}  # fmt: skip
 
 
 @router.get("/status", response_class=HTMLResponse)

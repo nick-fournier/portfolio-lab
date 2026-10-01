@@ -20,11 +20,11 @@ def _env():
 
 def test_conditional_ic_splits_by_the_condition_on_each_date():
     scores = pl.DataFrame(
-        {"signal": "roa", "pool": "all", "horizon": 21, "date": DATES,
+        {"signal": "roa", "pool": "top500", "horizon": 21, "date": DATES,
          "ic": [0.05, 0.03, 0.04, 0.06, 0.05, 0.05, -0.01, 0.0, -0.02, 0.01, -0.01, 0.0]}
     )  # fmt: skip
     out = conditional_ic(scores, _env())
-    assert out["condition"].unique().to_list() == ["VIX (vs history)"]
+    assert out["condition"].unique().to_list() == ["VIX"]
     calm, stressed = out.row(0, named=True), out.row(1, named=True)
     assert (calm["bucket"], stressed["bucket"]) == ("calm", "stressed")
     assert calm["mean_ic"] == pytest.approx(0.28 / 6)
@@ -45,4 +45,4 @@ def test_caution_dial_measures_the_market_ahead():
 
 def test_current_conditions():
     now = current_conditions(_env())
-    assert now == [{"condition": "VIX (vs history)", "bucket": "stressed", "value": 0.9}]
+    assert now == [{"condition": "VIX", "bucket": "stressed", "value": 0.9}]

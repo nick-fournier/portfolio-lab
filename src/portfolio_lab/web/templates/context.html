@@ -2,60 +2,76 @@
 {% block title %}Market context · Portfolio lab{% endblock %}
 {% block content %}
 <h1>Market context</h1>
-<p class="lede">Which stock traits paid off in which market conditions, and how the market
-  did after similar conditions.</p>
+<p class="lede">Where the market stands, and how stock traits and the market behaved in
+  similar conditions before. Descriptive only: production doesn't use it, except its own
+  bear/rebound read.</p>
+
+{% if state %}
+<p><b>Production's read ({{ state.date }}):</b> {{ state.text }}</p>
+{% endif %}
 
 {% if latest %}
-<h2>Today's conditions <span class="muted">(as of {{ latest }})</span></h2>
+<h2>Conditions now <span class="muted">({{ latest }})</span></h2>
 <div class="table-wrap labelled"><table>
   <thead><tr><th>Condition</th><th>Now</th><th>Reading</th></tr></thead>
   <tbody>{% for c in now %}<tr><td>{{ c.condition }}</td><td><b>{{ c.bucket or "–" }}</b></td>
     <td class="muted">{{ c.shown }}</td></tr>{% endfor %}</tbody>
 </table></div>
+<p class="muted">Low, middle or high third of the series' own history (since 2000; stock
+  valuation, our universe's earnings yield, since 2017).</p>
 
-<h3>Environment</h3>
-<div class="table-wrap labelled"><table>
-  <thead><tr><th>Series</th><th class="num">Latest</th><th class="num">3-month change</th>
-    <th class="num">Percentile</th></tr></thead>
-  <tbody>{% for s in snapshot %}<tr><td>{{ s.label }}</td><td class="num">{{ s.value }}</td>
-    <td class="num">{{ s.change }}</td>
-    <td class="num">{{ (s.pct | pct(0)) if s.pct is not none else "–" }}</td></tr>{% endfor %}</tbody>
-</table></div>
-<p class="muted">Values as first published; percentile among all values since 2000.</p>
+<details class="guide">
+  <summary>All market series</summary>
+  <div class="table-wrap labelled"><table>
+    <thead><tr><th>Series</th><th class="num">Latest</th><th class="num">3-month change</th>
+      <th class="num">Percentile</th></tr></thead>
+    <tbody>{% for s in snapshot %}<tr><td>{{ s.label }}</td><td class="num">{{ s.value }}</td>
+      <td class="num">{{ s.change }}</td>
+      <td class="num">{{ (s.pct | pct(0)) if s.pct is not none else "–" }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="muted">Values as first published; percentile among values since 2000.</p>
+</details>
 {% else %}
 <p class="muted">No market context yet (<code>plab ingest macro</code>, then <code>plab features</code>).</p>
 {% endif %}
 
 {% if conditions %}
-<h2>Which traits work when</h2>
-<p class="muted">Average monthly IC of each trait in each condition (t-stat, months); colored
-  if |t| &gt; 2. With this many cells a few will look significant by chance.</p>
+<h2>In similar conditions before</h2>
+<div class="toggle wrap" role="tablist">
+  {% for c in conditions %}<button type="button" data-key="c{{ loop.index }}" {% if loop.first %}class="on"{% endif %}>{{ c.name }}</button>{% endfor %}
+</div>
 {% for c in conditions %}
-<h3>{{ c.name }}</h3>
+<div class="horizon" data-key="c{{ loop.index }}" {% if not loop.first %}hidden{% endif %}>
+<h3>Which traits paid off</h3>
 <div class="table-wrap"><table>
-  <thead><tr><th>Trait</th>{% for b in c.labels %}<th class="num">{{ b }}</th>{% endfor %}</tr></thead>
+  <thead><tr><th>Trait</th>{% for b in c.labels %}<th class="num">{{ b }}{% if b == c.current %} ◂ now{% endif %}</th>{% endfor %}</tr></thead>
   <tbody>{% for r in c.rows %}<tr><td>{{ r.trait }}</td>
-    {% for cell in r.cells %}<td class="num {{ 'pos' if cell and cell.t >= 2 else ('neg' if cell and cell.t <= -2 else '') }}">
-      {% if cell %}{{ "%+.3f" | format(cell.mean_ic) }} <span class="muted">({{ "%+.1f" | format(cell.t) }}, {{ cell.months }})</span>{% else %}–{% endif %}</td>{% endfor %}
+    {% for cell in r.cells %}<td class="num {{ 'pos' if cell and cell.t >= 2 else ('neg' if cell and cell.t <= -2 else '') }}"{% if cell %} title="t {{ '%+.1f' | format(cell.t) }}, {{ cell.months }} months"{% endif %}>
+      {% if cell %}{{ "%+.3f" | format(cell.mean_ic) }}{% else %}–{% endif %}</td>{% endfor %}
   </tr>{% endfor %}</tbody>
 </table></div>
-{% endfor %}
-{% endif %}
-
-{% if dial %}
-<h2>The caution dial</h2>
-<p class="muted">SPY over the next 3 and 12 months by condition: average return, share
-  positive, average worst drop.</p>
-<p class="caveats">One bull market (2016+) only: descriptive, not predictive.</p>
-{% for d in dial %}
-<h3>{{ d.name }}</h3>
+{% if c.dial %}
+<h3>What the S&amp;P 500 did next</h3>
 <div class="table-wrap"><table>
   <thead><tr><th>Condition</th><th class="num">Ahead</th><th class="num">Return</th>
-    <th class="num">Ended up</th><th class="num">Worst drop</th><th class="num">Months</th></tr></thead>
-  <tbody>{% for r in d.rows %}<tr><td>{{ r.bucket }}</td><td class="num">{{ r.months_ahead }}m</td>
+    <th class="num">Ended up</th><th class="num">Worst drop</th></tr></thead>
+  <tbody>{% for r in c.dial %}<tr{% if r.bucket == c.current %} class="ours"{% endif %}><td>{{ r.bucket }}</td><td class="num">{{ r.months_ahead }}m</td>
     <td class="num">{{ r.mean_return | pct }}</td><td class="num">{{ r.share_positive | pct(0) }}</td>
-    <td class="num neg">{{ r.mean_drawdown | pct }}</td><td class="num">{{ r.samples }}</td></tr>{% endfor %}</tbody>
+    <td class="num neg">{{ r.mean_drawdown | pct }}</td></tr>{% endfor %}</tbody>
 </table></div>
+{% endif %}
+</div>
 {% endfor %}
+<p class="muted">Traits: average monthly IC (how well the trait ranked the 500 most traded
+  stocks by next month's return; colored when unlikely to be luck). S&amp;P 500: average
+  return over the next 3 and 12 months, the share of times it ended up, and the average worst
+  drop along the way. Since 2017 only, mostly one long bull market: a description, not a
+  forecast.</p>
+<script>
+  document.querySelectorAll(".toggle button").forEach((b) => b.addEventListener("click", () => {
+    document.querySelectorAll(".toggle button").forEach((x) => x.classList.toggle("on", x === b));
+    document.querySelectorAll(".horizon").forEach((d) => { d.hidden = d.dataset.key !== b.dataset.key; });
+  }));
+</script>
 {% endif %}
 {% endblock %}
