@@ -5,7 +5,17 @@ import polars as pl
 import pytest
 
 from portfolio_lab.backtest.execution import Execution, adjust
-from portfolio_lab.backtest.tax import CASH, Lots, TaxRates, _Carry, _Year, after_tax, year_tax
+from portfolio_lab.backtest.tax import (
+    CASH,
+    Lots,
+    TaxRates,
+    _Carry,
+    _Year,
+    after_tax,
+    approx_after_tax,
+    monthly_gains,
+    year_tax,
+)
 
 RATES = TaxRates(short=0.4, long=0.2, dividends=0.2, loss_offset=0.0)
 
@@ -125,3 +135,19 @@ def test_adjust_defers_short_term_gains():
     np.testing.assert_allclose(new, [0.5, 0.5])
     later = adjust(target, held, Execution(defer_short_gains=True), lots, day0 + 400)
     np.testing.assert_allclose(later, [0.0, 1.0])
+
+
+def test_approx_after_tax_matches_the_replay():
+    # Buy A; it doubles and half is sold short-term; the rest is held past a year, then sold.
+    rows = [
+        (0, date(2020, 1, 2), "A", 0.0, 1.0, 0.0), (0, date(2020, 1, 2), CASH, 1.0, 0.0, 0.0),
+        (1, date(2020, 6, 30), "A", 2.0, 1.0, 0.0), (1, date(2020, 6, 30), CASH, 0.0, 1.0, 0.0),
+        (2, date(2021, 4, 30), "A", 1.5, 1.5, 0.0), (2, date(2021, 4, 30), CASH, 1.0, 1.0, 0.01),
+        (3, date(2022, 3, 31), "A", 3.0, 3.0, 0.0), (3, date(2022, 3, 31), CASH, 1.01, 1.01, 0.0),
+    ]  # fmt: skip
+    log = _log(rows)
+    nav = _nav([(d, sum(r[3] for r in rows if r[1] == d)) for d in sorted({r[1] for r in rows})])
+    months, unrealized = monthly_gains(log, nav)
+    exact = after_tax(log, nav, RATES, start=100.0, sell_at_end=True)
+    approx = approx_after_tax(months, unrealized, RATES, start=100.0)
+    assert approx[-1][1] * nav["nav"][-1] == pytest.approx(exact.growth["after"][-1], rel=1e-3)
