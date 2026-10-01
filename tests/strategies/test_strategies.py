@@ -111,6 +111,15 @@ def test_meanvar_fscore_filter_limits_candidates(make_panel):
     assert weights and set(weights) <= {f"S{i:02d}" for i in range(0, 12, 2)}  # the 9-scorers
 
 
+def test_meanvar_healthy_share_keeps_the_healthiest(make_panel):
+    panel = make_panel(symbols=[f"S{i:02d}" for i in range(12)], days=400)
+    view = DataView(panel, ASOF)
+    weights = create(
+        "meanvar", model="historical_mean", healthy_share=0.5, max_weight=0.5
+    ).target_weights(view)
+    assert weights and set(weights) <= {f"S{i:02d}" for i in range(6, 12)}  # healthier half
+
+
 @pytest.mark.parametrize("name", sorted(REGISTRY))
 def test_every_strategy_explains_itself(name, make_panel):
     """Run pages need plain-language text for every step, and example values for holdings."""

@@ -6,6 +6,7 @@ summary dict. They are idempotent: re-running after a crash or restart is safe.
 
 import logging
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -19,6 +20,7 @@ from portfolio_lab.core.config import Settings
 from portfolio_lab.core.http import RateLimitedClient
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic, write_status
+from portfolio_lab.data.ingest import sharadar
 from portfolio_lab.data.ingest.delisted import ingest_delisted
 from portfolio_lab.data.ingest.fundamentals import ingest_fundamentals
 from portfolio_lab.data.ingest.funds import ingest_funds
@@ -28,6 +30,7 @@ from portfolio_lab.data.ingest.rates import ingest_rates
 from portfolio_lab.data.ingest.universe import current_symbols, ingest_universe
 from portfolio_lab.data.sources.alpaca import make_client
 from portfolio_lab.data.sources.edgar import annual
+from portfolio_lab.data.sources.tiingo import fetch_fund_history
 from portfolio_lab.research.conditions import caution_dial, conditional_ic
 from portfolio_lab.research.context import STOCK_FEATURES, environment, sensitivities, tailwinds
 from portfolio_lab.research.dataset import build_dataset
@@ -46,23 +49,16 @@ log = logging.getLogger(__name__)
 
 #: Backtests the scheduler refreshes weekly so the dashboard always shows current baselines.
 SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
-    ("buy_hold", {}),
-    ("equal_weight", {}),
+    ("buy_hold", {}),  # SPY
     # Control for meanvar: the same candidates (100 most liquid), equally weighted.
     ("equal_weight", {"top_n": 100}),
-    # Momentum on meanvar's candidates, and on every eligible stock.
-    ("momentum", {}),
-    ("momentum", {"pool": None}),
+    ("momentum", {}),  # the 20 strongest of the 100 most liquid
     ("meanvar", {"model": "ar1_logret"}),
-    ("meanvar", {"model": "arima320_price"}),
-    ("meanvar", {"model": "historical_mean"}),
-    # A larger pool: 500 is the most a one-year covariance supports. (1,000 stocks on a
-    # two-year window was tried: 8% a year, Sharpe 0.33, so the edge is in large names.)
-    ("meanvar", {"top_n": 500}),
     # The original design: a Piotroski quality filter, alone and in front of meanvar.
-    ("piotroski", {}),
     ("piotroski", {"pool": 100}),
     ("meanvar", {"min_fscore": 7}),
+    # The baseline in production: meanvar on the healthiest 27% by continuous F-score.
+    ("meanvar", {"healthy_share": 0.27}),
 )
 #: Signals the weekly scoreboard evaluates: mean-variance's forecasts and classic anomalies.
 SCOREBOARD_SIGNALS: tuple[tuple[str, dict[str, Any]], ...] = (
@@ -382,3 +378,56 @@ def make_vs_buy_task(settings: Settings) -> dict:
     status = {"series": summary["key"].n_unique(), "common_start": common["start"].min()}
     write_status(settings.data_dir, "make_vs_buy", status)
     return status
+
+
+#: Start of the long make-vs-buy comparison (the Sharadar history's first full year).
+HISTORY_COMPARE_START = date(1999, 1, 4)
+
+
+def make_vs_buy_history_task(settings: Settings, raw: Path) -> dict:
+    """Make vs buy over the Sharadar history: funds since launch vs our strategies since 1999.
+
+    Exchange-traded funds and Berkshire come from Sharadar's bulk files in ``raw``, open-end
+    mutual funds from Tiingo. Ours: meanvar, meanvar behind F-score >= 7, and meanvar behind
+    the continuous F-score (healthiest 27%), all from :data:`HISTORY_COMPARE_START`.
+    """
+    paths = DataPaths(settings.data_dir)
+    traded = {f.symbol for f in FUNDS if f.source != "tiingo"}
+    prices = sharadar.fund_history(raw, traded)
+    token = settings.tiingo_api_key.get_secret_value() if settings.tiingo_api_key else None
+    if token:
+        with RateLimitedClient(max_per_minute=30) as tiingo:
+            mutual = [
+                fetch_fund_history(tiingo, f.symbol, token, HISTORY_COMPARE_START)
+                for f in FUNDS if f.source == "tiingo"
+            ]  # fmt: skip
+        mutual = (
+            pl.concat(mutual)
+            .sort("symbol", "date")
+            .with_columns(
+                (pl.col("adj_close") / pl.col("adj_close").shift(1).over("symbol") - 1).alias("ret")
+            )
+        )
+        prices = pl.concat([prices, mutual])
+    write_parquet_atomic(prices, paths.fund_prices)
+    start = HISTORY_COMPARE_START
+    ours = {
+        "meanvar": backtest_task(settings, "meanvar", start)[0],
+        "meanvar + F-score >= 7": backtest_task(settings, "meanvar", start,
+                                                params={"min_fscore": 7})[0],
+        "meanvar + continuous F-score (healthiest 27%)": backtest_task(
+            settings, "meanvar", start, params={"healthy_share": 0.27})[0],
+    }  # fmt: skip
+    series = {
+        f.symbol: (f.name, f.category, prices.filter(pl.col("symbol") == f.symbol))
+        for f in FUNDS
+        if prices.filter(pl.col("symbol") == f.symbol).height
+    }
+    for label, run_id in ours.items():
+        daily = load_run(settings.data_dir, run_id).daily.select("date", "ret")
+        series[f"ours: {label}"] = (label, "ours", daily)
+    rates = pl.read_parquet(paths.rates) if paths.rates.exists() else None
+    summary, growth = compare(series, rates, start)
+    write_parquet_atomic(summary, paths.make_vs_buy / "summary.parquet")
+    write_parquet_atomic(growth, paths.make_vs_buy / "growth.parquet")
+    return {"runs": ours, "series": len(series)}
