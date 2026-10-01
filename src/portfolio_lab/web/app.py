@@ -17,7 +17,16 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from portfolio_lab.web.routes import compare, context, models, overview, runs, signals, status
+from portfolio_lab.web.routes import (
+    compare,
+    context,
+    models,
+    overview,
+    runs,
+    signals,
+    status,
+    taxes,
+)
 
 HERE = Path(__file__).parent
 PLOTLY_JS = Path(plotly.__file__).parent / "package_data" / "plotly.min.js"
@@ -49,6 +58,7 @@ def create_app(data_dir: Path) -> FastAPI:
             overview.page_context(Path(data_dir))
             compare.page_context(Path(data_dir))
             signals.page_context(Path(data_dir))
+            taxes.calculate(Path(data_dir), taxes.Inputs())
 
         threading.Thread(target=prewarm, daemon=True).start()
         yield
@@ -82,5 +92,6 @@ def create_app(data_dir: Path) -> FastAPI:
     app.include_router(context.router)
     app.include_router(models.router)
     app.include_router(compare.router)
+    app.include_router(taxes.router)
     app.include_router(status.router)
     return app

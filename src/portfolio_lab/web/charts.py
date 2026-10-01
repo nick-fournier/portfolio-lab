@@ -276,3 +276,31 @@ def series_figure(
               "legend": {**_LAYOUT["legend"], "groupclick": "toggleitem"}}  # fmt: skip
     layout["template"] = _white_template()
     return json.dumps({"data": traces, "layout": layout})
+
+
+def tax_figure(ours: pl.DataFrame, spy: pl.DataFrame | None) -> str:
+    """Dollar growth before and after tax: ours (blue) and SPY (grey), weekly points, log scale.
+
+    Args:
+        ours: date, before, after (from ``backtest.tax.after_tax``).
+        spy: The same for SPY held, if published.
+    """
+    traces = []
+    for frame, name, color in ((ours, "Ours", "#1f77b4"), (spy, "SPY", "#6e7781")):
+        if frame is None:
+            continue
+        for column, label, dash in (
+            ("after", "after tax", "solid"),
+            ("before", "before tax", "dot"),
+        ):
+            points = weekly(frame.select("date", pl.col(column).alias("growth")))
+            traces.append({
+                "type": "scatter", "mode": "lines", "name": f"{name}, {label}",
+                "x": [d.isoformat() for d in points["date"].to_list()],
+                "y": points["growth"].round(0).to_list(),
+                "line": {"color": color, "dash": dash, "width": 2 if column == "after" else 1.2},
+            })  # fmt: skip
+    yaxis = {"type": "log", "tickprefix": "$", "tickformat": "~s", "dtick": 1}  # $100k, $1M, ...
+    layout = {**_LAYOUT, "yaxis": yaxis}
+    layout["template"] = _white_template()
+    return json.dumps({"data": traces, "layout": layout})

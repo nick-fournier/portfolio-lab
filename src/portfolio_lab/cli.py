@@ -20,7 +20,7 @@ from portfolio_lab.core.log import setup_logging
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
 from portfolio_lab.data.ingest import sharadar
-from portfolio_lab.jobs import tasks
+from portfolio_lab.jobs import tasks, taxes
 from portfolio_lab.research import history, regimes
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.scorecard import scorecard
@@ -224,6 +224,17 @@ def make_vs_buy_history_cmd(
 ) -> None:
     """Compare funds (since launch) with our strategies since 1999 on the Sharadar history."""
     typer.echo(tasks.make_vs_buy_history_task(get_settings(), publish))
+
+
+@app.command("tax-runs")
+def tax_runs_cmd(
+    publish: Annotated[
+        Path | None, typer.Option(help="Main data directory to publish the results to.")
+    ] = None,
+) -> None:
+    """Backtest production at each level of stickiness, plus SPY, for the tax calculator."""
+    for key, run_id in taxes.tax_runs_task(get_settings(), publish).items():
+        typer.echo(f"{key:>14}: {run_id}")
 
 
 @app.command("scorecard")

@@ -1,0 +1,36 @@
+{% if rows %}
+{% set c = chosen %}
+<div class="cards">
+  <div class="card"><div class="label">After tax / yr</div><div class="value">{{ c.after | pct }}</div></div>
+  <div class="card"><div class="label">Before tax / yr</div><div class="value">{{ c.before | pct }}</div></div>
+  <div class="card"><div class="label">Ending value</div><div class="value">${{ c.final | num(0) }}</div></div>
+  <div class="card"><div class="label">Taxes paid</div><div class="value">${{ c.taxes | num(0) }}</div></div>
+  {% if not inputs.sell and inputs.account == "taxable" %}<div class="card"><div class="label">Untaxed gains left</div><div class="value">${{ c.unrealized | num(0) }}</div></div>{% endif %}
+</div>
+
+<h2>Growth <span class="muted">(since {{ since.year }})</span></h2>
+<div id="tax-growth" class="chart tall"></div>
+
+<h2>Every version</h2>
+<div class="table-wrap labelled"><table>
+  <thead><tr><th>Version</th><th class="num">Before tax</th><th class="num">After tax</th>
+    <th class="num">Taxes paid</th><th class="num">Short-term</th><th class="num">Sold / yr</th></tr></thead>
+  <tbody>{% for r in rows %}<tr{% if r.chosen %} class="ours"{% endif %}>
+    <td>{{ r.name }}</td><td class="num">{{ r.before | pct }}</td><td class="num">{{ r.after | pct }}</td>
+    <td class="num">${{ r.taxes | num(0) }}</td><td class="num">{{ r.short_share | pct(0) }}</td>
+    <td class="num">{{ r.traded | pct(0) }}</td></tr>{% endfor %}</tbody>
+</table></div>
+<p class="muted">Returns per year. Hold gains: shares with a gain aren't sold until they
+  are a year old. Short-term: share of realized gains taxed at the short-term
+  rate. Sold / yr: share of the portfolio sold each year. Taxes are paid each April from the
+  portfolio; losses offset gains and up to $3,000 of income, the rest carries forward.
+  Backtests after trading costs; not tax advice.</p>
+<script>
+  (() => {
+    const draw = () => drawPlot("tax-growth", {{ chart | safe }});
+    window.Plotly ? draw() : document.addEventListener("DOMContentLoaded", draw);
+  })();
+</script>
+{% else %}
+<p class="muted">No published tax runs yet (<code>plab tax-runs --publish</code>).</p>
+{% endif %}
