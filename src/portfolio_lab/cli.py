@@ -211,9 +211,12 @@ def make_vs_buy_cmd() -> None:
 @app.command("make-vs-buy-history")
 def make_vs_buy_history_cmd(
     raw: Annotated[Path, typer.Option(help="Folder with the Sharadar bulk zips.")],
+    publish: Annotated[
+        Path | None, typer.Option(help="Main data directory to publish the summary to.")
+    ] = None,
 ) -> None:
     """Compare funds (since launch) with our strategies since 1999 on the Sharadar history."""
-    typer.echo(tasks.make_vs_buy_history_task(get_settings(), raw))
+    typer.echo(tasks.make_vs_buy_history_task(get_settings(), raw, publish))
 
 
 @app.command("serve")

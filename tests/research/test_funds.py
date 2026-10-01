@@ -38,3 +38,19 @@ def test_every_pair_names_a_registered_fund():
     symbols = {f.symbol for f in FUNDS}
     assert set(PAIRS.values()) <= symbols
     assert len(symbols) == len(FUNDS)  # no duplicates
+
+
+def test_young_funds_do_not_shorten_the_common_period():
+    rng = np.random.default_rng(1)
+    spy = rng.normal(0.0004, 0.01, len(DAYS))
+    series = {
+        "SPY": ("S&P 500", "passive", _series(spy)),
+        "ours: x": ("x", "ours", _series(spy * 1.5)),
+        "YOUNG": ("A young fund", "active_etf", _series(spy, start=450)),
+    }
+    summary, _ = compare(series, None, DAYS[0], ours="ours: x")
+    common = {r["key"]: r for r in summary.filter(pl.col("period") == "common").to_dicts()}
+    assert common["SPY"]["start"] == DAYS[0]  # not pushed back to the young fund's launch
+    assert common["YOUNG"]["start"] == DAYS[450]  # measured from its own start
+    same = summary.filter(pl.col("period") == "ours_since:YOUNG").row(0, named=True)
+    assert same["key"] == "ours: x" and same["start"] == DAYS[450]

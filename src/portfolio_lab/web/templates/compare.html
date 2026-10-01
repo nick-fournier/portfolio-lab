@@ -51,6 +51,30 @@
     <td class="num muted">{{ r.start }}</td></tr>{% endfor %}</tbody>
 </table></div>
 {% endfor %}
+{% if history %}
+<h2>Since 1999, on a survivorship-free history</h2>
+<p class="muted">Backtests on Sharadar's 1998+ data (dead stocks included) against each fund
+  over its own lifetime: the fund's return per year beside ours over exactly the same days.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Ours</th><th class="num">Return / yr</th><th class="num">Sharpe</th>
+    <th class="num">Worst drop</th><th class="num">From</th></tr></thead>
+  <tbody>{% for r in history.ours %}<tr class="ours"><td><b>{{ r.name }}</b></td>
+    <td class="num">{{ r.cagr | pct }}</td><td class="num">{{ r.sharpe | num }}</td>
+    <td class="num neg">{{ r.max_drawdown | pct }}</td><td class="num muted">{{ r.start }}</td></tr>{% endfor %}</tbody>
+</table></div>
+<div class="table-wrap wrap-head"><table>
+  <thead><tr><th>Fund</th><th class="num">Since</th><th class="num">Fund / yr</th>
+    <th class="num">Ours / yr, same days</th><th class="num">Edge</th>
+    <th class="num">Fund worst drop</th><th class="num">Ours worst drop</th></tr></thead>
+  <tbody>{% for r in history.funds %}<tr>
+    <td>{{ r.name }} <span class="muted">{{ r.key }}</span></td><td class="num muted">{{ r.start }}</td>
+    <td class="num">{{ r.cagr | pct }}</td><td class="num">{{ r.ours_cagr | pct }}</td>
+    <td class="num">{{ r.edge | pct }}</td><td class="num neg">{{ r.max_drawdown | pct }}</td>
+    <td class="num neg">{{ r.ours_drop | pct }}</td></tr>{% endfor %}</tbody>
+</table></div>
+<p class="muted">"Ours" in the head-to-head is {{ history.ours_name }}.</p>
+{% endif %}
+
 <p class="muted">Fund returns include reinvested distributions and are after the fund's own
   fees. Ours are after modeled trading costs. Sharpe uses the 3-month T-bill rate; beta and
   alpha are measured against SPY.</p>

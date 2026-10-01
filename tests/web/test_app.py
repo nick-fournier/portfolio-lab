@@ -251,3 +251,17 @@ def test_compare_page(client, tmp_path):
     for expected in ("Not yet a fair fight", "Head to head", "vs US momentum (iShares) (MTUM)",
                      "20.0%", "Same period for everyone", "Passive factor funds"):  # fmt: skip
         assert expected in page, expected
+    assert "Since 1999" not in page
+    full = {"start": date(1999, 1, 4), "end": date(2026, 9, 30), "volatility": 0.2,
+            "beta": 1.0, "alpha": 0.0, "sharpe": 0.5}  # fmt: skip
+    pl.DataFrame([
+        full | {"key": "SPY", "name": "S&P 500 (SPDR)", "category": "passive", "period": "full",
+                "cagr": 0.087, "max_drawdown": -0.55},
+        full | {"key": "ours: h", "name": "healthy meanvar", "category": "ours",
+                "period": "full", "cagr": 0.173, "max_drawdown": -0.43},
+        full | {"key": "ours: h", "name": "healthy meanvar", "category": "ours",
+                "period": "ours_since:SPY", "cagr": 0.173, "max_drawdown": -0.43},
+    ]).write_parquet(folder / "history_summary.parquet")  # fmt: skip
+    page = client.get("/compare").text
+    for expected in ("Since 1999", "17.3%", "8.7%", "8.6%", "healthy meanvar"):
+        assert expected in page, expected

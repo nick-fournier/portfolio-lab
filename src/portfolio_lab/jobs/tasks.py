@@ -384,12 +384,20 @@ def make_vs_buy_task(settings: Settings) -> dict:
 HISTORY_COMPARE_START = date(1999, 1, 4)
 
 
-def make_vs_buy_history_task(settings: Settings, raw: Path) -> dict:
+#: Our series measured over each fund's lifetime in the long comparison.
+HISTORY_OURS = "ours: meanvar + continuous F-score (healthiest 27%)"
+
+
+def make_vs_buy_history_task(settings: Settings, raw: Path, publish: Path | None = None) -> dict:
     """Make vs buy over the Sharadar history: funds since launch vs our strategies since 1999.
 
     Exchange-traded funds and Berkshire come from Sharadar's bulk files in ``raw``, open-end
     mutual funds from Tiingo. Ours: meanvar, meanvar behind F-score >= 7, and meanvar behind
     the continuous F-score (healthiest 27%), all from :data:`HISTORY_COMPARE_START`.
+
+    With ``publish`` (the main data directory), the summary is also written there as
+    ``make_vs_buy/history_summary.parquet`` for the Compare page: derived statistics
+    only, which the Sharadar license lets us keep.
     """
     paths = DataPaths(settings.data_dir)
     traded = {f.symbol for f in FUNDS if f.source != "tiingo"}
@@ -427,7 +435,9 @@ def make_vs_buy_history_task(settings: Settings, raw: Path) -> dict:
         daily = load_run(settings.data_dir, run_id).daily.select("date", "ret")
         series[f"ours: {label}"] = (label, "ours", daily)
     rates = pl.read_parquet(paths.rates) if paths.rates.exists() else None
-    summary, growth = compare(series, rates, start)
+    summary, growth = compare(series, rates, start, ours=HISTORY_OURS)
     write_parquet_atomic(summary, paths.make_vs_buy / "summary.parquet")
     write_parquet_atomic(growth, paths.make_vs_buy / "growth.parquet")
+    if publish is not None:
+        write_parquet_atomic(summary, DataPaths(publish).make_vs_buy / "history_summary.parquet")
     return {"runs": ours, "series": len(series)}
