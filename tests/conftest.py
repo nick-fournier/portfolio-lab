@@ -7,6 +7,7 @@ import pytest
 from portfolio_lab.core.calendar import rebalance_dates, sessions
 from portfolio_lab.core.config import Settings
 from portfolio_lab.research.panel import EligibilityRules, Panel
+from portfolio_lab.research.piotroski import PIOTROSKI
 
 PRICE_COLUMNS = ["symbol", "date", "close", "volume", "ret_cc", "ret_co"]
 
@@ -52,10 +53,18 @@ def make_panel():
 
 
 def make_features(symbols, dates):
-    """Synthetic monthly feature rows: earnings_yield grows with the symbol's position."""
+    """Synthetic monthly feature rows: earnings_yield and health grow with the position.
+
+    The nine Piotroski measures all point the healthy way more strongly for later symbols.
+    """
     month_ends = rebalance_dates(list(dates), "M")
-    rows = [(d, s, 0.01 * (k + 1)) for d in month_ends for k, s in enumerate(symbols)]
-    return pl.DataFrame(rows, schema=["date", "symbol", "earnings_yield"], orient="row")
+    rows = [
+        {"date": d, "symbol": s, "earnings_yield": 0.01 * (k + 1),
+         **{c: direction * 0.01 * (k + 1) for c, direction in PIOTROSKI.items()}}
+        for d in month_ends
+        for k, s in enumerate(symbols)
+    ]  # fmt: skip
+    return pl.DataFrame(rows)
 
 
 def make_fundamentals(symbols, dates):

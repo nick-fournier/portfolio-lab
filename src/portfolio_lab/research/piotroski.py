@@ -23,9 +23,11 @@ IFRS filers (no US-GAAP data) drop out naturally. Scores keep the count of avail
 signals so users can require, say, at least 8 of 9.
 """
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 import polars as pl
+
+from portfolio_lab.research.dataset import rank_features
 
 #: Each concept's tags in priority order; per filing and period the first one reported wins.
 CONCEPT_TAGS: dict[str, tuple[str, ...]] = {
@@ -260,3 +262,47 @@ def fscores_from_states(states: pl.DataFrame) -> pl.DataFrame:
         pl.sum_horizontal(SIGNALS).alias("fscore"),
         pl.sum_horizontal(c(s).is_not_null() for s in SIGNALS).alias("n_signals"),
     )  # fmt: skip
+
+
+# Continuous F-score: each of the nine signals as a percentile instead of a 0/1 step.
+
+#: The nine Piotroski metrics (as monthly feature percentiles) and their good direction.
+PIOTROSKI = {
+    "roa": 1, "cfo_to_assets": 1, "d_roa": 1, "accruals": -1, "d_lt_debt": -1,
+    "d_current_ratio": 1, "share_issuance": -1, "d_gross_margin": 1, "d_asset_turnover": 1,
+}  # fmt: skip
+MIN_METRICS = 6
+
+
+def continuous(data: pl.DataFrame, metrics: dict[str, int] = PIOTROSKI) -> pl.DataFrame:
+    """The metrics' percentiles (flipped where lower is better), averaged.
+
+    Args:
+        data: Prepared data (features as monthly percentiles, ``models.prepare``).
+        metrics: Metric -> direction (default: the nine Piotroski metrics).
+
+    Returns:
+        date, symbol, score (null with fewer than :data:`MIN_METRICS` metrics).
+    """
+    metrics = {c: d for c, d in metrics.items() if c in data.columns}
+    oriented = [pl.col(c) if d > 0 else 1 - pl.col(c) for c, d in metrics.items()]
+    count = pl.sum_horizontal(pl.col(c).is_not_null() for c in metrics)
+    return data.select(
+        "date", "symbol",
+        pl.when(count >= MIN_METRICS).then(pl.mean_horizontal(oriented)).alias("score"),
+    )  # fmt: skip
+
+
+def health_scores(features: pl.DataFrame) -> dict[str, float]:
+    """Continuous F-score for one date's raw feature rows (symbol + the nine metrics).
+
+    Each metric becomes a percentile among the given stocks, as ``models.prepare`` does for
+    the whole panel, then :func:`continuous` averages them. Stocks with too few metrics
+    get no score.
+    """
+    if features.is_empty():
+        return {}
+    ranked = rank_features(features.with_columns(pl.lit(date(2000, 1, 1)).alias("date")),
+                           [c for c in PIOTROSKI if c in features.columns])  # fmt: skip
+    scored = continuous(ranked).drop_nulls("score")
+    return dict(zip(scored["symbol"], scored["score"], strict=True))

@@ -208,6 +208,14 @@ def make_vs_buy_cmd() -> None:
     typer.echo(tasks.make_vs_buy_task(get_settings()))
 
 
+@app.command("make-vs-buy-history")
+def make_vs_buy_history_cmd(
+    raw: Annotated[Path, typer.Option(help="Folder with the Sharadar bulk zips.")],
+) -> None:
+    """Compare funds (since launch) with our strategies since 1999 on the Sharadar history."""
+    typer.echo(tasks.make_vs_buy_history_task(get_settings(), raw))
+
+
 @app.command("serve")
 def serve_cmd(
     host: Annotated[str, typer.Option(help="Interface to bind.")] = "127.0.0.1",

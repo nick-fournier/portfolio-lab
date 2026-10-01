@@ -8,6 +8,7 @@ import pandas as pd
 
 from portfolio_lab.core.calendar import Frequency
 from portfolio_lab.research.dataview import DataView
+from portfolio_lab.research.piotroski import PIOTROSKI, health_scores
 from portfolio_lab.strategies import explain
 from portfolio_lab.strategies.base import Weights, register
 from portfolio_lab.strategies.meanvar.forecast import (
@@ -62,6 +63,9 @@ class MeanVar:
         max_weight: Cap on any single weight.
         min_fscore: If set, only stocks with a Piotroski F-score at least this high are
             candidates (the original optimizer's filter), before taking the most liquid.
+        healthy_share: If set, only this share of eligible stocks with the highest
+            continuous F-score (``research.piotroski.health_scores``: the nine Piotroski
+            measures as percentiles, averaged) are candidates, before taking the most liquid.
         schedule: Rebalance frequency.
         cache_dir: Forecast cache root, set by the runner (not a strategy parameter).
         workers: Processes used for model fits (not a strategy parameter).
@@ -74,6 +78,7 @@ class MeanVar:
     horizon: int = 21
     max_weight: float = 0.10
     min_fscore: int | None = None
+    healthy_share: float | None = None
     schedule: Frequency = "M"
     name: str = "meanvar"
     cache_dir: Path | None = field(default=None, repr=False, metadata={"param": False})
@@ -88,6 +93,7 @@ class MeanVar:
         self.max_weight = float(self.max_weight)
         self.last_signals: dict[str, dict[str, float]] = {}
         self.min_fscore = int(self.min_fscore) if self.min_fscore is not None else None
+        self.healthy_share = float(self.healthy_share) if self.healthy_share is not None else None
         self._forecaster: Forecaster | None = None
 
     example_columns: ClassVar[dict[str, str]] = {
@@ -106,6 +112,14 @@ class MeanVar:
             if self.min_fscore is not None
             else ""
         )
+        if self.healthy_share is not None:
+            screen += (
+                f" Only the healthiest {self.healthy_share:.0%} of stocks are considered, "
+                "before taking the most liquid: health is a continuous Piotroski F-score, each "
+                "of its nine measures (profitability, cash flow, improving returns, cash-backed "
+                "earnings, falling debt, rising liquidity, no dilution, improving margins and "
+                "asset turnover) as a percentile among eligible stocks, averaged."
+            )
         objective = {
             "max_sharpe": "the best expected return per unit of risk (maximum Sharpe ratio "
             "against the T-bill rate)",
@@ -162,6 +176,11 @@ class MeanVar:
         among = None
         if self.min_fscore is not None:
             among = [s for s, f in view.fscores(view.eligible()).items() if f >= self.min_fscore]
+        if self.healthy_share is not None:
+            pool = among if among is not None else view.eligible()
+            health = health_scores(view.features(pool, list(PIOTROSKI)))
+            ranked = sorted(health, key=lambda s: -health[s])
+            among = ranked[: round(len(ranked) * self.healthy_share)]
         prices = price_windows(view, view.top_liquid(self.top_n, among=among), self.lookback)
         if prices.shape[1] < 2 or len(prices) < 30:
             return {}

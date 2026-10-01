@@ -4,10 +4,12 @@ import polars as pl
 
 from portfolio_lab.data.sources.edgar import FACT_SCHEMA
 from portfolio_lab.research.piotroski import (
+    PIOTROSKI,
     build_fscores,
     concept_facts,
     fscores_by_symbol,
     fscores_from_states,
+    health_scores,
 )
 
 FY0, FY1, FY2 = date(2020, 12, 31), date(2021, 12, 31), date(2022, 12, 31)
@@ -135,3 +137,16 @@ def test_fscores_from_states_counts_signals():
     scores = fscores_from_states(pl.DataFrame([state, quarter]))
     assert scores.height == 1
     assert scores["fscore"][0] == 9 and scores["n_signals"][0] == 9
+
+
+def test_health_scores_rank_within_the_given_stocks():
+
+    rows = []
+    for k, level in enumerate((0.9, 0.5, 0.1)):
+        rows.append(
+            {"symbol": f"S{k}", **{c: (level if d > 0 else -level) for c, d in PIOTROSKI.items()}}
+        )
+    rows.append({"symbol": "SPARSE", "roa": 1.0})  # too few metrics to score
+    scores = health_scores(pl.DataFrame(rows))
+    assert set(scores) == {"S0", "S1", "S2"}
+    assert scores["S0"] > scores["S1"] > scores["S2"]
