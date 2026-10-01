@@ -10,12 +10,15 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Any
 
+import polars as pl
 import typer
 
+from portfolio_lab.backtest.results import load_run
 from portfolio_lab.core.config import get_settings
 from portfolio_lab.core.log import setup_logging
 from portfolio_lab.data.ingest import sharadar
 from portfolio_lab.jobs import tasks
+from portfolio_lab.research.scorecard import scorecard
 
 app = typer.Typer(help="Portfolio lab: ingest data, run backtests, serve the dashboard.")
 ingest_app = typer.Typer(help="Fetch and store market data.")
@@ -217,6 +220,24 @@ def make_vs_buy_history_cmd(
 ) -> None:
     """Compare funds (since launch) with our strategies since 1999 on the Sharadar history."""
     typer.echo(tasks.make_vs_buy_history_task(get_settings(), raw, publish))
+
+
+@app.command("scorecard")
+def scorecard_cmd(
+    run: Annotated[list[str], typer.Option(help="name=run_id; repeatable.")],
+    reference: Annotated[str, typer.Option(help="Name of the run others are compared with.")],
+) -> None:
+    """Compare backtest runs across eras, halves and against a reference run."""
+    settings = get_settings()
+    named = dict(item.split("=", 1) for item in run)
+    loaded = {n: load_run(settings.data_dir, r) for n, r in named.items()}
+    table = scorecard(
+        {n: r.daily.select("date", "ret") for n, r in loaded.items()},
+        {n: r.metrics.get("turnover_annual") for n, r in loaded.items()},
+        reference,
+    )
+    with pl.Config(tbl_rows=50, tbl_cols=30, float_precision=3, tbl_width_chars=250):
+        typer.echo(table)
 
 
 @app.command("serve")

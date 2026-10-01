@@ -66,6 +66,10 @@ class MeanVar:
         healthy_share: If set, only this share of eligible stocks with the highest
             continuous F-score (``research.piotroski.health_scores``: the nine Piotroski
             measures as percentiles, averaged) are candidates, before taking the most liquid.
+        health_schedule: How often the healthy set is recomputed: ``Q`` at the first
+            rebalance of each quarter (fundamentals change with quarterly filings), or
+            ``None`` at every rebalance. Between updates the last set is reused, limited to
+            stocks still eligible.
         schedule: Rebalance frequency.
         cache_dir: Forecast cache root, set by the runner (not a strategy parameter).
         workers: Processes used for model fits (not a strategy parameter).
@@ -79,6 +83,7 @@ class MeanVar:
     max_weight: float = 0.10
     min_fscore: int | None = None
     healthy_share: float | None = None
+    health_schedule: str | None = None
     schedule: Frequency = "M"
     name: str = "meanvar"
     cache_dir: Path | None = field(default=None, repr=False, metadata={"param": False})
@@ -95,6 +100,7 @@ class MeanVar:
         self.min_fscore = int(self.min_fscore) if self.min_fscore is not None else None
         self.healthy_share = float(self.healthy_share) if self.healthy_share is not None else None
         self._forecaster: Forecaster | None = None
+        self._healthy: tuple[tuple[int, int], list[str]] | None = None  # (quarter, set)
 
     example_columns: ClassVar[dict[str, str]] = {
         "Expected return (annual)": "pct",
@@ -113,13 +119,15 @@ class MeanVar:
             else ""
         )
         if self.healthy_share is not None:
+            refresh = (" The healthy set is recomputed at the first rebalance of each quarter."
+                       if self.health_schedule == "Q" else "")  # fmt: skip
             screen += (
                 f" Only the healthiest {self.healthy_share:.0%} of stocks are considered, "
                 "before taking the most liquid: health is a continuous Piotroski F-score, each "
                 "of its nine measures (profitability, cash flow, improving returns, cash-backed "
                 "earnings, falling debt, rising liquidity, no dilution, improving margins and "
                 "asset turnover) as a percentile among eligible stocks, averaged."
-            )
+            ) + refresh
         objective = {
             "max_sharpe": "the best expected return per unit of risk (maximum Sharpe ratio "
             "against the T-bill rate)",
@@ -171,16 +179,26 @@ class MeanVar:
             self._forecaster = Forecaster(spec, self.cache_dir, self.workers)
         return self._forecaster
 
+    def _healthy_set(self, view: DataView, among: list[str] | None) -> list[str]:
+        """The healthiest ``healthy_share`` of candidates, refreshed per ``health_schedule``."""
+        quarter = (view.asof.year, (view.asof.month - 1) // 3)
+        if self.health_schedule == "Q" and self._healthy and self._healthy[0] == quarter:
+            eligible = set(among if among is not None else view.eligible())
+            return [s for s in self._healthy[1] if s in eligible]
+        pool = among if among is not None else view.eligible()
+        health = health_scores(view.features(pool, list(PIOTROSKI)))
+        ranked = sorted(health, key=lambda s: -health[s])
+        chosen = ranked[: round(len(ranked) * self.healthy_share)]
+        self._healthy = (quarter, chosen)
+        return chosen
+
     def target_weights(self, view: DataView) -> Weights:
         """Forecast the most liquid eligible stocks and optimize their weights."""
         among = None
         if self.min_fscore is not None:
             among = [s for s, f in view.fscores(view.eligible()).items() if f >= self.min_fscore]
         if self.healthy_share is not None:
-            pool = among if among is not None else view.eligible()
-            health = health_scores(view.features(pool, list(PIOTROSKI)))
-            ranked = sorted(health, key=lambda s: -health[s])
-            among = ranked[: round(len(ranked) * self.healthy_share)]
+            among = self._healthy_set(view, among)
         prices = price_windows(view, view.top_liquid(self.top_n, among=among), self.lookback)
         if prices.shape[1] < 2 or len(prices) < 30:
             return {}

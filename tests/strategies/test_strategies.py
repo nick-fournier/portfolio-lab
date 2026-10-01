@@ -3,6 +3,7 @@ import polars as pl
 import pytest
 
 import portfolio_lab.strategies  # noqa: F401  (registers built-in strategies)
+import portfolio_lab.strategies.meanvar.strategy as mv
 from portfolio_lab.research.dataview import DataView
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.strategies.base import REGISTRY, Composed, create
@@ -118,6 +119,23 @@ def test_meanvar_healthy_share_keeps_the_healthiest(make_panel):
         "meanvar", model="historical_mean", healthy_share=0.5, max_weight=0.5
     ).target_weights(view)
     assert weights and set(weights) <= {f"S{i:02d}" for i in range(6, 12)}  # healthier half
+
+
+def test_meanvar_quarterly_health_refresh_reuses_the_set_within_a_quarter(make_panel, monkeypatch):
+    calls = []
+    real = mv.health_scores
+    monkeypatch.setattr(mv, "health_scores", lambda f: calls.append(1) or real(f))
+    panel = make_panel(symbols=[f"S{i:02d}" for i in range(12)], days=400)
+    strategy = create("meanvar", model="historical_mean", healthy_share=0.5,
+                      health_schedule="Q")  # fmt: skip
+    quarter = lambda i: (panel.dates[i].year, (panel.dates[i].month - 1) // 3)  # noqa: E731
+    same = next(i for i in range(ASOF + 1, len(panel.dates)) if quarter(i) == quarter(ASOF))
+    other = next(i for i in range(ASOF + 1, len(panel.dates)) if quarter(i) != quarter(ASOF))
+    chosen = strategy._healthy_set(DataView(panel, ASOF), None)
+    assert strategy._healthy_set(DataView(panel, same), None) == chosen
+    assert len(calls) == 1  # reused within the quarter
+    strategy._healthy_set(DataView(panel, other), None)
+    assert len(calls) == 2  # recomputed in the next quarter
 
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))
