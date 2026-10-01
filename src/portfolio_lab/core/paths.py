@@ -115,6 +115,11 @@ class DataPaths:
         return self.root / "fundamentals" / "states.parquet"
 
     @property
+    def paper(self) -> Path:
+        """Paper trading records: snapshots, positions, orders and rebalances."""
+        return self.root / "trading" / "paper"
+
+    @property
     def features(self) -> Path:
         """Monthly point-in-time feature panel (``research.features``)."""
         return self.root / "features" / "monthly.parquet"

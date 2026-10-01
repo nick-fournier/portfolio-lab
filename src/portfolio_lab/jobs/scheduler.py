@@ -51,6 +51,8 @@ class Job:
 
 JOBS: tuple[Job, ...] = (
     Job("daily_ingest", tasks.daily_ingest_task, "session"),
+    # After the day's prices: record the paper account, rebalance at month ends.
+    Job("paper", tasks.paper_task, "session"),
     Job("verify_prices", tasks.verify_task, "weekly"),
     Job("fundamentals", tasks.fundamentals_task, "weekly"),
     Job("macro", tasks.macro_task, "weekly"),

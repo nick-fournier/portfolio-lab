@@ -341,6 +341,25 @@ def history_cmd(
     )
 
 
+@app.command("paper")
+def paper_cmd(
+    dry_run: Annotated[
+        bool, typer.Option(help="Show the orders a rebalance would place now; place none.")
+    ] = False,
+) -> None:
+    """Record the paper account and rebalance it at month ends (Alpaca paper, dummy money)."""
+    result = tasks.paper_task(get_settings(), dry_run=dry_run)
+    if not dry_run:
+        typer.echo(result)
+        return
+    typer.echo(f"session {result['session']}, equity ${result['equity']:,.0f}")
+    typer.echo(f"targets: {', '.join(f'{s} {w:.1%}' for s, w in result['targets'].items())}")
+    typer.echo(f"close: {', '.join(result['closes']) or 'none'}")
+    for o in result["orders"]:
+        size = f"${o.notional:,.2f}" if o.notional is not None else f"{o.qty:g} shares"
+        typer.echo(f"  {o.side:4} {o.symbol:6} {size}")
+
+
 @app.command("serve")
 def serve_cmd(
     host: Annotated[str, typer.Option(help="Interface to bind.")] = "127.0.0.1",

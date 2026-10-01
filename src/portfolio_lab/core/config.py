@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     alpaca_api_key_id: SecretStr | None = None
     alpaca_api_secret_key: SecretStr | None = None
     alpaca_data_url: str = "https://data.alpaca.markets"
+    #: Trading API; only Alpaca's paper (dummy money) endpoint is accepted for now.
+    alpaca_paper_url: str = "https://paper-api.alpaca.markets"
     alpaca_requests_per_minute: int = 180
     edgar_user_agent: str = "portfolio-lab nichfournier@gmail.com"
     fred_api_key: SecretStr | None = None

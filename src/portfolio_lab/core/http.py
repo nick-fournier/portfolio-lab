@@ -89,14 +89,22 @@ class RateLimitedClient:
         return self.request("HEAD", url)
 
     def request(
-        self, method: str, url: str, params: dict[str, Any] | None = None
+        self,
+        method: str,
+        url: str,
+        params: dict[str, Any] | None = None,
+        json: Any = None,
     ) -> httpx.Response:
         """Send a request with rate limiting and retries.
+
+        Retrying a request that changes state must be safe; e.g. orders carry a unique
+        client id so a resent one is rejected rather than placed twice.
 
         Args:
             method: HTTP method, e.g. ``"GET"``.
             url: Absolute URL, or a path relative to ``base_url``.
             params: Query parameters.
+            json: JSON body.
 
         Returns:
             The successful response.
@@ -116,7 +124,7 @@ class RateLimitedClient:
                 self._sleep(delay)
             self._throttle()
             try:
-                response = self._client.request(method, url, params=params)
+                response = self._client.request(method, url, params=params, json=json)
             except httpx.TransportError:
                 if attempt == self._max_retries:
                     raise

@@ -278,3 +278,33 @@ def test_tax_page(client, tmp_path):
     for expected in ("Is the strategy worth sheltering", "Rough rates by income", "SPY, taxable",
                      "Taxable, holding gains a year", '"unrealized": [0.0, 1.0]'):  # fmt: skip
         assert expected in page, expected
+
+
+def _write(folder, name, columns, **schema):
+    pl.DataFrame(columns, schema_overrides=schema).write_parquet(folder / f"{name}.parquet")
+
+
+def test_paper_page_empty_then_with_records(client, tmp_path):
+    page = client.get("/paper")
+    assert page.status_code == 200 and "No paper account records yet" in page.text
+    folder = tmp_path / "trading" / "paper"
+    folder.mkdir(parents=True)
+    days = [date(2024, 1, 2), date(2024, 1, 3)]
+    _write(folder, "snapshots", {"date": days, "equity": [100_000.0, 101_000.0],
+                                 "cash": [1_000.0] * 2, "positions": [2, 2]})  # fmt: skip
+    _write(folder, "positions", {"date": [days[1]] * 2, "symbol": ["AAA", "BBB"],
+                                 "qty": [10.0, 5.0],
+                                 "market_value": [60_000.0, 40_000.0]})  # fmt: skip
+    _write(folder, "targets", {"date": [days[0]] * 2, "symbol": ["AAA", "CCC"],
+                               "weight": [0.6, 0.4]})  # fmt: skip
+    _write(folder, "rebalances", {"date": [days[0]], "targets": [2], "closes": [0],
+                                  "orders": [2], "equity": [100_000.0]})  # fmt: skip
+    _write(folder, "orders", {
+        "id": ["1"], "client_order_id": ["pl-20240102-AAA-buy"], "symbol": ["AAA"],
+        "side": ["buy"], "notional": [59_400.0], "qty": [None], "status": ["filled"],
+        "filled_qty": [10.0], "filled_avg_price": [5940.0],
+    }, qty=pl.Float64)  # fmt: skip
+    page = client.get("/paper")
+    assert page.status_code == 200
+    for expected in ("$101,000", "1.0%", "CCC", "filled", "5940.00", "Paper vs SPY"):
+        assert expected in page.text
