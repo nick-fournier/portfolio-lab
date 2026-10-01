@@ -10,12 +10,20 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Any
 
+import httpx
+import polars as pl
 import typer
 
+from portfolio_lab.backtest.results import load_run
 from portfolio_lab.core.config import get_settings
 from portfolio_lab.core.log import setup_logging
+from portfolio_lab.core.paths import DataPaths
+from portfolio_lab.core.store import write_parquet_atomic
 from portfolio_lab.data.ingest import sharadar
 from portfolio_lab.jobs import tasks
+from portfolio_lab.research import history, regimes
+from portfolio_lab.research.panel import Panel
+from portfolio_lab.research.scorecard import scorecard
 
 app = typer.Typer(help="Portfolio lab: ingest data, run backtests, serve the dashboard.")
 ingest_app = typer.Typer(help="Fetch and store market data.")
@@ -211,9 +219,81 @@ def make_vs_buy_cmd() -> None:
 @app.command("make-vs-buy-history")
 def make_vs_buy_history_cmd(
     raw: Annotated[Path, typer.Option(help="Folder with the Sharadar bulk zips.")],
+    publish: Annotated[
+        Path | None, typer.Option(help="Main data directory to publish the summary to.")
+    ] = None,
 ) -> None:
     """Compare funds (since launch) with our strategies since 1999 on the Sharadar history."""
-    typer.echo(tasks.make_vs_buy_history_task(get_settings(), raw))
+    typer.echo(tasks.make_vs_buy_history_task(get_settings(), raw, publish))
+
+
+@app.command("scorecard")
+def scorecard_cmd(
+    run: Annotated[list[str], typer.Option(help="name=run_id; repeatable.")],
+    reference: Annotated[str, typer.Option(help="Name of the run others are compared with.")],
+) -> None:
+    """Compare backtest runs across eras, halves and against a reference run."""
+    settings = get_settings()
+    named = dict(item.split("=", 1) for item in run)
+    loaded = {n: load_run(settings.data_dir, r) for n, r in named.items()}
+    table = scorecard(
+        {n: r.daily.select("date", "ret") for n, r in loaded.items()},
+        {n: r.metrics.get("turnover_annual") for n, r in loaded.items()},
+        reference,
+    )
+    with pl.Config(tbl_rows=50, tbl_cols=30, float_precision=3, tbl_width_chars=250):
+        typer.echo(table)
+
+
+@app.command("regimes")
+def regimes_cmd() -> None:
+    """Event study: what followed fragile, bear and rebound signals (``research.regimes``)."""
+    settings = get_settings()
+    paths = DataPaths(settings.data_dir)
+    frame = regimes.signals(Panel.load(settings.data_dir), pl.read_parquet(paths.environment))
+    write_parquet_atomic(frame, settings.data_dir / "results" / "regimes.parquet")
+    with pl.Config(tbl_rows=20, tbl_cols=20, float_precision=3, tbl_width_chars=250,
+                   fmt_str_lengths=400):  # fmt: skip
+        typer.echo(regimes.summarize(frame))
+
+
+@app.command("oracle")
+def oracle_cmd(
+    months: Annotated[int, typer.Option(help="Crash-warning window in months.")],
+    start: Day,
+) -> None:
+    """Research only: healthy meanvar with a perfect crash warning (hindsight), its ceiling."""
+    settings = get_settings()
+    dates = regimes.crash_ahead(Panel.load(settings.data_dir), months)
+    params = {"healthy_share": 0.27, "defend_dates": dates}
+    run_id, metrics = tasks.backtest_task(settings, "meanvar", start.date(), params=params)
+    typer.echo(f"run {run_id}: {len(dates)} defended month ends, cagr {metrics['cagr']:.4f}")
+
+
+@app.command("history")
+def history_cmd(
+    french: Annotated[Path, typer.Option(help="Folder with Kenneth French's daily zips.")],
+) -> None:
+    """Regime signals since 1926 and a momentum proxy with the bear/rebound switches."""
+    texts = {
+        s: httpx.get("https://fred.stlouisfed.org/graph/fredgraph.csv", params={"id": s},
+                     timeout=60).text
+        for s in history.FRED_SERIES
+    }  # fmt: skip
+    daily = history.load_french(french)
+    frame = history.signals(daily, history.load_fred(texts))
+    out = get_settings().data_dir / "results" / "history"
+    write_parquet_atomic(frame, out / "signals.parquet")
+    proxy = history.momentum_proxy(daily, frame)
+    write_parquet_atomic(proxy, out / "momentum_proxy.parquet")
+    with pl.Config(tbl_rows=60, float_precision=3, tbl_width_chars=200):
+        typer.echo(history.summarize(frame))
+        typer.echo(history.summarize(frame, by_era=True))
+        typer.echo(proxy)
+    episodes = history.bear_episodes(frame)
+    typer.echo(
+        f"{len(episodes)} bear episodes: " + ", ".join(f"{a:%Y-%m}..{b:%Y-%m}" for a, b in episodes)
+    )
 
 
 @app.command("serve")

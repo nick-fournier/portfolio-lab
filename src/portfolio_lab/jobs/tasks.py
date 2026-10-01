@@ -47,6 +47,13 @@ from portfolio_lab.strategies.base import create
 
 log = logging.getLogger(__name__)
 
+#: The production strategy: meanvar on the 100 healthiest (continuous F-score) of the 400
+#: most liquid stocks, monthly, holding the minimum-variance mix in bear markets and equal
+#: weights in rebounds (see ``strategies.meanvar`` and ``research.regimes``).
+PRODUCTION: tuple[str, dict[str, Any]] = (
+    "meanvar",
+    {"health_rank_pool": 400, "bear_defense": True, "rebound": "equal"},
+)
 #: Backtests the scheduler refreshes weekly so the dashboard always shows current baselines.
 SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("buy_hold", {}),  # SPY
@@ -57,8 +64,10 @@ SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
     # The original design: a Piotroski quality filter, alone and in front of meanvar.
     ("piotroski", {"pool": 100}),
     ("meanvar", {"min_fscore": 7}),
-    # The baseline in production: meanvar on the healthiest 27% by continuous F-score.
+    # The first baseline: meanvar on the healthiest 27% by continuous F-score.
     ("meanvar", {"healthy_share": 0.27}),
+    # Production: the 100 healthiest of the 400 most liquid, defensive in bear markets.
+    PRODUCTION,
 )
 #: Signals the weekly scoreboard evaluates: mean-variance's forecasts and classic anomalies.
 SCOREBOARD_SIGNALS: tuple[tuple[str, dict[str, Any]], ...] = (
@@ -384,12 +393,21 @@ def make_vs_buy_task(settings: Settings) -> dict:
 HISTORY_COMPARE_START = date(1999, 1, 4)
 
 
-def make_vs_buy_history_task(settings: Settings, raw: Path) -> dict:
+#: Our series measured over each fund's lifetime in the long comparison.
+HISTORY_OURS = "ours: production (healthiest 100 of 400 + bear defense)"
+
+
+def make_vs_buy_history_task(settings: Settings, raw: Path, publish: Path | None = None) -> dict:
     """Make vs buy over the Sharadar history: funds since launch vs our strategies since 1999.
 
     Exchange-traded funds and Berkshire come from Sharadar's bulk files in ``raw``, open-end
-    mutual funds from Tiingo. Ours: meanvar, meanvar behind F-score >= 7, and meanvar behind
-    the continuous F-score (healthiest 27%), all from :data:`HISTORY_COMPARE_START`.
+    mutual funds from Tiingo. Ours: meanvar, meanvar behind F-score >= 7, meanvar behind
+    the continuous F-score (healthiest 27%) and :data:`PRODUCTION`, all from
+    :data:`HISTORY_COMPARE_START`.
+
+    With ``publish`` (the main data directory), the summary is also written there as
+    ``make_vs_buy/history_summary.parquet`` for the Compare page: derived statistics
+    only, which the Sharadar license lets us keep.
     """
     paths = DataPaths(settings.data_dir)
     traded = {f.symbol for f in FUNDS if f.source != "tiingo"}
@@ -417,6 +435,8 @@ def make_vs_buy_history_task(settings: Settings, raw: Path) -> dict:
                                                 params={"min_fscore": 7})[0],
         "meanvar + continuous F-score (healthiest 27%)": backtest_task(
             settings, "meanvar", start, params={"healthy_share": 0.27})[0],
+        "production (healthiest 100 of 400 + bear defense)": backtest_task(
+            settings, PRODUCTION[0], start, params=PRODUCTION[1])[0],
     }  # fmt: skip
     series = {
         f.symbol: (f.name, f.category, prices.filter(pl.col("symbol") == f.symbol))
@@ -427,7 +447,9 @@ def make_vs_buy_history_task(settings: Settings, raw: Path) -> dict:
         daily = load_run(settings.data_dir, run_id).daily.select("date", "ret")
         series[f"ours: {label}"] = (label, "ours", daily)
     rates = pl.read_parquet(paths.rates) if paths.rates.exists() else None
-    summary, growth = compare(series, rates, start)
+    summary, growth = compare(series, rates, start, ours=HISTORY_OURS)
     write_parquet_atomic(summary, paths.make_vs_buy / "summary.parquet")
     write_parquet_atomic(growth, paths.make_vs_buy / "growth.parquet")
+    if publish is not None:
+        write_parquet_atomic(summary, DataPaths(publish).make_vs_buy / "history_summary.parquet")
     return {"runs": ours, "series": len(series)}
