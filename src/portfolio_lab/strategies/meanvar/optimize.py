@@ -21,13 +21,14 @@ TRADING_DAYS = 252
 WEIGHT_CUTOFF = 1e-4
 
 
-def _within_bounds(weights: dict[str, float], cap: float) -> dict[str, float]:
-    """Clip solver output to ``[0, cap]`` and scale it to sum to at most 1.
+def _within_bounds(weights: dict[str, float], cap: float | dict[str, float]) -> dict[str, float]:
+    """Clip solver output to ``[0, cap]`` (per symbol) and scale it to sum to at most 1.
 
     Solvers satisfy constraints only to a tolerance, e.g. returning weights summing to
     1.0026; the backtest engine rightly rejects anything over budget.
     """
-    clipped = {s: min(float(w), cap) for s, w in weights.items() if w > 0}
+    limit = cap if isinstance(cap, dict) else dict.fromkeys(weights, cap)
+    clipped = {s: min(float(w), limit[s]) for s, w in weights.items() if w > 0}
     total = sum(clipped.values())
     return {s: w / total for s, w in clipped.items()} if total > 1 else clipped
 
@@ -50,6 +51,7 @@ def optimize(
     objective: str = "max_sharpe",
     max_weight: float = 0.10,
     risk_aversion: float = 1.0,
+    caps: dict[str, float] | None = None,
 ) -> dict[str, float]:
     """Long-only mean-variance weights for the symbols in ``mu``.
 
@@ -60,6 +62,8 @@ def optimize(
         objective: One of :data:`OBJECTIVES`.
         max_weight: Cap on any single weight (raised to ``1/n`` if infeasibly low).
         risk_aversion: Risk aversion for ``max_quadratic_utility``.
+        caps: Per-symbol caps instead of ``max_weight`` (scaled up together if they sum
+            to less than 1, so a fully invested portfolio stays feasible).
 
     Returns:
         Weights summing to 1 (less sub-cutoff slivers left in cash), or an empty dict (all
@@ -72,10 +76,16 @@ def optimize(
     if len(symbols) < 2:
         return {}
     cov = CovarianceShrinkage(prices[symbols], frequency=TRADING_DAYS).ledoit_wolf()
-    cap = max(max_weight, 1.0 / len(symbols))
+    if caps is None:
+        cap = dict.fromkeys(symbols, max(max_weight, 1.0 / len(symbols)))
+    else:
+        total = sum(caps.get(s, 0.0) for s in symbols)
+        grow = max(1.0, 1.0 / total) if total > 0 else 1.0
+        cap = {s: min(1.0, caps.get(s, 0.0) * grow) for s in symbols}
 
     for attempt in dict.fromkeys((objective, "min_volatility")):
-        ef = EfficientFrontier(mu[symbols], cov, weight_bounds=(0, cap))
+        bounds = [(0.0, cap[s]) for s in symbols]
+        ef = EfficientFrontier(mu[symbols], cov, weight_bounds=bounds)
         try:
             _solve(ef, attempt, risk_free, risk_aversion)
         except (OptimizationError, ValueError) as exc:

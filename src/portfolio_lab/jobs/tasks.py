@@ -46,10 +46,16 @@ from portfolio_lab.strategies.base import create
 
 log = logging.getLogger(__name__)
 
-#: The production strategy: meanvar on the 100 healthiest (continuous F-score) of the 400
-#: most liquid stocks, monthly, holding the minimum-variance mix in bear markets and equal
-#: weights in rebounds (see ``strategies.meanvar`` and ``research.regimes``).
+#: The production strategy: meanvar on the healthiest (continuous F-score) of the most liquid
+#: stocks, monthly, with weight limits tapering near the edges of both lists instead of hard
+#: cutoffs (``strategies.meanvar.soft``), holding the minimum-variance mix in bear markets and
+#: equal weights in rebounds (see ``strategies.meanvar`` and ``research.regimes``).
 PRODUCTION: tuple[str, dict[str, Any]] = (
+    "meanvar",
+    {"health_rank_pool": 400, "soften": "taper", "bear_defense": True, "rebound": "equal"},
+)
+#: The previous production: the 100 healthiest of the 400 most liquid, hard cutoffs.
+HARD_CUTOFFS: tuple[str, dict[str, Any]] = (
     "meanvar",
     {"health_rank_pool": 400, "bear_defense": True, "rebound": "equal"},
 )
@@ -65,7 +71,8 @@ SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("meanvar", {"min_fscore": 7}),
     # The first baseline: meanvar on the healthiest 27% by continuous F-score.
     ("meanvar", {"healthy_share": 0.27}),
-    # Production: the 100 healthiest of the 400 most liquid, defensive in bear markets.
+    # The previous production (hard cutoffs), and production (tapered).
+    HARD_CUTOFFS,
     PRODUCTION,
 )
 #: Signals the weekly scoreboard evaluates: mean-variance's forecasts and classic anomalies.
@@ -398,7 +405,7 @@ def make_vs_buy_history_task(settings: Settings, publish: Path | None = None) ->
     Fund prices (distribution-adjusted) come from Tiingo, so nothing published below is
     Sharadar data; ours are backtests on the Sharadar history in ``settings.data_dir``:
     meanvar, meanvar behind F-score >= 7, meanvar behind the continuous F-score (healthiest
-    27%) and :data:`PRODUCTION`, all from :data:`HISTORY_COMPARE_START`.
+    27%), :data:`HARD_CUTOFFS` and :data:`PRODUCTION`, all from :data:`HISTORY_COMPARE_START`.
 
     With ``publish`` (the main data directory), the summary and the growth of $1 are also
     written there (``make_vs_buy/history_summary.parquet``, ``history_growth.parquet``) for
@@ -430,7 +437,9 @@ def make_vs_buy_history_task(settings: Settings, publish: Path | None = None) ->
                                                 params={"min_fscore": 7})[0],
         "meanvar + continuous F-score (healthiest 27%)": backtest_task(
             settings, "meanvar", start, params={"healthy_share": 0.27})[0],
-        "production (healthiest 100 of 400 + bear defense)": backtest_task(
+        "previous production (hard cutoffs)": backtest_task(
+            settings, HARD_CUTOFFS[0], start, params=HARD_CUTOFFS[1])[0],
+        "production (tapered healthiest of the most liquid + bear defense)": backtest_task(
             settings, PRODUCTION[0], start, params=PRODUCTION[1])[0],
     }  # fmt: skip
     series = {
