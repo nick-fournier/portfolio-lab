@@ -266,5 +266,7 @@ def test_compare_page(client, tmp_path):
         {"date": [date(1999, 1, 4)] * 2, "key": ["SPY", "ours: h"], "growth": [1.0, 1.0]}
     ).write_parquet(folder / "history_growth.parquet")
     page = client.get("/compare").text
-    for expected in ("Since 1999", "17.3%", "8.7%", "8.6%", "healthy meanvar", "history-growth"):
+    for expected in ("Since 1999", "17.3%", "8.7%", "8.6%", "healthy meanvar",
+                     "since 1999-01-04", "survivorship-free"):  # fmt: skip
         assert expected in page, expected
+    assert page.count('class="chart tall"') == 1  # one growth chart, now the long history
