@@ -185,7 +185,7 @@ def build_features(
     tickers: pl.DataFrame,
     companies: pl.DataFrame | None = None,
     fscores: pl.DataFrame | None = None,
-    start: date = date(2017, 1, 1),
+    start: date | None = None,
 ) -> pl.DataFrame:
     """Monthly feature panel (see module docs).
 
@@ -195,12 +195,12 @@ def build_features(
         tickers: symbol -> cik map.
         companies: SEC profiles with ``cik`` and ``sic`` (for industry features).
         fscores: Point-in-time F-scores by symbol (symbol, filed, fscore, n_signals).
-        start: First month end.
+        start: First month end (default: the first with a year of price history).
 
     Returns:
         date, symbol, sic2, market_value, the features, and ``fscore``.
     """
-    grid = _price_grid(panel, start)
+    grid = _price_grid(panel, start or panel.dates[0])
     by_symbol = states.join(tickers, on="cik").drop("accn", "form")
     grid = _asof(grid, by_symbol, MAX_FILING_AGE_DAYS)
     grid = grid.with_columns(_market_value(grid, panel))

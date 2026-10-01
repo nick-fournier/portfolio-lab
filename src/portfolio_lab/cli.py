@@ -7,12 +7,14 @@ scheduler), the web app factory, or the scheduler loop.
 import json
 from datetime import datetime
 from importlib.metadata import version
+from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 
 from portfolio_lab.core.config import get_settings
 from portfolio_lab.core.log import setup_logging
+from portfolio_lab.data.ingest import sharadar
 from portfolio_lab.jobs import tasks
 
 app = typer.Typer(help="Portfolio lab: ingest data, run backtests, serve the dashboard.")
@@ -115,6 +117,19 @@ def _parse_params(pairs: list[str]) -> dict[str, Any]:
         except json.JSONDecodeError:
             params[key] = raw
     return params
+
+
+@app.command("ingest-sharadar")
+def ingest_sharadar_cmd(
+    out: Annotated[Path, typer.Option(help="New data directory to write.")],
+    raw: Annotated[
+        Path | None, typer.Option(help="Folder with the bulk zips (default: raw/sharadar).")
+    ] = None,
+) -> None:
+    """Build a separate data directory from Sharadar's full-history bulk files."""
+    settings = get_settings()
+    raw = raw or settings.data_dir / "raw" / "sharadar"
+    typer.echo(sharadar.build(raw, out, settings.data_dir))
 
 
 @app.command("backtest")

@@ -220,3 +220,43 @@ def fscores_by_symbol(fscores: pl.DataFrame, tickers: pl.DataFrame) -> pl.DataFr
         .select("symbol", "filed", "fiscal_end", "fscore", "n_signals")
         .sort("symbol", "filed")
     )
+
+
+def fscores_from_states(states: pl.DataFrame) -> pl.DataFrame:
+    """F-scores from annual filing states (``research.fundamentals`` layout, 10-K rows).
+
+    For data sources that deliver fiscal-year values with the prior year already paired
+    (the Sharadar history). ROA and asset turnover use year-end assets for both years,
+    since assets two years back are not in a state; otherwise as in the module docs.
+
+    Returns:
+        cik, filed, fiscal_end, fscore, n_signals.
+    """
+    c = pl.col
+
+    def ratio(a: pl.Expr, b: pl.Expr) -> pl.Expr:
+        return pl.when(b > 0).then(a / b)
+
+    gross, gross_py = c("revenue") - c("cost_of_revenue"), c("revenue_py") - c("cost_of_revenue_py")
+    gross = pl.coalesce(c("gross_profit"), gross)
+    gross_py = pl.coalesce(c("gross_profit_py"), gross_py)
+    lt, lt_py = c("lt_debt").fill_null(0.0), c("lt_debt_py").fill_null(0.0)
+    signals = [
+        ratio(c("net_income"), c("assets")) > 0,
+        c("cfo") > 0,
+        ratio(c("net_income"), c("assets")) > ratio(c("net_income_py"), c("assets_py")),
+        c("cfo") > c("net_income"),
+        ratio(lt, c("assets")) <= ratio(lt_py, c("assets_py")),
+        ratio(c("assets_cur"), c("liab_cur")) > ratio(c("assets_cur_py"), c("liab_cur_py")),
+        c("shares_weighted") <= c("shares_weighted_py"),
+        ratio(gross, c("revenue")) > ratio(gross_py, c("revenue_py")),
+        ratio(c("revenue"), c("assets")) > ratio(c("revenue_py"), c("assets_py")),
+    ]
+    scored = states.filter(c("form") == "10-K").with_columns(
+        s.cast(pl.Int8).alias(name) for s, name in zip(signals, SIGNALS, strict=True)
+    )
+    return scored.select(
+        "cik", "filed", pl.col("period_end").alias("fiscal_end"),
+        pl.sum_horizontal(SIGNALS).alias("fscore"),
+        pl.sum_horizontal(c(s).is_not_null() for s in SIGNALS).alias("n_signals"),
+    )  # fmt: skip

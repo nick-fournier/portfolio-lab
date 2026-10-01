@@ -17,10 +17,15 @@ Frequency = Literal["D", "W", "M", "Q"]
 NEW_YORK = ZoneInfo("America/New_York")
 
 
+#: First date the calendar covers (the library defaults to the last 20 years; the
+#: Sharadar history starts in 1998).
+CALENDAR_START = "1990-01-02"
+
+
 @lru_cache
 def _calendar() -> xcals.ExchangeCalendar:
     """Return the (cached) NYSE calendar."""
-    return xcals.get_calendar("XNYS")
+    return xcals.get_calendar("XNYS", start=CALENDAR_START)
 
 
 def sessions(start: date, end: date) -> list[date]:
