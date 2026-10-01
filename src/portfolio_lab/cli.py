@@ -21,9 +21,10 @@ from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
 from portfolio_lab.data.ingest import sharadar
 from portfolio_lab.jobs import tasks, taxes
-from portfolio_lab.research import history, regimes
+from portfolio_lab.research import history, regimes, sources
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.scorecard import scorecard
+from portfolio_lab.strategies.base import create
 
 app = typer.Typer(help="Portfolio lab: ingest data, run backtests, serve the dashboard.")
 ingest_app = typer.Typer(help="Fetch and store market data.")
@@ -235,6 +236,40 @@ def tax_runs_cmd(
     """Backtest production at each level of stickiness, plus SPY, for the tax calculator."""
     for key, run_id in taxes.tax_runs_task(get_settings(), publish).items():
         typer.echo(f"{key:>14}: {run_id}")
+
+
+@app.command("sources")
+def sources_cmd(
+    live: Annotated[Path, typer.Option(help="Live data directory (Alpaca + SEC).")],
+    sharadar: Annotated[Path, typer.Option(help="Sharadar data directory.")],
+    scratch: Annotated[Path, typer.Option(help="Folder for the mixed data directories.")],
+    start: Day = datetime(2017, 1, 3),
+    swap: Annotated[bool, typer.Option(help="Also run the four-way swap test.")] = True,
+) -> None:
+    """Split production's live-vs-Sharadar gap: prices vs fundamentals, inputs, timing."""
+    settings = get_settings()
+    feats = {n: pl.read_parquet(d / "features" / "monthly.parquet") for n, d in
+             (("live", live), ("sharadar", sharadar))}  # fmt: skip
+    out = sources.compare_inputs(feats["live"], feats["sharadar"], start.date())
+    with pl.Config(tbl_rows=50, float_precision=3, tbl_width_chars=200):
+        typer.echo(
+            f"Sharadar's top-{sources.POOL} pool found in live data: {out['pool_in_live']:.1%}"
+        )
+        typer.echo(out["inputs"])
+        overlap = out["overlap"]
+        by_year = overlap.group_by(pl.col("date").dt.year().alias("year")).agg(
+            pl.col("overlap").mean()).sort("year")  # fmt: skip
+        typer.echo(f"Healthiest-{sources.TOP} overlap: {overlap['overlap'].mean():.1%}")
+        typer.echo(by_year)
+        typer.echo(f"Filing timing (live minus Sharadar days since filing): {out['timing']}")
+        if swap:
+
+            def factory():
+                return tasks._attach_runtime(create(*tasks.PRODUCTION[:1], **tasks.PRODUCTION[1]),
+                                             settings)  # fmt: skip
+
+            dirs = {"live": live, "sharadar": sharadar}
+            typer.echo(sources.swap_test(factory, dirs, scratch, start.date()))
 
 
 @app.command("scorecard")
