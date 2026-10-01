@@ -7,7 +7,9 @@ directory's ``results/taxes/``:
 
 - ``index.json``: one entry per variant (label, settings, turnover);
 - ``<key>.trades.parquet``: the trade log with symbols replaced by anonymous ids;
-- ``<key>.nav.parquet``: the daily pre-tax growth of $1.
+- ``<key>.nav.parquet``: the daily pre-tax growth of $1;
+- ``<key>.monthly.parquet``: gains and income realized each month with no tax paid
+  (``backtest.tax.monthly_gains``), from which the Taxes page computes any rates.
 
 These are derived backtest results with no prices or tickers, which the Sharadar license
 lets us keep and use.
@@ -24,7 +26,7 @@ import polars as pl
 from portfolio_lab.backtest.engine import BacktestConfig, label, run
 from portfolio_lab.backtest.execution import Execution
 from portfolio_lab.backtest.results import list_runs, load_run, runs_dir, save_run
-from portfolio_lab.backtest.tax import CASH
+from portfolio_lab.backtest.tax import CASH, monthly_gains
 from portfolio_lab.core.config import Settings
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
@@ -98,12 +100,15 @@ def publish_runs(source: Path, runs: dict[str, str], dest: Path) -> Path:
         ids = {s: f"h{k}" for k, s in enumerate(symbols.to_list())} | {CASH: CASH}
         trades = stored.trades.with_columns(pl.col("key").replace_strict(ids))
         write_parquet_atomic(trades, folder / f"{key}.trades.parquet")
-        write_parquet_atomic(stored.daily.select("date", "nav"), folder / f"{key}.nav.parquet")
+        nav = stored.daily.select("date", "nav")
+        write_parquet_atomic(nav, folder / f"{key}.nav.parquet")
+        months, unrealized = monthly_gains(stored.trades, nav)
+        write_parquet_atomic(months, folder / f"{key}.monthly.parquet")
         execution = stored.meta.get("execution") or asdict(Execution())
         index.append({
             "key": key, "run_id": run_id, "strategy": stored.meta["strategy"],
             "label": stored.meta.get("label"), **execution,
-            "turnover": stored.metrics.get("turnover_annual"),
+            "turnover": stored.metrics.get("turnover_annual"), "unrealized": list(unrealized),
         })  # fmt: skip
     (folder / "index.json").write_text(json.dumps(index, indent=2))
     return folder

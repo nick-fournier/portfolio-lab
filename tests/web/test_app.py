@@ -250,11 +250,11 @@ def test_compare_page(client, tmp_path):
     assert page.count('class="chart tall"') == 1
 
 
-def test_tax_calculator(client, tmp_path):
-    assert "No published tax runs" in client.get("/taxes").text
+def test_tax_page(client, tmp_path):
+    assert "Nothing published yet" in client.get("/taxes").text
     days = [date(2020, 1, 2), date(2021, 6, 1)]
     ids = {}
-    for key, strategy in (("band0", "meanvar"), ("spy", "buy_hold")):
+    for key, strategy in (("band0", "meanvar"), ("band0-defer", "meanvar"), ("spy", "buy_hold")):
         run = _run(strategy, days)
         run.daily = run.daily.with_columns(pl.Series("nav", [1.0, 2.0]))
         run.trades = pl.DataFrame(
@@ -266,15 +266,6 @@ def test_tax_calculator(client, tmp_path):
     folder = publish_runs(tmp_path, ids, tmp_path)
     assert "AAA" not in pl.read_parquet(folder / "band0.trades.parquet")["key"].to_list()
     page = client.get("/taxes").text
-    for expected in ("Tax calculator", "Every version", "Trade every change", "SPY, held"):
+    for expected in ("Is the strategy worth sheltering", "Rough rates by income", "SPY, taxable",
+                     "Taxable, holding gains a year", '"unrealized": [0.0, 1.0]'):  # fmt: skip
         assert expected in page, expected
-    # Held, not sold: no tax. Cashing out a doubling held over a year: 28.1% long-term.
-    held = client.get("/taxes/result").text
-    assert "$0" in held and "$200,000" in held
-    sold = client.get("/taxes/result", params={"sell": "true"}).text
-    assert "$28,100" in sold and "$171,900" in sold
-    roth = client.get("/taxes/result", params={"sell": "true", "account": "roth"}).text
-    assert "$200,000" in roth
-    assert client.get("/taxes/result", params={"short": "99"}).status_code == 422
-    assert "Every version" in client.get("/taxes/result", params={"band": "0"}).text
-    assert "No published tax runs" in client.get("/taxes/result", params={"band": "2"}).text

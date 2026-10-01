@@ -223,12 +223,23 @@ class _Replay:
         self.paid: list[tuple[date, float]] = []  # (date, scale after paying)
         self.by_year: list[tuple[int, float]] = []
         self.short = self.long = self.income = 0.0
+        self.day: date | None = None
+        #: (year, month) -> [short, long, dividends, interest] realized, in dollars, then
+        #: the latest unrealized (short, long) gains as shares of the portfolio.
+        self.months: dict[tuple[int, int], list[float]] = {}
+
+    def _month(self) -> list[float]:
+        key = (self.day.year, self.day.month)
+        return self.months.setdefault(key, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
     def realize(self, gains: tuple[float, float]) -> None:
         self.year.short += gains[0]
         self.year.long += gains[1]
         self.short += gains[0]
         self.long += gains[1]
+        month = self._month()
+        month[0] += gains[0]
+        month[1] += gains[1]
 
     def close_year(self) -> float:
         """Tax the finished year; return its bill."""
@@ -240,6 +251,7 @@ class _Replay:
     def event(self, event: Event) -> None:
         """Apply one event: income and price moves, any tax due, then the trades."""
         day, keys, before, after, income = event
+        self.day = day
         ordinal = day.toordinal()
         if self.current_year is not None and day.year != self.current_year:
             owed = self.close_year() + (self.due[1] if self.due else 0.0)
@@ -250,8 +262,10 @@ class _Replay:
             self.income += received
             if key == CASH:
                 self.year.interest += received
+                self._month()[3] += received
                 continue
             self.year.dividends += received
+            self._month()[2] += received
             self.lots.revalue(key, max(b - max(inc, 0.0), 0.0) * self.scale)
             self.lots.buy(key, ordinal, received)
         # Pay only at full snapshots (cash present), where every holding is then trimmed.
@@ -264,6 +278,11 @@ class _Replay:
                 self.lots.buy(key, ordinal, gap)
             elif gap < -1e-9 * self.scale:
                 self.realize(self.lots.sell(key, ordinal, -gap))
+        if CASH in keys:  # a full snapshot: note how much of the portfolio is untaxed gain
+            value = after.sum() * self.scale
+            if value > 0:
+                month = self._month()
+                month[4:6] = [g / value for g in self.lots.unrealized(ordinal)]
 
     def pay(self, day: date, value: float, tax: float) -> None:
         """Pay ``tax`` out of a portfolio worth ``value``, shrinking every holding alike."""
@@ -328,3 +347,96 @@ def _growth(nav: pl.DataFrame, start: float, paid: list[tuple[date, float]]) -> 
         scale[dates >= np.datetime64(day)] = after
     values = nav["nav"].to_numpy()
     return pl.DataFrame({"date": nav["date"], "before": values * start, "after": values * scale})
+
+
+def monthly_gains(
+    trades: pl.DataFrame, nav: pl.DataFrame
+) -> tuple[pl.DataFrame, tuple[float, float]]:
+    """What a run realizes each month with no tax paid: the inputs of :func:`approx_after_tax`.
+
+    Rate-free: lots are sold in tax order (losses, then long-term gains, then short-term),
+    which barely depends on the rates.
+
+    Returns:
+        Per month: date (last session), nav, short, long, dividends, interest (in pre-tax
+        NAV units), open_short and open_long (unrealized gains as shares of the portfolio);
+        and the (short, long) gains still unrealized on the last day.
+    """
+    replay = _Replay(TaxRates(0.0, 0.0, 0.0, 0.0), 1.0, "tax")
+    replay.lots = Lots(TaxRates(), "tax")
+    for event in events(trades):
+        replay.event(event)
+    unrealized = replay.lots.unrealized(nav["date"][-1].toordinal())
+    flows = pl.DataFrame(
+        [(y, m, *v) for (y, m), v in replay.months.items()],
+        schema=[
+            "year",
+            "month",
+            "short",
+            "long",
+            "dividends",
+            "interest",
+            "open_short",
+            "open_long",
+        ],
+        orient="row",
+    )
+    ends = (
+        nav.with_columns(
+            pl.col("date").dt.year().alias("year"), pl.col("date").dt.month().alias("month")
+        )
+        .group_by("year", "month", maintain_order=True)
+        .last()
+    )
+    months = ends.join(flows, on=["year", "month"], how="left").fill_null(0.0).sort("date")
+    columns = ("date", "nav", "short", "long", "dividends", "interest", "open_short", "open_long")
+    return months.select(columns), unrealized
+
+
+def approx_after_tax(
+    months: pl.DataFrame,
+    unrealized: tuple[float, float],
+    rates: TaxRates,
+    start: float = 100_000.0,
+) -> list[tuple[date, float]]:
+    """Fast after-tax growth from :func:`monthly_gains`, selling everything at the end.
+
+    Each month's gains and income are scaled by the after-tax portfolio's size; a year's
+    tax (netted as in :func:`year_tax`) is paid at the end of the next April, and the final
+    year's, with every remaining gain, on the last day. Selling to pay the tax realizes the
+    portfolio's average share of untaxed gain. The page's JavaScript mirrors this function.
+
+    Returns:
+        (date, after-tax dollars per unit of pre-tax NAV) from each payment on, as
+        :func:`_growth` takes them.
+    """
+    scale, carry, year, owed = start, _Carry(), _Year(), 0.0
+    paid: list[tuple[date, float]] = []
+    current = None
+    rows = months.iter_rows(named=True)
+    for row in rows:
+        day = row["date"]
+        if current is not None and day.year != current:
+            tax, carry = year_tax(year, carry, rates)
+            owed += tax
+            year = _Year()
+        current = day.year
+        year.short += row["short"] * scale
+        year.long += row["long"] * scale
+        year.dividends += row["dividends"] * scale
+        year.interest += row["interest"] * scale
+        if day.month == DUE[0] and owed:
+            value = row["nav"] * scale
+            year.short += owed * row["open_short"]
+            year.long += owed * row["open_long"]
+            scale *= max(value - owed, 0.0) / value
+            paid.append((day, scale))
+            owed = 0.0
+    last = months.row(-1, named=True)
+    year.short += unrealized[0] * scale
+    year.long += unrealized[1] * scale
+    tax, _ = year_tax(year, carry, rates)
+    value = last["nav"] * scale
+    scale *= max(value - tax - owed, 0.0) / value
+    paid.append((last["date"], scale))
+    return paid

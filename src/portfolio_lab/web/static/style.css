@@ -65,7 +65,10 @@ tr.ours td { background: #f6f8fa; }
   .chart.tall { height: 520px; }  /* room for a multi-row legend below the plot */
   .strategy .stats { flex-wrap: wrap; gap: 0.5rem 1rem; }
 }
-.taxform { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(11rem, 100%), 1fr)); gap: 0.6rem 1rem; align-items: end; margin-bottom: 1rem; }
+.taxform { display: flex; flex-wrap: wrap; gap: 0.6rem 2rem; margin-bottom: 0.5rem; }
 .taxform label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.85rem; color: var(--muted); }
-.taxform label.check { flex-direction: row; align-items: center; gap: 0.4rem; color: var(--fg); }
-.taxform input[type=number], .taxform select { font: inherit; padding: 0.2rem 0.4rem; width: 100%; box-sizing: border-box; }
+.taxform label span { display: flex; align-items: center; gap: 0.5rem; color: var(--fg); }
+.taxform input[type=range] { width: min(14rem, 50vw); }
+.taxform input[type=number] { font: inherit; padding: 0.2rem 0.4rem; width: 4.5rem; }
+.guide { margin-bottom: 1rem; }
+.guide summary { cursor: pointer; color: var(--accent); }

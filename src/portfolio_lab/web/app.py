@@ -58,7 +58,7 @@ def create_app(data_dir: Path) -> FastAPI:
             overview.page_context(Path(data_dir))
             compare.page_context(Path(data_dir))
             signals.page_context(Path(data_dir))
-            taxes.calculate(Path(data_dir), taxes.Inputs())
+            taxes.page_data(Path(data_dir))
 
         threading.Thread(target=prewarm, daemon=True).start()
         yield
