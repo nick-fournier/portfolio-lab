@@ -2,71 +2,61 @@
 {% block title %}Signals · Portfolio lab{% endblock %}
 {% block head %}<script src="/vendor/plotly.min.js?v={{ plotly_version }}" defer></script>{% endblock %}
 {% block content %}
-<h1>Signal scoreboard</h1>
-<p class="lede">How well each signal's stock ranking predicted the next period's returns.</p>
-
-<h2>What is IC?</h2>
-<p class="muted">Each date, the rank correlation between the signal's scores and the returns
-  that followed: +1 perfect, 0 none, −1 backwards. Good signals average 0.02–0.05.</p>
+<h1>Signals</h1>
+<p class="lede">How well each stock trait ranked production's candidates (the 500 most traded
+  stocks) by the return that followed.</p>
 
 {% if sections %}
-<p class="muted">{{ period[0] }} → {{ period[1] }}, dead companies included.</p>
+<div class="toggle" role="tablist">
+  {% for s in sections %}<button type="button" data-key="{{ s.key }}" {% if loop.first %}class="on"{% endif %}>{{ s.title }}</button>{% endfor %}
+</div>
+<p class="muted">{{ period[0] }} → {{ period[1] }}, companies that later failed included.</p>
 
-{% for section in sections %}
-<h2>{{ section.title }} <span class="muted">({{ section.horizon }} trading day{{ "s" if section.horizon > 1 }})</span></h2>
-{% for pool in section.pools %}
-<h3>{{ pool.title }}</h3>
-<div class="table-wrap"><table>
+{% for s in sections %}
+<div class="horizon" data-key="{{ s.key }}" {% if not loop.first %}hidden{% endif %}>
+<div class="table-wrap labelled"><table>
   <thead><tr>
-    <th>Signal</th><th class="num">Mean IC</th><th class="num">t-stat</th><th class="num">IC &gt; 0</th>
-    <th class="num">Top fifth</th><th class="num">Bottom fifth</th>
+    <th>Signal</th><th class="num">Avg IC</th><th class="num">Reliability</th>
+    <th class="num">Right</th><th class="num">High 20%</th><th class="num">Low 20%</th>
   </tr></thead>
   <tbody>
-  {% for r in pool.rows %}
+  {% for r in s.rows %}
     <tr>
-      <td><a href="#{{ anchor(r.signal) }}">{{ r.signal }}</a></td>
-      <td class="num {{ 'pos' if r.ic_t >= 2 else ('neg' if r.ic_t <= -2 else '') }}">{{ "%+.3f" | format(r.mean_ic) }}</td>
-      <td class="num">{{ "%+.1f" | format(r.ic_t) }}</td>
-      <td class="num">{{ r.hit | pct(0) }}</td>
+      <td><b>{{ r.signal }}</b>{% if r.what %}<br><span class="muted small">{{ r.what }}{% if r.expect == "lower" %} Lower is better.{% endif %}</span>{% endif %}</td>
+      <td class="num">{{ "%+.3f" | format(r.mean_ic) }}</td>
+      <td class="num {{ 'pos' if r.ic_t|abs >= 2 else '' }}">{{ "%.1f" | format(r.ic_t|abs) }}</td>
+      <td class="num">{{ r.right | pct(0) }}</td>
       <td class="num">{{ r.top | pct }}</td>
       <td class="num">{{ r.bottom | pct }}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table></div>
-<p class="muted">Cumulative IC</p>
-<div id="ic-{{ pool.key }}" class="chart tall"></div>
-{% endfor %}
+<h2>Cumulative IC <span class="muted">(the most reliable 6; tap others in the legend)</span></h2>
+<div id="ic-{{ s.key }}" class="chart tall"></div>
+</div>
 {% endfor %}
 
-<p class="muted">t-stat beyond ±2 (colored) is unlikely to be luck. Top / bottom fifth: annual
-  return of the best- and worst-scored fifth, before costs. A steady climb in cumulative IC
-  means persistent skill.</p>
-{% if glossary %}
-<h2 id="glossary">Glossary</h2>
-<p class="muted">What each signal measures and why. For "lower is better" signals a negative IC
-  is expected.</p>
-<dl class="glossary">
-  {% for g in glossary %}
-  <dt id="{{ g.anchor }}">{{ g.label }} <span class="muted">({{ g.expect }})</span></dt>
-  <dd>{{ g.what }} <span class="muted">Why it might work:</span> {{ g.why }}</dd>
-  {% endfor %}
-</dl>
-{% endif %}
+<p class="muted"><b>IC</b>: each period, how well the signal's ranking matched the ranking of
+  returns that followed (+1 perfect, 0 none, −1 backwards); good signals average 0.02–0.05,
+  negative for "lower is better" ones. <b>Reliability</b>: how far the average IC is from zero
+  in standard errors; 2 or more (green) is unlikely to be luck. <b>Right</b>: share of periods
+  the ranking pointed the expected way. <b>High / Low 20%</b>: annual return of the fifth of
+  stocks with the highest and lowest values of the signal, before costs. A steady climb in
+  cumulative IC means a persistent edge.</p>
+
+<script>
+  const drawn = new Set();
+  const figures = { {% for s in sections %}"{{ s.key }}": {{ s.chart | safe }},{% endfor %} };
+  function show(key) {
+    document.querySelectorAll(".toggle button").forEach((b) => b.classList.toggle("on", b.dataset.key === key));
+    document.querySelectorAll(".horizon").forEach((d) => { d.hidden = d.dataset.key !== key; });
+    if (!drawn.has(key)) { drawPlot("ic-" + key, figures[key]); drawn.add(key); }
+  }
+  document.querySelectorAll(".toggle button").forEach((b) => b.addEventListener("click", () => show(b.dataset.key)));
+  document.addEventListener("DOMContentLoaded", () => show("{{ sections[0].key }}"));
+</script>
 {% else %}
 <p class="muted">The scoreboard has not run yet (<code>plab scoreboard</code>).</p>
-{% endif %}
-
-{% if sections %}
-<script>
-  document.addEventListener("DOMContentLoaded", () => {
-    {% for section in sections %}{% for pool in section.pools %}
-    {
-      const fig = {{ pool.chart | safe }};
-      drawPlot("ic-{{ pool.key }}", fig);
-    }
-    {% endfor %}{% endfor %}
-  });
-</script>
 {% endif %}
 {% endblock %}

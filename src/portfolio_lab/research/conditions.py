@@ -19,13 +19,15 @@ TRAITS = (
     "cfo_to_assets", "roa", "earnings_yield", "book_to_market", "gross_profitability",
     "share_issuance", "mom_12_1", "volatility", "fscore",
 )  # fmt: skip
-#: Condition -> (environment column, bucket edges, bucket labels).
+#: Condition -> (environment column, bucket edges, bucket labels). Thirds are relative to the
+#: series' own history to that date (FRED series since 2000; stock valuation, the
+#: universe's earnings yield, since 2017).
 CONDITIONS: dict[str, tuple[str, tuple[float, ...], tuple[str, ...]]] = {
-    "Credit spreads (vs history)": ("baa_spread_pct", (1 / 3, 2 / 3), ("tight", "middle", "wide")),
-    "VIX (vs history)": ("vix_pct", (1 / 3, 2 / 3), ("calm", "middle", "stressed")),
-    "Yield curve, 10y minus 2y": ("curve_10y_2y", (0.0, 1.0), ("inverted", "flat", "steep")),
-    "10-year yield (vs history)": ("yield_10y_pct", (1 / 3, 2 / 3), ("low", "middle", "high")),
-    "Market earnings yield (vs 2017+)": (
+    "Credit spreads": ("baa_spread_pct", (1 / 3, 2 / 3), ("tight", "middle", "wide")),
+    "VIX": ("vix_pct", (1 / 3, 2 / 3), ("calm", "middle", "stressed")),
+    "Yield curve (10y minus 2y)": ("curve_10y_2y", (0.0, 1.0), ("inverted", "flat", "steep")),
+    "10-year yield": ("yield_10y_pct", (1 / 3, 2 / 3), ("low", "middle", "high")),
+    "Stock valuation": (
         "market_earnings_yield_pct", (1 / 3, 2 / 3), ("expensive", "middle", "cheap"),
     ),
     "Equity risk premium": (
@@ -55,7 +57,7 @@ def _with_buckets(frame: pl.DataFrame, env: pl.DataFrame) -> pl.DataFrame:
 
 
 def conditional_ic(
-    scores: pl.DataFrame, env: pl.DataFrame, pool: str = "all", horizon: int = 21
+    scores: pl.DataFrame, env: pl.DataFrame, pool: str = "top500", horizon: int = 21
 ) -> pl.DataFrame:
     """Mean monthly IC of each trait in each condition bucket.
 

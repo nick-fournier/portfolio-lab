@@ -32,10 +32,9 @@ HORIZON = 21
 FREQUENCY: dict[int, Frequency] = {1: "D", 5: "W", 21: "M", 63: "Q"}
 #: Fewest scored stocks for a date to count.
 MIN_NAMES = 20
-#: Candidate pools: the 100 most liquid eligible stocks, and every eligible stock.
+#: Candidate pools: production's, the 500 most liquid eligible stocks.
 POOLS: dict[str, Callable[[DataView], list[str]]] = {
-    "top100": lambda view: view.top_liquid(100),
-    "all": lambda view: view.eligible(),
+    "top500": lambda view: view.top_liquid(500),
 }
 SCHEMA = {
     "signal": pl.String,

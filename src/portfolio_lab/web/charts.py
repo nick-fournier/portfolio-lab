@@ -144,8 +144,13 @@ def comparison_figure(
     return fig.to_json()
 
 
-def cumulative_ic_figure(scores: pl.DataFrame) -> str:
-    """Running sum of monthly rank IC per signal: a steady climb means persistent skill."""
+def cumulative_ic_figure(scores: pl.DataFrame, shown: set[str] | None = None) -> str:
+    """Running sum of monthly rank IC per signal: a steady climb means persistent skill.
+
+    Args:
+        scores: Scoreboard rows for one pool and horizon.
+        shown: Signals drawn at first (the rest start hidden in the legend); all if None.
+    """
     fig = go.Figure(layout=_LAYOUT)
     for (signal,), rows in sorted(scores.sort("date").group_by("signal", maintain_order=True)):
         fig.add_scatter(
@@ -154,6 +159,7 @@ def cumulative_ic_figure(scores: pl.DataFrame) -> str:
             name=signal,
             mode="lines",
             line=_LINE,
+            visible=True if shown is None or signal in shown else "legendonly",
         )
     fig.add_hline(y=0, line={"color": "#6e7781", "width": 1})
     return fig.to_json()

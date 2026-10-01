@@ -1,10 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Models · Portfolio lab{% endblock %}
+{% block title %}Forecasts · Portfolio lab{% endblock %}
 {% block head %}<script src="/vendor/plotly.min.js?v={{ plotly_version }}" defer></script>{% endblock %}
 {% block content %}
-<h1>Models</h1>
-<p class="lede">Models combining every stock trait into a probability of beating the median
-  stock next month or quarter, trained each January on earlier years only.</p>
+<h1>Return forecasts</h1>
+<p class="lede">Can a model predict which stocks beat the median next month or quarter?
+  Each combines every stock trait, trained each January on earlier years only. Research only:
+  production doesn't use them.</p>
 
 {% if sections %}
 {% for s in sections %}

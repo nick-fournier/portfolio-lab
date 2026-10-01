@@ -17,6 +17,9 @@ Frequency = Literal["D", "W", "M", "Q"]
 NEW_YORK = ZoneInfo("America/New_York")
 
 
+#: The daily price update waits this long after the close (20:00 New York) for late prints.
+PRICE_UPDATE_DELAY = timedelta(hours=4)
+
 #: First date the calendar covers (the library defaults to the last 20 years; the
 #: Sharadar history starts in 1998).
 CALENDAR_START = "1990-01-02"
@@ -43,6 +46,17 @@ def previous_session(day: date) -> date:
     """Return the last NYSE session strictly before ``day``."""
     before = pd.Timestamp(day) - pd.Timedelta(days=1)
     return _calendar().date_to_session(before, direction="previous").date()
+
+
+def next_session(day: date) -> date:
+    """Return the first NYSE session strictly after ``day``."""
+    after = pd.Timestamp(day) + pd.Timedelta(days=1)
+    return _calendar().date_to_session(after, direction="next").date()
+
+
+def session_close(day: date) -> datetime:
+    """Return the close of session ``day`` (timezone-aware, early closes included)."""
+    return _calendar().session_close(pd.Timestamp(day)).to_pydatetime()
 
 
 def last_complete_session(

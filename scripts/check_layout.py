@@ -36,11 +36,12 @@ LEGEND_OVERLAP_JS = """() => [...document.querySelectorAll('.js-plotly-plot')].m
     return Math.round(100 * w * h / (a.width * a.height));
 })"""
 
-# Page coordinates of the middle point of the first chart's first trace (null if no chart).
+# Page coordinates of the middle point of the first chart's first drawn trace (null if none).
 FIRST_POINT_JS = """() => {
     const el = document.querySelector('.js-plotly-plot');
-    if (!el || !el._fullData.length) return null;
-    const trace = el._fullData[0], xa = el._fullLayout.xaxis, ya = el._fullLayout.yaxis;
+    const trace = el && el._fullData.find(t => t.visible === true);
+    if (!trace) return null;
+    const xa = el._fullLayout.xaxis, ya = el._fullLayout.yaxis;
     const k = Math.floor(trace.x.length / 2), box = el.getBoundingClientRect();
     return {
         x: box.left + xa._offset + xa.l2p(xa.d2l(trace.x[k])),
@@ -81,7 +82,7 @@ def pages(base: str) -> list[str]:
         *run_pages,
         "/signals",
         "/context",
-        "/models",
+        "/forecasts",
         "/compare",
         "/taxes",
         "/status",

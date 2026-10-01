@@ -1,10 +1,13 @@
-"""Models page: how reliably the relaxed models called direction, out of sample."""
+"""Forecasts page: how reliably the return-forecasting models called direction, out of sample.
+
+Formerly "Models", renamed so it isn't confused with the strategy (``/models`` redirects).
+"""
 
 from pathlib import Path
 
 import polars as pl
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.web.charts import calibration_figure, importance_figure
@@ -70,8 +73,14 @@ def _section(
     }
 
 
-@router.get("/models", response_class=HTMLResponse)
-def models(request: Request) -> HTMLResponse:
+@router.get("/models", include_in_schema=False)
+def models_redirect() -> RedirectResponse:
+    """The page's old address."""
+    return RedirectResponse("/forecasts", status_code=301)
+
+
+@router.get("/forecasts", response_class=HTMLResponse)
+def forecasts(request: Request) -> HTMLResponse:
     """Render reliability tables, calibration charts and input importance per horizon."""
     folder = DataPaths(request.app.state.data_dir).models
     summary = _read(folder / "summary.parquet")
@@ -84,5 +93,5 @@ def models(request: Request) -> HTMLResponse:
             if section:
                 sections.append(section)
     return request.app.state.templates.TemplateResponse(
-        request, "models.html", {"sections": sections}
+        request, "forecasts.html", {"sections": sections}
     )

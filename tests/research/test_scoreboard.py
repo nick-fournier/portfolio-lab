@@ -73,7 +73,7 @@ def test_tied_scores_share_a_quintile():
 
 def test_evaluate_uses_month_ends_with_complete_forward_windows(make_panel):
     panel = make_panel(symbols=SYMBOLS, days=400)
-    rows = evaluate(create("momentum"), "momentum", panel, panel.dates[260], pools=["all"])
+    rows = evaluate(create("momentum"), "momentum", panel, panel.dates[260], pools=["top500"])
     assert rows["signal"].unique().to_list() == ["momentum"]
     assert all(panel.date_index[d] + HORIZON < len(panel.dates) for d in rows["date"])
     months = [(d.year, d.month) for d in rows["date"]]
@@ -84,18 +84,18 @@ def test_evaluate_uses_month_ends_with_complete_forward_windows(make_panel):
 def test_daily_and_weekly_horizons(make_panel):
     panel = make_panel(symbols=SYMBOLS, days=400)
     start = panel.dates[300]
-    daily = evaluate(create("reversal", lookback=1, horizon=1), "r1", panel, start, ["all"])
-    weekly = evaluate(create("reversal", lookback=5, horizon=5), "r5", panel, start, ["all"])
+    daily = evaluate(create("reversal", lookback=1, horizon=1), "r1", panel, start, ["top500"])
+    weekly = evaluate(create("reversal", lookback=5, horizon=5), "r5", panel, start, ["top500"])
     assert daily["date"].to_list() == panel.dates[300 : len(panel.dates) - 1]
     assert set(daily["horizon"]) == {1} and set(weekly["horizon"]) == {5}
     weeks = [d.isocalendar()[:2] for d in weekly["date"]]
     assert len(weeks) == len(set(weeks)) >= 10  # one date per week
-    quarterly = evaluate(create("momentum", horizon=63), "m", panel, panel.dates[252], ["all"])
+    quarterly = evaluate(create("momentum", horizon=63), "m", panel, panel.dates[252], ["top500"])
     quarters = [(d.year, (d.month - 1) // 3) for d in quarterly["date"]]
     assert set(quarterly["horizon"]) == {63} and len(quarters) == len(set(quarters)) >= 1
     assert FREQUENCY[63] == "Q"
     with pytest.raises(ValueError, match="horizon"):
-        evaluate(create("reversal", horizon=3), "bad", panel, start, ["all"])
+        evaluate(create("reversal", horizon=3), "bad", panel, start, ["top500"])
 
 
 def test_summarize():

@@ -20,7 +20,7 @@ from fastapi.templating import Jinja2Templates
 from portfolio_lab.web.routes import (
     compare,
     context,
-    models,
+    forecasts,
     overview,
     runs,
     signals,
@@ -90,7 +90,7 @@ def create_app(data_dir: Path) -> FastAPI:
     app.include_router(runs.router)
     app.include_router(signals.router)
     app.include_router(context.router)
-    app.include_router(models.router)
+    app.include_router(forecasts.router)
     app.include_router(compare.router)
     app.include_router(taxes.router)
     app.include_router(status.router)

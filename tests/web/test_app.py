@@ -116,23 +116,30 @@ def test_status_and_health(client):
     page = client.get("/status")
     assert page.status_code == 200
     assert "rows_written" in page.text and "daily_ingest" in page.text
+    assert "Prices through Wed Jan 3" in page.text and "update" in page.text
     assert client.get("/healthz").text == "ok"
     assert client.get("/vendor/plotly.min.js").status_code == 200
 
 
 def test_data_freshness():
-    monday_evening = datetime(2024, 7, 8, 23, 0, tzinfo=UTC)
-    assert data_freshness({"max_date": "2024-07-08"}, monday_evening) == "fresh"
-    assert data_freshness({"max_date": "2024-07-05"}, monday_evening) == "stale"
-    assert data_freshness(None, monday_evening) == "missing"
+    monday_evening = datetime(2024, 7, 8, 23, 0, tzinfo=UTC)  # 7 pm New York
+    # Friday's prices on Monday evening: Monday's update is due at 8 pm, not yet late.
+    friday = data_freshness({"max_date": "2024-07-05"}, monday_evening)
+    assert friday["state"] == "current" and friday["next"].hour == 20
+    assert friday["next"].date() == date(2024, 7, 8)
+    tuesday_morning = datetime(2024, 7, 9, 13, 0, tzinfo=UTC)
+    assert data_freshness({"max_date": "2024-07-05"}, tuesday_morning)["state"] == "late"
+    assert data_freshness({"max_date": "2024-07-08"}, tuesday_morning)["state"] == "current"
+    assert data_freshness(None, monday_evening) == {"state": "missing"}
 
 
 def test_signals_page(client, tmp_path):
     assert "has not run yet" in client.get("/signals").text
     rows = [
-        (signal, pool, 21, date(2024, m, 28), 100, ic, 0.02, 0.01)
-        for signal, ic in (("momentum", 0.03), ("fscore", -0.01))
-        for pool in ("top100", "all")
+        (signal, pool, horizon, date(2024, m, 28), 100, ic, 0.02, 0.01)
+        for signal, ic in (("momentum", 0.03), ("accruals", -0.01))
+        for pool in ("top500", "all")  # only production's pool is shown
+        for horizon in (21, 63)
         for m in (1, 2, 3)
     ]
     schema = ["signal", "pool", "horizon", "date", "n", "ic", "top", "bottom"]
@@ -141,10 +148,12 @@ def test_signals_page(client, tmp_path):
     pl.DataFrame(rows, schema=schema, orient="row").write_parquet(path)
     page = client.get("/signals")
     assert page.status_code == 200
-    expected_text = ("What is IC?", "100 most liquid stocks", "momentum", "+0.030", "Glossary",
-                     'href="#g-momentum"', 'id="g-fscore"', "higher is better")  # fmt: skip
-    for expected in expected_text:
-        assert expected in page.text
+    for expected in ("Next month", "Next quarter", "momentum", "+0.030", "Lower is better",
+                     "Reliability", "High 20%"):  # fmt: skip
+        assert expected in page.text, expected
+    assert page.text.count("<tbody>") == 2  # one table per horizon, not per pool
+    # accruals: lower is better, IC negative every month, so it was right 100% of the time.
+    assert ">100%<" in page.text
 
 
 def test_overview_lists_the_market_once(client):
@@ -186,22 +195,22 @@ def test_context_page(client, tmp_path):
          "vix_pct": [0.2], "equity_risk_premium": [-0.01]}
     ).write_parquet(tmp_path / "macro" / "environment.parquet")  # fmt: skip
     pl.DataFrame(
-        {"trait": ["roa"], "condition": ["VIX (vs history)"], "bucket": ["calm"],
+        {"trait": ["roa"], "condition": ["VIX"], "bucket": ["calm"],
          "months": [30], "mean_ic": [0.04], "t": [2.5]}
     ).write_parquet(tmp_path / "results" / "context_conditions.parquet")  # fmt: skip
     pl.DataFrame(
-        {"condition": ["VIX (vs history)"], "bucket": ["calm"], "months_ahead": [3],
+        {"condition": ["VIX"], "bucket": ["calm"], "months_ahead": [3],
          "samples": [30], "mean_return": [0.02], "share_positive": [0.7],
          "mean_volatility": [0.15], "mean_drawdown": [-0.05]}
     ).write_parquet(tmp_path / "results" / "context_dial.parquet")  # fmt: skip
     page = client.get("/context").text
-    for expected in ("Today's conditions", "$80.00", "+11%", "calm", "below bonds",
-                     "Which traits work when", "+0.040", "The caution dial"):  # fmt: skip
+    for expected in ("Conditions now", "$80.00", "+11%", "calm ◂ now", "below bonds",
+                     "Which traits paid off", "+0.040", "S&amp;P 500 did next"):  # fmt: skip
         assert expected in page, expected
 
 
 def test_models_page(client, tmp_path):
-    assert "No model results yet" in client.get("/models").text
+    assert "No model results yet" in client.get("/forecasts").text
     folder = tmp_path / "results" / "models"
     folder.mkdir(parents=True)
     row = {"horizon": 21, "months": 60, "auc": 0.52, "ic": 0.04, "ic_t": 3.0, "brier": 0.25,
@@ -221,7 +230,7 @@ def test_models_page(client, tmp_path):
     pl.DataFrame(
         {"feature": ["cfo_to_assets"], "auc_drop": [0.004], "model": ["gbm"], "horizon": [21]}
     ).write_parquet(folder / "importance.parquet")
-    page = client.get("/models").text
+    page = client.get("/forecasts").text
     for expected in ("Next month", "All eligible stocks", "500 most liquid stocks", "0.520",
                      "53.0%", "→ 0.010", "Does a stated probability come true?",
                      "What the tree model relies on"):  # fmt: skip
