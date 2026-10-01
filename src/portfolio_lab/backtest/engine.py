@@ -373,4 +373,6 @@ def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
         "git_sha": _git_sha(),
         "caveats": list(CAVEATS),
     }
+    if callable(diagnostics := getattr(strategy, "diagnostics", None)):
+        meta["diagnostics"] = diagnostics()
     return RunResult(meta=meta, metrics=metrics, daily=daily_df, weights=weights_df)

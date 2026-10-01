@@ -131,6 +131,19 @@ class DataView:
             latest = latest.filter(pl.col("symbol").is_in(list(symbols)))
         return dict(zip(latest["symbol"], latest["fscore"].cast(int), strict=True))
 
+    def environment(self, column: str) -> pl.DataFrame:
+        """``column`` of the monthly market environment for months up to ``asof``.
+
+        Rows are built from data published by their date (see ``research.context``).
+
+        Returns:
+            date and ``column``, oldest first; empty if unavailable.
+        """
+        table = self._panel.environment
+        if table is None or column not in table.columns:
+            return pl.DataFrame(schema={"date": pl.Date, column: pl.Float64})
+        return table.filter(pl.col("date") <= self.asof).select("date", column).drop_nulls()
+
     def features(self, symbols: Sequence[str], columns: Sequence[str]) -> pl.DataFrame:
         """The latest monthly feature row on or before ``asof`` for each symbol.
 
