@@ -198,6 +198,15 @@ class MeanVar:
                 "earnings, falling debt, rising liquidity, no dilution, improving margins and "
                 "asset turnover) as a percentile among those stocks, averaged."
             )
+            screen += {
+                "average": " To avoid all-or-nothing cutoffs, this is done for pools of 300 to "
+                "500 stocks and lists of 80 to 120, and the resulting portfolios averaged.",
+                "taper": " There are no all-or-nothing cutoffs: up to 150 of the 500 most liquid "
+                "are candidates, and a stock's weight limit shrinks gradually as it nears the "
+                "edges (liquidity ranks 300 to 500, health ranks 100 to 150).",
+                "sticky": " A stock joins at liquidity rank 400 and health rank 100 but leaves "
+                "only below 500 and 130.",
+            }.get(self.soften or "", "")
         regime = ""
         if self.bear_defense:
             regime += (
