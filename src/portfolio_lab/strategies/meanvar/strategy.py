@@ -1,6 +1,7 @@
 """The mean-variance strategy: forecast returns, then optimize on the efficient frontier."""
 
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import ClassVar
 
@@ -19,6 +20,7 @@ from portfolio_lab.strategies.meanvar.forecast import (
     price_windows,
 )
 from portfolio_lab.strategies.meanvar.optimize import optimize
+from portfolio_lab.strategies.meanvar.soft import SoftSelector
 
 #: What each forecast model really computes, for the run explanation.
 _MODEL_TEXT = {
@@ -91,6 +93,9 @@ class MeanVar:
         health_rank_pool: If set, candidates are the ``top_n`` healthiest (continuous
             F-score) of the ``health_rank_pool`` most liquid stocks, instead of the most liquid
             of a healthy share.
+        soften: With ``health_rank_pool``, choose candidates without hard cutoffs
+            (``strategies.meanvar.soft``): ``average`` over several pool and list sizes,
+            ``taper`` weight caps near the edges, or ``sticky`` (easy in, slow out).
         bear_defense: In a bear market (``research.regimes.market_state``) hold the
             minimum-variance portfolio instead of max Sharpe.
         rebound: In a rebound (panic easing after a deep fall), when past losers tend to beat
@@ -123,6 +128,7 @@ class MeanVar:
     healthy_share: float | None = None
     health_schedule: str | None = None
     health_rank_pool: int | None = None
+    soften: str | None = None
     bear_defense: bool = False
     rebound: str | None = None
     rebound_lookback: int = 21
@@ -153,6 +159,9 @@ class MeanVar:
         self.rebound_lookback = int(self.rebound_lookback)
         self._gauge = stress.StressGauge()
         self._gauge_log: list[dict] = []
+        self._soft = SoftSelector(self.soften, self._health) if self.soften else None
+        self._caps: dict[str, float] | None = None  # per-stock caps of the set being weighed
+        self._state: tuple[date, str] | None = None  # market state, once per rebalance
         self._held: dict[str, float] = {}
 
     example_columns: ClassVar[dict[str, str]] = {
@@ -258,6 +267,17 @@ class MeanVar:
             self._forecaster = Forecaster(spec, self.cache_dir, self.workers)
         return self._forecaster
 
+    def _health(self, view: DataView, pool: list[str]) -> dict[str, float]:
+        """Continuous health score (the nine Piotroski metrics) of ``pool``."""
+        return health_scores(view.features(pool, list(PIOTROSKI)))
+
+    def _optimize(self, mu: pd.Series, prices: pd.DataFrame, rf: float, objective: str) -> Weights:
+        """``optimize`` with the usual cap, or the current set's tapered caps."""
+        caps = None
+        if self._caps is not None:
+            caps = {s: self.max_weight * self._caps[s] for s in mu.index if s in self._caps}
+        return optimize(mu, prices, rf, objective, self.max_weight, caps=caps)
+
     def _healthy_set(self, view: DataView, among: list[str] | None) -> list[str]:
         """The healthiest ``healthy_share`` of candidates, refreshed per ``health_schedule``."""
         quarter = (view.asof.year, (view.asof.month - 1) // 3)
@@ -265,7 +285,7 @@ class MeanVar:
             eligible = set(among if among is not None else view.eligible())
             return [s for s in self._healthy[1] if s in eligible]
         pool = among if among is not None else view.eligible()
-        health = health_scores(view.features(pool, list(PIOTROSKI)))
+        health = self._health(view, pool)
         ranked = sorted(health, key=lambda s: -health[s])
         chosen = ranked[: round(len(ranked) * self.healthy_share)]
         self._healthy = (quarter, chosen)
@@ -299,7 +319,7 @@ class MeanVar:
         self._gauge_log.append({"date": view.asof.isoformat(), "stress": level, "tilt": a, **pcts})
         if a <= 0:
             return weights
-        safe = optimize(mu, prices, view.risk_free(), "min_volatility", self.max_weight)
+        safe = self._optimize(mu, prices, view.risk_free(), "min_volatility")
         names = set(weights) | set(safe)
         blended = {s: (1 - a) * weights.get(s, 0.0) + a * safe.get(s, 0.0) for s in names}
         return {s: w for s, w in blended.items() if w > 0}
@@ -308,27 +328,32 @@ class MeanVar:
         self, view: DataView, mu: pd.Series, prices: pd.DataFrame, weights: Weights
     ) -> Weights:
         """Adjust for the market state (see ``bear_defense``, ``rebound``, ``defend_dates``)."""
-        if self.defend_dates:
+        if self._state is not None and self._state[0] == view.asof:
+            state = self._state[1]  # several candidate sets on one date: classify once
+        elif self.defend_dates:
             state = "bear" if view.asof.isoformat() in set(self.defend_dates) else "normal"
         else:
             market = view.returns(view.index + 1, ["SPY"]).get("SPY", pd.Series(dtype=float))
             vix = view.environment("vix")["vix"].to_list()
             state = regimes.market_state(market, vix, self.bear_drawdown, self.vix_easing)
-        self._gauge_log.append({"date": view.asof.isoformat(), "state": state})
+        if self._state is None or self._state[0] != view.asof:
+            self._state = (view.asof, state)
+            self._gauge_log.append({"date": view.asof.isoformat(), "state": state})
         rf = view.risk_free()
         if state == "bear" and (self.bear_defense or self.defend_dates):
-            return optimize(mu, prices, rf, "min_volatility", self.max_weight) or weights
+            return self._optimize(mu, prices, rf, "min_volatility") or weights
         if state == "rebound" and self.rebound == "equal":
-            return {s: 1 / len(prices.columns) for s in prices.columns}
+            share = {s: (self._caps or {}).get(s, 1.0) for s in prices.columns}
+            return {s: f / sum(share.values()) for s, f in share.items()}
         if state == "rebound" and self.rebound == "recent":
             lookback = min(self.rebound_lookback, len(prices) - 1)
             gain = prices.iloc[-1] / prices.iloc[-1 - lookback]
             recent = (gain ** (TRADING_DAYS / lookback) - 1).clip(-0.9, 5.0)
-            return optimize(recent, prices, rf, "max_sharpe", self.max_weight) or weights
+            return self._optimize(recent, prices, rf, "max_sharpe") or weights
         if state == "rebound" and self.rebound == "contrarian":
             vol = prices.pct_change().std() * TRADING_DAYS**0.5
             reverse = contrarian_returns(mu, vol, rf)
-            return optimize(reverse, prices, rf, "max_sharpe", self.max_weight) or weights
+            return self._optimize(reverse, prices, rf, "max_sharpe") or weights
         return weights
 
     def diagnostics(self) -> dict:
@@ -343,27 +368,43 @@ class MeanVar:
             among = [s for s, f in view.fscores(view.eligible()).items() if f >= self.min_fscore]
         if self.healthy_share is not None:
             among = self._healthy_set(view, among)
-        if self.health_rank_pool:
-            pool = view.top_liquid(self.health_rank_pool, among=among)
-            health = health_scores(view.features(pool, list(PIOTROSKI)))
-            candidates = sorted(health, key=lambda s: -health[s])[: self.top_n]
+        if self.health_rank_pool and self._soft is not None:
+            sets = self._soft.sets(view, among)
+        elif self.health_rank_pool:
+            health = self._health(view, view.top_liquid(self.health_rank_pool, among=among))
+            sets = [(sorted(health, key=lambda s: -health[s])[: self.top_n], None)]
         else:
-            candidates = view.top_liquid(self.top_n, among=among)
+            sets = [(view.top_liquid(self.top_n, among=among), None)]
+        exp_col, vol_col = self.example_columns
+        self.last_signals, total = {}, {}
+        for candidates, caps in sets:  # several sets (soften="average"): average their weights
+            weights, mu, vol = self._weigh(view, candidates, caps)
+            for s, w in weights.items():
+                total[s] = total.get(s, 0.0) + w / len(sets)
+                self.last_signals[s] = {exp_col: float(mu[s]), vol_col: float(vol[s])}
+        self._held = dict(total)
+        return total
+
+    def _weigh(
+        self, view: DataView, candidates: list[str], caps: dict[str, float] | None
+    ) -> tuple[Weights, pd.Series, pd.Series]:
+        """Forecast ``candidates`` and optimize their weights.
+
+        ``caps`` are per-stock shares of the usual cap (or None). Also returns the forecasts
+        and volatilities, for the run's worked example.
+        """
         prices = price_windows(view, candidates, self.lookback)
         if prices.shape[1] < 2 or len(prices) < 30:
-            return {}
+            return {}, pd.Series(dtype=float), pd.Series(dtype=float)
+        self._caps = caps
         windows = {s: prices[s].to_numpy() for s in prices.columns}
         mu = pd.Series(self._get_forecaster().forecast(view.asof, windows), dtype=float)
-        weights = optimize(mu, prices, view.risk_free(), self.objective, self.max_weight)
+        weights = self._optimize(mu, prices, view.risk_free(), self.objective)
         if self.risk_gauge and weights:
             weights = self._tilt(view, mu, prices, weights)
         if (self.bear_defense or self.rebound or self.defend_dates) and weights:
             weights = self._regime_weights(view, mu, prices, weights)
-        self._held = dict(weights)
-        vol = prices.pct_change().std() * TRADING_DAYS**0.5
-        exp_col, vol_col = self.example_columns
-        self.last_signals = {s: {exp_col: float(mu[s]), vol_col: float(vol[s])} for s in weights}
-        return weights
+        return weights, mu, prices.pct_change().std() * TRADING_DAYS**0.5
 
     def close(self) -> None:
         """Release the forecaster's worker pool."""
