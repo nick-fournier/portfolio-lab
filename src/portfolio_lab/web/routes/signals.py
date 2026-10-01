@@ -1,6 +1,7 @@
 """Signal scoreboard page: how well each signal's rankings predicted the next month."""
 
 import re
+from pathlib import Path
 
 import polars as pl
 from fastapi import APIRouter, Request
@@ -10,6 +11,7 @@ from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.research.glossary import EXPECT_TEXT, describe
 from portfolio_lab.research.scoreboard import summarize
 from portfolio_lab.web.charts import cumulative_ic_figure
+from portfolio_lab.web.series import cached
 
 router = APIRouter()
 
@@ -19,34 +21,44 @@ POOL_TITLES = {"top100": "100 most liquid stocks", "all": "All eligible stocks"}
 HORIZON_TITLES = {21: "Next month", 63: "Next quarter", 5: "Next week", 1: "Next day"}
 
 
+def page_context(data_dir: Path) -> tuple:
+    """Sections, period and signal labels for the scoreboard, rebuilt when it changes."""
+    path = DataPaths(data_dir).scoreboard
+
+    def build() -> tuple:
+        scores = pl.read_parquet(path) if path.exists() else pl.DataFrame()
+        sections = []
+        if not scores.is_empty():
+            table = summarize(scores)
+            for horizon, heading in HORIZON_TITLES.items():
+                pools = []
+                for pool, title in POOL_TITLES.items():
+                    rows = table.filter((pl.col("horizon") == horizon) & (pl.col("pool") == pool))
+                    if rows.height:
+                        subset = scores.filter(
+                            (pl.col("horizon") == horizon) & (pl.col("pool") == pool)
+                        )
+                        pools.append(
+                            {
+                                "key": f"{pool}-{horizon}",
+                                "title": title,
+                                "rows": rows.to_dicts(),
+                                "chart": cumulative_ic_figure(subset),
+                            }
+                        )
+                if pools:
+                    sections.append({"title": heading, "horizon": horizon, "pools": pools})
+        period = (scores["date"].min(), scores["date"].max()) if sections else None
+        labels = sorted(scores["signal"].unique()) if not scores.is_empty() else []
+        return sections, period, labels
+
+    return cached(f"signals:{path}", [path], build)
+
+
 @router.get("/signals", response_class=HTMLResponse)
 def signals(request: Request) -> HTMLResponse:
     """Summary table and cumulative-IC chart per horizon and candidate pool."""
-    path = DataPaths(request.app.state.data_dir).scoreboard
-    scores = pl.read_parquet(path) if path.exists() else pl.DataFrame()
-    sections = []
-    if not scores.is_empty():
-        table = summarize(scores)
-        for horizon, heading in HORIZON_TITLES.items():
-            pools = []
-            for pool, title in POOL_TITLES.items():
-                rows = table.filter((pl.col("horizon") == horizon) & (pl.col("pool") == pool))
-                if rows.height:
-                    subset = scores.filter(
-                        (pl.col("horizon") == horizon) & (pl.col("pool") == pool)
-                    )
-                    pools.append(
-                        {
-                            "key": f"{pool}-{horizon}",
-                            "title": title,
-                            "rows": rows.to_dicts(),
-                            "chart": cumulative_ic_figure(subset),
-                        }
-                    )
-            if pools:
-                sections.append({"title": heading, "horizon": horizon, "pools": pools})
-    period = (scores["date"].min(), scores["date"].max()) if sections else None
-    labels = sorted(scores["signal"].unique()) if not scores.is_empty() else []
+    sections, period, labels = page_context(request.app.state.data_dir)
     return request.app.state.templates.TemplateResponse(
         request,
         "signals.html",

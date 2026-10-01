@@ -1,19 +1,22 @@
 """Landing page (strategy overview with a comparison chart) and the About page."""
 
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from portfolio_lab.backtest.results import list_runs, load_run
-from portfolio_lab.web.charts import comparison_figure
+from portfolio_lab.web import series
+from portfolio_lab.web.charts import series_figure
 from portfolio_lab.web.routes.status import data_freshness
 
 router = APIRouter()
 
-#: Strategies drawn when the overview opens (besides buy-and-hold); the rest start hidden
-#: and can be shown from the legend, so the chart stays readable.
-SHOWN = 4
+#: Strategies drawn when the overview opens (besides SPY); the rest start hidden and can be
+#: shown from the legend, so the chart stays readable.
+SHOWN = 3
+#: Market references on the overview: drawn (the first) and listed.
+MARKET = ("SPY", "QQQ")
 
 
 def run_label(meta: dict) -> str:
@@ -30,39 +33,34 @@ def run_label(meta: dict) -> str:
     return meta["strategy"] + (f" ({', '.join(params)})" if params else "")
 
 
+def page_context(data_dir: Path) -> dict:
+    """Chart and table for the overview, rebuilt when the data changes."""
+
+    def build() -> dict:
+        everything = series.load(data_dir)
+        shown = [s for s in everything.values() if s.category == "ours"]
+        shown += [everything[k] for k in MARKET if k in everything]
+        rows = series.table(shown)
+        ours = [r for r in rows if r["category"] == "ours"]
+        ours.sort(key=lambda r: -(r["sharpe"] or -9))
+        visible = {*MARKET[:1], *(r["key"] for r in ours[:SHOWN])}
+        return {"rows": rows, "chart": series_figure(shown, visible),
+                "since": series.first_date(shown) if shown else None}  # fmt: skip
+
+    return series.cached(f"overview:{data_dir}", series.sources(data_dir), build)
+
+
 @router.get("/", response_class=HTMLResponse)
 def overview(request: Request) -> HTMLResponse:
-    """Latest run of each strategy configuration, compared on one chart."""
+    """Our strategies and the market on one chart and one table, longest history first."""
     data_dir = request.app.state.data_dir
-    latest = sorted(list_runs(data_dir, latest_only=True), key=lambda r: run_label(r["meta"]))
-    benchmark = latest[0]["meta"].get("benchmark", "SPY") if latest else "SPY"
-    holds_benchmark = {
-        r["meta"]["run_id"]
-        for r in latest
-        if r["meta"]["strategy"] == "buy_hold"
-        and r["meta"].get("params", {}).get("symbol", benchmark) == benchmark
-    }
-    others = [r for r in latest if r["meta"]["run_id"] not in holds_benchmark]
-    best = sorted(others, key=lambda r: -(r["metrics"].get("sharpe") or float("-inf")))
-    shown = holds_benchmark | {r["meta"]["run_id"] for r in best[:SHOWN]}
-    series = [
-        (
-            run_label(r["meta"]),
-            load_run(data_dir, r["meta"]["run_id"]).daily,
-            r["meta"]["run_id"] in shown,
-            r["meta"]["run_id"] in holds_benchmark,
-        )
-        for r in latest
-    ]
     prices_path = data_dir / "_status" / "prices.json"
     prices = json.loads(prices_path.read_text()) if prices_path.exists() else None
     return request.app.state.templates.TemplateResponse(
         request,
         "overview.html",
         {
-            "runs": latest,
-            "labels": {r["meta"]["run_id"]: run_label(r["meta"]) for r in latest},
-            "chart": comparison_figure(series, None if holds_benchmark else benchmark),
+            **page_context(data_dir),
             "data_through": prices.get("max_date") if prices else None,
             "freshness": data_freshness(prices),
         },

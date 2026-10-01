@@ -1,50 +1,21 @@
 {% extends "base.html" %}
-{% block head %}<script src="/vendor/plotly.min.js" defer></script>{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js?v={{ plotly_version }}" defer></script>{% endblock %}
 {% block content %}
 <h1>Portfolio lab</h1>
-<p class="lede">Research on stock portfolio strategies, tested honestly: every strategy runs through the
-  same walk-forward backtest on point-in-time data, pays realistic trading costs, and is compared
-  against simple baselines. <a href="/about">How it works →</a></p>
+<p class="lede">Strategy backtests against the market. <a href="/about">How it works →</a></p>
 
-{% if chart %}<h2>Growth of $1 <span class="muted">(latest run of each strategy)</span></h2>
-<p class="muted">Buy-and-hold SPY and the four best strategies by Sharpe ratio are drawn; tap a
-  name in the legend to show or hide the others.</p>
+{% if chart %}<h2>Growth of $1 <span class="muted">(since {{ since }})</span></h2>
 <div id="compare" class="chart tall"></div>{% endif %}
 
-<h2>Strategies</h2>
-{% if runs %}
-<div class="strategies">
-  {% for r in runs %}
-  <div class="strategy">
-    <h3>{{ labels[r.meta.run_id] }}</h3>
-    {% set line = (r.meta.get("explain") or {}).get("summary") or r.meta.summary or r.meta.description %}
-    {% if line %}<p>{{ line }}</p>{% endif %}
-    <div class="stats">
-      <div><span class="muted">CAGR</span><b>{{ r.metrics.cagr | pct }}</b></div>
-      <div><span class="muted">Sharpe</span><b>{{ r.metrics.sharpe | num }}</b></div>
-      <div><span class="muted">Max DD</span><b class="neg">{{ r.metrics.max_drawdown | pct }}</b></div>
-      <div><span class="muted">α vs {{ r.meta.benchmark }}</span><b class="{{ 'pos' if r.metrics.get('alpha', 0) > 0 else 'neg' }}">{{ r.metrics.get('alpha') | pct }}</b></div>
-    </div>
-    <div class="links">
-      <a href="/runs/{{ r.meta.run_id }}">Charts &amp; details</a>
-      <a href="/runs/{{ r.meta.run_id }}#holdings">Current holdings</a>
-      <span class="muted">{{ r.meta.start }} → {{ r.meta.end }}</span>
-    </div>
-  </div>
-  {% endfor %}
-</div>
-{% else %}
-<p class="muted">No backtests yet.</p>
-{% endif %}
+<h2>Returns</h2>
+{% if rows %}{% with show_type=false %}{% include "_horizons.html" %}{% endwith %}
+{% else %}<p class="muted">No backtests yet.</p>{% endif %}
 
 <p class="muted">Data through {{ data_through or "–" }} · prices <span class="badge {{ freshness }}">{{ freshness }}</span> · <a href="/status">data status</a> · <a href="/runs">all runs</a></p>
 
 {% if chart %}
 <script>
-  document.addEventListener("DOMContentLoaded", () => {
-    const fig = {{ chart | safe }};
-    drawPlot("compare", fig);
-  });
+  document.addEventListener("DOMContentLoaded", () => drawPlot("compare", {{ chart | safe }}));
 </script>
 {% endif %}
 {% endblock %}

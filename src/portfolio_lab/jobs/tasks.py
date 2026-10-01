@@ -392,10 +392,6 @@ def make_vs_buy_task(settings: Settings) -> dict:
 HISTORY_COMPARE_START = date(1999, 1, 4)
 
 
-#: Our series measured over each fund's lifetime in the long comparison.
-HISTORY_OURS = "ours: production (healthiest 100 of 400 + bear defense)"
-
-
 def make_vs_buy_history_task(settings: Settings, publish: Path | None = None) -> dict:
     """Make vs buy over the Sharadar history: funds since launch vs our strategies since 1999.
 
@@ -442,11 +438,15 @@ def make_vs_buy_history_task(settings: Settings, publish: Path | None = None) ->
         for f in FUNDS
         if prices.filter(pl.col("symbol") == f.symbol).height
     }
-    for label, run_id in ours.items():
-        daily = load_run(settings.data_dir, run_id).daily.select("date", "ret")
-        series[f"ours: {label}"] = (label, "ours", daily)
+    production = None
+    for name, run_id in ours.items():  # named like the live runs, so the pages merge them
+        stored = load_run(settings.data_dir, run_id)
+        label = stored.meta.get("label") or name
+        series[f"ours: {label}"] = (label, "ours", stored.daily.select("date", "ret"))
+        if name.startswith("production"):
+            production = f"ours: {label}"
     rates = pl.read_parquet(paths.rates) if paths.rates.exists() else None
-    summary, growth = compare(series, rates, start, ours=HISTORY_OURS)
+    summary, growth = compare(series, rates, start, ours=production)
     write_parquet_atomic(summary, paths.make_vs_buy / "summary.parquet")
     write_parquet_atomic(growth, paths.make_vs_buy / "growth.parquet")
     if publish is not None:

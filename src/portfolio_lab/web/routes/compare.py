@@ -1,99 +1,48 @@
 """Make versus buy: our strategies against funds anyone can buy."""
 
-import polars as pl
+from pathlib import Path
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from portfolio_lab.core.paths import DataPaths
-from portfolio_lab.research.funds import CATEGORIES, PAIRS
-from portfolio_lab.web.charts import growth_figure
+from portfolio_lab.research.funds import CATEGORIES
+from portfolio_lab.web import series
+from portfolio_lab.web.charts import series_figure
 
 router = APIRouter()
 
-#: Funds always drawn on the chart (besides our best strategies and the best fund).
+#: Funds always drawn on the chart (besides our best strategies and the best other fund).
 ALWAYS_SHOWN = ("SPY", "QQQ")
 OURS_SHOWN = 3
 
 
-def _pairs(common: pl.DataFrame) -> list[dict]:
-    """Each of our strategies beside the fund it competes with most directly."""
-    by_key = {r["key"]: r for r in common.to_dicts()}
-    out = []
-    for label, fund in PAIRS.items():
-        ours, theirs = by_key.get(f"ours: {label}"), by_key.get(fund)
-        if ours and theirs:
-            out.append({"ours": ours, "fund": theirs})
-    return out
+def _visible(rows: list[dict]) -> set[str]:
+    """SPY, QQQ, our best three by Sharpe and the best other fund by 10-year return."""
+    ours = sorted((r for r in rows if r["category"] == "ours"), key=lambda r: -(r["sharpe"] or -9))
+    funds = [r for r in rows if r["category"] != "ours" and r["key"] not in ALWAYS_SHOWN]
+    best = sorted(funds, key=lambda r: -(r["10Y"] if r["10Y"] is not None else -9))[:1]
+    return {*ALWAYS_SHOWN, *(r["key"] for r in ours[:OURS_SHOWN]), *(r["key"] for r in best)}
 
 
-def _visible(common: pl.DataFrame) -> set[str]:
-    """Series shown when the chart opens: SPY, QQQ, the best fund, our best strategies."""
-    ranked = common.sort("sharpe", descending=True)
-    ours = ranked.filter(pl.col("category") == "ours")["key"].head(OURS_SHOWN).to_list()
-    best_fund = ranked.filter(pl.col("category") != "ours")["key"].head(1).to_list()
-    return {*ALWAYS_SHOWN, *ours, *best_fund}
+def page_context(data_dir: Path) -> dict:
+    """Chart and table for the Compare page, rebuilt when the data changes."""
+
+    def build() -> dict:
+        if not any(p.exists() for p in series.sources(data_dir)[1:]):  # no fund comparison yet
+            return {}
+        everything = list(series.load(data_dir).values())
+        rows = series.table(everything)
+        order = {c: k for k, c in enumerate(CATEGORIES)}
+        by_type = sorted(rows, key=lambda r: (order.get(r["category"], 99), r["name"]))
+        groups = {r["key"]: CATEGORIES.get(r["category"], "Other") for r in by_type}
+        return {"rows": rows, "since": series.first_date(everything),
+                "chart": series_figure(everything, _visible(rows), groups)}  # fmt: skip
+
+    return series.cached(f"compare:{data_dir}", series.sources(data_dir), build)
 
 
 @router.get("/compare", response_class=HTMLResponse)
 def compare(request: Request) -> HTMLResponse:
-    """Render the make-vs-buy tables, head-to-heads and growth chart."""
-    folder = DataPaths(request.app.state.data_dir).make_vs_buy
-    path = folder / "summary.parquet"
-    context: dict = {"categories": CATEGORIES, "periods": []}
-    if path.exists():
-        summary = pl.read_parquet(path)
-        common = summary.filter(pl.col("period") == "common")
-        context["pairs"] = _pairs(common)
-        for period, title in (("common", "Same period for everyone"),
-                              ("full", "Each one's full history since 2017")):  # fmt: skip
-            rows = summary.filter(pl.col("period") == period).sort("sharpe", descending=True)
-            context["periods"].append({"title": title, "rows": rows.to_dicts()})
-        context["common_start"] = common["start"].min()
-        growth = pl.read_parquet(folder / "growth.parquet")
-        names = dict(summary.select("key", "name").unique("key").iter_rows())
-        order = {c: k for k, c in enumerate(CATEGORIES)}
-        keyed = common.sort(pl.col("category").replace_strict(order), "name")
-        groups = {k: CATEGORIES[c] for k, c in keyed.select("key", "category").iter_rows()}
-        context["chart"] = growth_figure(growth, names, _visible(common), groups)
-        context["chart_start"] = context["common_start"]
-    history = folder / "history_summary.parquet"
-    if history.exists():
-        summary = pl.read_parquet(history)
-        context["history"] = _history(summary)
-        growth_path = folder / "history_growth.parquet"
-        if growth_path.exists():  # the one growth chart shows the longest history we have
-            growth = pl.read_parquet(growth_path)
-            context["chart"] = _history_chart(summary, growth)
-            context["chart_start"] = growth["date"].min()
-            context["chart_is_history"] = True
+    """One chart and one table: our strategies and every fund, over 1, 5, 10, 20 years and max."""
+    context = page_context(request.app.state.data_dir)
     return request.app.state.templates.TemplateResponse(request, "compare.html", context)
-
-
-def _history_chart(summary: pl.DataFrame, growth: pl.DataFrame) -> str:
-    """Growth of $1 since 1999: ours, SPY, QQQ and the best fund drawn, the rest hidden."""
-    common = summary.filter(pl.col("period") == "common")
-    names = dict(summary.select("key", "name").unique("key").iter_rows())
-    order = {c: k for k, c in enumerate(CATEGORIES)}
-    keyed = common.sort(pl.col("category").replace_strict(order), "name")
-    groups = {k: CATEGORIES[c] for k, c in keyed.select("key", "category").iter_rows()}
-    return growth_figure(growth, names, _visible(common), groups)
-
-
-def _history(summary: pl.DataFrame) -> dict:
-    """Each fund beside our strategy over the fund's own lifetime (since 1999 at most)."""
-    full = summary.filter(pl.col("period") == "full")
-    ours = full.filter(pl.col("category") == "ours").sort("cagr", descending=True).to_dicts()
-    same = summary.filter(pl.col("period").str.starts_with("ours_since:")).select(
-        pl.col("period").str.strip_prefix("ours_since:").alias("key"),
-        pl.col("cagr").alias("ours_cagr"), pl.col("max_drawdown").alias("ours_drop"),
-    )  # fmt: skip
-    funds = (
-        full.filter(pl.col("category") != "ours")
-        .join(same, on="key", how="left")
-        .with_columns((pl.col("ours_cagr") - pl.col("cagr")).alias("edge"))
-        .sort("start", "key")
-        .to_dicts()
-    )
-    return {"ours": ours, "funds": funds, "ours_name": next(
-        (r["name"] for r in summary.filter(pl.col("period").str.starts_with("ours_since:"))
-         .head(1).to_dicts()), None)}  # fmt: skip
