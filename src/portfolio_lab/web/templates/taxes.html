@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Taxes · Portfolio lab{% endblock %}
+{% block head %}<script src="/vendor/plotly.min.js?v={{ plotly_version }}" defer></script>{% endblock %}
+{% block content %}
+<h1>Tax calculator</h1>
+<p class="lede">Production since 1999 after tax, and how much trading less would keep.</p>
+
+<form class="taxform" hx-get="/taxes/result" hx-target="#result" hx-trigger="change, input delay:600ms">
+  <label>Account
+    <select name="account">
+      <option value="taxable" {% if inputs.account == "taxable" %}selected{% endif %}>Taxable</option>
+      <option value="roth" {% if inputs.account == "roth" %}selected{% endif %}>Roth (no tax)</option>
+    </select>
+  </label>
+  <label>Rates
+    <select id="preset">
+      <option value="">Custom</option>
+      {% for name, r in presets.items() %}<option value="{{ r | join(',') }}" {% if (inputs.short, inputs.long, inputs.dividends) == r %}selected{% endif %}>{{ name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Short-term %<input type="number" name="short" value="{{ inputs.short }}" min="0" max="70" step="0.1"></label>
+  <label>Long-term %<input type="number" name="long" value="{{ inputs.long }}" min="0" max="70" step="0.1"></label>
+  <label>Dividends %<input type="number" name="dividends" value="{{ inputs.dividends }}" min="0" max="70" step="0.1"></label>
+  <label>Start $<input type="number" name="start" value="{{ inputs.start | int }}" min="1000" step="1000"></label>
+  <label>Skip changes under
+    <select name="band">
+      {% for b in bands %}<option value="{{ b }}" {% if inputs.band == b %}selected{% endif %}>{{ "nothing (trade all)" if b == 0 else b ~ " pt" ~ ("s" if b > 1 else "") }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Sell first
+    <select name="order">
+      <option value="tax" {% if inputs.order == "tax" %}selected{% endif %}>Lowest tax</option>
+      <option value="fifo" {% if inputs.order == "fifo" %}selected{% endif %}>Oldest</option>
+    </select>
+  </label>
+  <label class="check"><input type="checkbox" name="defer" value="true" {% if inputs.defer %}checked{% endif %}> Hold gains until a year old</label>
+  <label class="check"><input type="checkbox" name="sell" value="true" {% if inputs.sell %}checked{% endif %}> Cash out at the end</label>
+</form>
+
+<div id="result">{% include "_tax_result.html" %}</div>
+
+<script>
+  document.getElementById("preset").addEventListener("change", (e) => {
+    if (!e.target.value) return;
+    const [s, l, d] = e.target.value.split(",");
+    const form = e.target.form;
+    form.short.value = s; form.long.value = l; form.dividends.value = d;
+  });
+  document.querySelector(".taxform").addEventListener("input", (e) => {
+    if (["short", "long", "dividends"].includes(e.target.name)) document.getElementById("preset").value = "";
+  });
+</script>
+{% endblock %}

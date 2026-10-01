@@ -83,6 +83,7 @@ def pages(base: str) -> list[str]:
         "/context",
         "/models",
         "/compare",
+        "/taxes",
         "/status",
         "/about",
     ]

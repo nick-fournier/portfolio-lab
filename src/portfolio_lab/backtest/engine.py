@@ -26,8 +26,10 @@ import numpy as np
 import polars as pl
 
 from portfolio_lab.backtest.costs import CostModel
+from portfolio_lab.backtest.execution import Execution, TradeLog, adjust
 from portfolio_lab.backtest.metrics import compute
 from portfolio_lab.backtest.results import RunResult
+from portfolio_lab.backtest.tax import Lots
 from portfolio_lab.core.calendar import rebalance_dates
 from portfolio_lab.research.dataview import DataView
 from portfolio_lab.research.panel import Panel
@@ -61,6 +63,7 @@ class BacktestConfig:
         delisting_return: Return applied when liquidating a name that fell to OTC and has
             no later bars (it kept trading OTC, usually far lower; Shumway, 1997, finds
             about -30%). Use -1.0 for a total loss or 0.0 to exit at the last price.
+        execution: How targets become trades: skip small changes, defer short-term gains.
     """
 
     start: date
@@ -70,6 +73,7 @@ class BacktestConfig:
     benchmark: str = "SPY"
     max_missing_days: int = 5
     delisting_return: float = -0.30
+    execution: Execution = field(default_factory=Execution)
 
 
 def validate_weights(
@@ -178,11 +182,13 @@ class _Portfolio:
     optionally :meth:`trade`, then :meth:`intraday` and :meth:`liquidate_stale`.
     """
 
-    def __init__(self, n_symbols: int, costs: CostModel):
+    def __init__(self, n_symbols: int, costs: CostModel, execution: Execution | None = None):
         self.holdings = np.zeros(n_symbols)
         self.missing = np.zeros(n_symbols, dtype=int)
         self.cash = 1.0
         self.costs = costs
+        self.execution = execution or Execution()
+        self.lots = Lots() if self.execution.defer_short_gains else None
 
     @property
     def nav(self) -> float:
@@ -193,13 +199,29 @@ class _Portfolio:
         """Apply close-to-open returns; names without an open earn zero."""
         self.holdings = self.holdings * (1 + np.where(np.isfinite(ret_co), ret_co, 0.0))
 
-    def trade(self, target: np.ndarray, adv: np.ndarray) -> tuple[float, float]:
-        """Rebalance to ``target`` weights at the open; return (turnover, cost fraction)."""
+    def trade(self, target: np.ndarray, adv: np.ndarray, day: int = 0) -> tuple[float, float]:
+        """Rebalance to ``target`` weights at the open; return (turnover, cost fraction).
+
+        With stickiness (:class:`Execution`), the target is first adjusted; ``day`` (a date
+        ordinal) dates the tax lots it tracks.
+        """
         nav_open = self.nav
-        trades = target - self.holdings / nav_open
+        held = self.holdings / nav_open
+        if self.lots is not None:
+            for j in list(self.lots.lots):
+                self.lots.revalue(j, self.holdings[j])
+        if self.execution.active:
+            target = adjust(target, held, self.execution, self.lots, day, nav_open)
+        trades = target - held
         turnover = float(np.abs(trades).sum())
         cost = self.costs.cost(trades, adv, nav_open)
         nav_after = nav_open * (1 - cost)
+        if self.lots is not None:
+            for j in np.flatnonzero(np.abs(trades) > 1e-12):
+                if trades[j] > 0:
+                    self.lots.buy(int(j), day, trades[j] * nav_open)
+                else:
+                    self.lots.sell(int(j), day, -trades[j] * nav_open)
         self.holdings = target * nav_after
         self.cash = nav_after * (1 - target.sum())
         return turnover, cost
@@ -226,6 +248,9 @@ class _Portfolio:
         """
         stale = self.missing >= max_missing_days
         if stale.any():
+            if self.lots is not None:
+                for j in np.flatnonzero(stale):
+                    self.lots.lots.pop(int(j), None)
             self.cash += float((self.holdings[stale] * (1 + exit_ret[stale])).sum())
             self.holdings[stale] = 0.0
             self.missing[stale] = 0
@@ -233,31 +258,49 @@ class _Portfolio:
 
 
 def _simulate(
-    strategy: Strategy, panel: Panel, config: BacktestConfig, first: int, last: int
+    strategy: Strategy,
+    panel: Panel,
+    config: BacktestConfig,
+    first: int,
+    last: int,
+    trades: TradeLog,
 ) -> tuple[list[tuple], list[tuple], tuple[int, int]]:
-    """Run the day loop; return daily rows, target-weight rows and liquidation counts."""
+    """Run the day loop; return daily rows, target-weight rows and liquidation counts.
+
+    ``trades`` records every trade, forced sale and month end, for after-tax replays.
+    """
     rebalance = {
         panel.date_index[d]
         for d in rebalance_dates(panel.dates[first : last + 1], strategy.schedule)
     }
     decisions = ({first} | rebalance) - {last}
     ret_cc, ret_co, adv = panel.field("ret_cc"), panel.field("ret_co"), panel.field("adv")
-    book = _Portfolio(len(panel.symbols), config.costs)
+    close = panel.field("close")
+    book = _Portfolio(len(panel.symbols), config.costs, config.execution)
     prev_nav, pending = 1.0, None
     daily, weight_rows, liquidations, delistings = [], [], 0, 0
 
     for i in range(first, last + 1):
         if i > first:
+            day = panel.dates[i]
+            trades.accrue(book.holdings, book.cash, ret_cc[i], close[i], close[i - 1],
+                          panel.rf_daily[i])  # fmt: skip
             book.overnight(ret_co[i])
             turnover = cost = 0.0
             if pending is not None:
-                turnover, cost = book.trade(pending, adv[i - 1])
+                before, cash_before = book.holdings.copy(), book.cash
+                turnover, cost = book.trade(pending, adv[i - 1], day.toordinal())
+                trades.record(day, before, book.holdings, cash_before, book.cash)
                 pending = None
             book.intraday(ret_cc[i], ret_co[i], panel.rf_daily[i], panel.traded[i])
             delisted = panel.fell_to_otc & (i > panel.last_bar)
             exit_ret = np.where(delisted, config.delisting_return, 0.0)
+            values = book.holdings.copy()
             stale = book.liquidate_stale(config.max_missing_days, exit_ret)
             if stale.size:
+                sold = np.zeros_like(values)
+                sold[stale] = values[stale] * (1 + exit_ret[stale])
+                trades.record(day, sold, np.zeros_like(values))
                 liquidations += stale.size
                 delistings += int(delisted[stale].sum())
                 names = [panel.symbols[j] for j in stale]
@@ -268,6 +311,8 @@ def _simulate(
                 (panel.dates[i], nav, nav / prev_nav - 1, turnover, cost, book.cash / nav, held)
             )
             prev_nav = nav
+            if i == last or panel.dates[i + 1].month != day.month:
+                trades.record(day, book.holdings, book.holdings, book.cash, book.cash)
 
         if i in decisions:
             view = DataView(panel, i)
@@ -325,9 +370,10 @@ def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
     if len(window) < 2:
         raise ValueError(f"need at least two sessions between {config.start} and {config.end}")
     first, last = window[0], window[-1]
+    trades = TradeLog(panel.symbols)
     try:
         daily, weight_rows, (liquidations, delistings) = _simulate(
-            strategy, panel, config, first, last
+            strategy, panel, config, first, last, trades
         )
     finally:
         if callable(close := getattr(strategy, "close", None)):
@@ -358,7 +404,8 @@ def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
         "explain": explanation,
         "example": _example(strategy, weights_df),
         "description": describe(strategy),
-        "label": label(strategy),
+        "label": label(strategy)
+        + (f" [{config.execution.describe()}]" if config.execution.active else ""),
         "params": _params(strategy),
         "schedule": strategy.schedule,
         "start": panel.dates[first],
@@ -367,6 +414,7 @@ def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
         "costs": asdict(config.costs),
         "max_weight": config.max_weight,
         "delisting_return": config.delisting_return,
+        **({"execution": asdict(config.execution)} if config.execution.active else {}),
         "universe_size": len(panel.universe),
         "delisted_in_universe": panel.n_delisted,
         "data_max_date": panel.dates[-1],
@@ -375,4 +423,6 @@ def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
     }
     if callable(diagnostics := getattr(strategy, "diagnostics", None)):
         meta["diagnostics"] = diagnostics()
-    return RunResult(meta=meta, metrics=metrics, daily=daily_df, weights=weights_df)
+    return RunResult(
+        meta=meta, metrics=metrics, daily=daily_df, weights=weights_df, trades=trades.frame()
+    )

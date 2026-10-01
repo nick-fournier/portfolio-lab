@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from portfolio_lab.backtest.results import RunResult, save_run
 from portfolio_lab.core.store import write_status
+from portfolio_lab.jobs.taxes import publish_runs
 from portfolio_lab.web.app import create_app
 from portfolio_lab.web.routes.status import data_freshness
 
@@ -247,3 +248,33 @@ def test_compare_page(client, tmp_path):
                      "since 1999-01-04", ">10Y<", ">20Y<"):  # fmt: skip
         assert expected in page, expected
     assert page.count('class="chart tall"') == 1
+
+
+def test_tax_calculator(client, tmp_path):
+    assert "No published tax runs" in client.get("/taxes").text
+    days = [date(2020, 1, 2), date(2021, 6, 1)]
+    ids = {}
+    for key, strategy in (("band0", "meanvar"), ("spy", "buy_hold")):
+        run = _run(strategy, days)
+        run.daily = run.daily.with_columns(pl.Series("nav", [1.0, 2.0]))
+        run.trades = pl.DataFrame(
+            [(0, days[0], "AAA", 0.0, 1.0, 0.0), (0, days[0], "_cash", 1.0, 0.0, 0.0),
+             (1, days[1], "AAA", 2.0, 2.0, 0.0), (1, days[1], "_cash", 0.0, 0.0, 0.0)],
+            schema=["seq", "date", "key", "before", "after", "income"], orient="row",
+        )  # fmt: skip
+        ids[key] = save_run(run, tmp_path)
+    folder = publish_runs(tmp_path, ids, tmp_path)
+    assert "AAA" not in pl.read_parquet(folder / "band0.trades.parquet")["key"].to_list()
+    page = client.get("/taxes").text
+    for expected in ("Tax calculator", "Every version", "Trade every change", "SPY, held"):
+        assert expected in page, expected
+    # Held, not sold: no tax. Cashing out a doubling held over a year: 28.1% long-term.
+    held = client.get("/taxes/result").text
+    assert "$0" in held and "$200,000" in held
+    sold = client.get("/taxes/result", params={"sell": "true"}).text
+    assert "$28,100" in sold and "$171,900" in sold
+    roth = client.get("/taxes/result", params={"sell": "true", "account": "roth"}).text
+    assert "$200,000" in roth
+    assert client.get("/taxes/result", params={"short": "99"}).status_code == 422
+    assert "Every version" in client.get("/taxes/result", params={"band": "0"}).text
+    assert "No published tax runs" in client.get("/taxes/result", params={"band": "2"}).text

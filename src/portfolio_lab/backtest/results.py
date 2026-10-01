@@ -1,9 +1,11 @@
 """Backtest results: the generic run artifacts the dashboard renders.
 
 Each run is an immutable directory ``results/runs/<run_id>/`` holding ``meta.json``,
-``metrics.json``, ``daily.parquet`` (NAV and diagnostics per session) and
-``weights.parquet`` (targets at each rebalance). ``_SUCCESS`` is written last; readers only
-list runs that have it, so a crash mid-write never shows up as a partial run.
+``metrics.json``, ``daily.parquet`` (NAV and diagnostics per session),
+``weights.parquet`` (targets at each rebalance) and ``trades.parquet`` (holdings before and
+after each trade and at month ends, for after-tax replays; see ``backtest.tax``).
+``_SUCCESS`` is written last; readers only list runs that have it, so a crash mid-write
+never shows up as a partial run.
 """
 
 import hashlib
@@ -31,12 +33,14 @@ class RunResult:
         daily: One row per session: date, nav, ret, turnover, cost, cash, holdings,
             benchmark_ret.
         weights: One row per (rebalance date, symbol) target weight.
+        trades: The trade log (``backtest.execution.TradeLog``); absent in older runs.
     """
 
     meta: dict[str, Any]
     metrics: dict[str, float]
     daily: pl.DataFrame
     weights: pl.DataFrame
+    trades: pl.DataFrame | None = None
 
 
 def runs_dir(data_dir: Path) -> Path:
@@ -56,6 +60,8 @@ CONFIG_KEYS = (
     "max_weight",
     "delisting_return",
 )
+#: Metadata that joins the configuration only when present, so older runs keep their ids.
+OPTIONAL_CONFIG_KEYS = ("execution",)
 
 
 def _canonical(value: Any) -> Any:
@@ -71,7 +77,10 @@ def _canonical(value: Any) -> Any:
 
 def config_id(meta: dict[str, Any]) -> str:
     """Return a short hash identifying a run's configuration (see :data:`CONFIG_KEYS`)."""
-    config = _canonical({k: meta.get(k) for k in CONFIG_KEYS})
+    config = _canonical(
+        {k: meta.get(k) for k in CONFIG_KEYS}
+        | {k: meta[k] for k in OPTIONAL_CONFIG_KEYS if meta.get(k)}
+    )
     return hashlib.sha1(json.dumps(config, sort_keys=True, default=str).encode()).hexdigest()[:10]
 
 
@@ -105,6 +114,8 @@ def save_run(result: RunResult, data_dir: Path) -> str:
     (path / "metrics.json").write_text(json.dumps(result.metrics, indent=2))
     write_parquet_atomic(result.daily, path / "daily.parquet")
     write_parquet_atomic(result.weights, path / "weights.parquet")
+    if result.trades is not None:
+        write_parquet_atomic(result.trades, path / "trades.parquet")
     (path / SUCCESS_MARKER).touch()
     return run_id
 
@@ -159,4 +170,5 @@ def load_run(data_dir: Path, run_id: str) -> RunResult:
         metrics=json.loads((path / "metrics.json").read_text()),
         daily=pl.read_parquet(path / "daily.parquet"),
         weights=pl.read_parquet(path / "weights.parquet"),
+        trades=pl.read_parquet(trades) if (trades := path / "trades.parquet").exists() else None,
     )
