@@ -54,6 +54,12 @@ FLOW_TAGS: dict[str, tuple[str, ...]] = {
     "operating_income": ("OperatingIncomeLoss",),
     "capex": ("PaymentsToAcquirePropertyPlantAndEquipment",),
     "dividends": ("PaymentsOfDividends", "PaymentsOfDividendsCommonStock"),
+    "interest": (
+        "InterestExpense",
+        "InterestExpenseNonoperating",
+        "InterestExpenseDebt",
+        "InterestAndDebtExpense",
+    ),
 }
 #: Share counts averaged over a period: the latest quarter's value, not a sum.
 AVERAGE_TAGS: dict[str, tuple[str, ...]] = {

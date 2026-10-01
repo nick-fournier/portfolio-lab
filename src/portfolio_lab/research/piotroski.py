@@ -272,6 +272,8 @@ PIOTROSKI = {
     "d_current_ratio": 1, "share_issuance": -1, "d_gross_margin": 1, "d_asset_turnover": 1,
 }  # fmt: skip
 MIN_METRICS = 6
+#: Optional extra health metrics (``features``' financial strength) and their good direction.
+EXTRA_HEALTH = {"distance_to_default": 1, "roa_volatility": -1, "interest_coverage": 1}
 
 
 def continuous(data: pl.DataFrame, metrics: dict[str, int] = PIOTROSKI) -> pl.DataFrame:
@@ -293,8 +295,8 @@ def continuous(data: pl.DataFrame, metrics: dict[str, int] = PIOTROSKI) -> pl.Da
     )  # fmt: skip
 
 
-def health_scores(features: pl.DataFrame) -> dict[str, float]:
-    """Continuous F-score for one date's raw feature rows (symbol + the nine metrics).
+def health_scores(features: pl.DataFrame, metrics: dict[str, int] = PIOTROSKI) -> dict[str, float]:
+    """Continuous F-score for one date's raw feature rows (symbol + the metrics).
 
     Each metric becomes a percentile among the given stocks, as ``models.prepare`` does for
     the whole panel, then :func:`continuous` averages them. Stocks with too few metrics
@@ -303,6 +305,6 @@ def health_scores(features: pl.DataFrame) -> dict[str, float]:
     if features.is_empty():
         return {}
     ranked = rank_features(features.with_columns(pl.lit(date(2000, 1, 1)).alias("date")),
-                           [c for c in PIOTROSKI if c in features.columns])  # fmt: skip
-    scored = continuous(ranked).drop_nulls("score")
+                           [c for c in metrics if c in features.columns])  # fmt: skip
+    scored = continuous(ranked, metrics).drop_nulls("score")
     return dict(zip(scored["symbol"], scored["score"], strict=True))

@@ -52,6 +52,7 @@ FUNDAMENTALS = {
     "ncfdiv": "dividends", "shareswa": "shares_weighted", "assets": "assets",
     "assetsc": "assets_cur", "liabilitiesc": "liab_cur", "liabilities": "liabilities",
     "debtnc": "lt_debt", "debtc": "debt_cur", "equity": "equity", "cashneq": "cash",
+    "intexp": "interest",
 }  # fmt: skip
 OUTFLOWS = ("capex", "dividends")
 

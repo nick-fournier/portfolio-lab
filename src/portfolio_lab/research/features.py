@@ -15,6 +15,10 @@ detect them. Features (all floats; null where an input is missing):
   assets, accruals, gross profitability, operating margin, leverage, current ratio, and
   their year-on-year changes; share issuance, asset and sales growth.
 - **Price**: 12-1 month momentum, last month's return, volatility, beta, size, liquidity.
+- **Financial strength**: distance to default (how many standard deviations of asset value
+  stand between the company and its debt, the naive Merton model of Bharath and Shumway,
+  2008), the volatility of annual return on assets over the last five fiscal years, and
+  interest coverage (operating income over interest expense).
 - ``fscore`` for comparison, and ``*_ind``: key features as percentiles within the stock's
   industry (SIC major group) on that date.
 """
@@ -44,8 +48,13 @@ FEATURES = (
     "operating_margin", "leverage", "current_ratio", "d_roa", "d_lt_debt", "d_current_ratio",
     "d_gross_margin", "d_asset_turnover", "share_issuance", "asset_growth", "sales_growth",
     "log_size", "mom_12_1", "ret_1m", "volatility", "beta", "log_adv", "fscore",
+    "distance_to_default", "roa_volatility", "interest_coverage",
     *(f"{c}_ind" for c in INDUSTRY_RELATIVE),
 )  # fmt: skip
+#: Fiscal years of return on assets behind ``roa_volatility`` (at least the minimum).
+STABILITY_YEARS, STABILITY_MIN_YEARS = 5, 3
+#: Bounds on distance to default and interest coverage; debt-free companies get the top.
+MAX_DISTANCE, MAX_COVERAGE = 20.0, 100.0
 
 
 def _price_features(panel: Panel, index: int, cols: np.ndarray) -> dict[str, np.ndarray]:
@@ -159,7 +168,79 @@ def _fundamental_features() -> list[pl.Expr]:
         (ratio(c("assets"), c("assets_py")) - 1).alias("asset_growth"),
         (ratio(c("revenue"), c("revenue_py")) - 1).alias("sales_growth"),
         mv.log().alias("log_size"),
+        _distance_to_default(),
+        _interest_coverage(),
+        c("_roa_volatility").alias("roa_volatility"),
     ]
+
+
+def _debt() -> pl.Expr:
+    """Debt, counting missing current or long-term debt as none when liabilities exist."""
+    c = pl.col
+    known = (
+        c("liabilities").is_not_null() | c("lt_debt").is_not_null() | c("debt_cur").is_not_null()
+    )
+    return pl.when(known).then(c("lt_debt").fill_null(0.0) + c("debt_cur").fill_null(0.0))
+
+
+def _distance_to_default() -> pl.Expr:
+    """Naive Merton distance to default over one year (Bharath and Shumway, 2008).
+
+    The default point is short-term debt plus half the long-term debt; debt volatility is
+    5% plus a quarter of equity volatility; expected asset growth is taken as zero.
+    """
+    c = pl.col
+    equity = c("market_value")
+    point = c("debt_cur").fill_null(0.0) + 0.5 * c("lt_debt").fill_null(0.0)
+    sigma_e = c("volatility") * np.sqrt(TRADING_DAYS)
+    value = equity + point
+    sigma_v = equity / value * sigma_e + point / value * (0.05 + 0.25 * sigma_e)
+    distance = ((value / point).log() - 0.5 * sigma_v**2) / sigma_v
+    has_inputs = equity.is_not_null() & sigma_e.is_not_null() & _debt().is_not_null()
+    return (
+        pl.when(has_inputs & (point <= 0)).then(MAX_DISTANCE)
+        .when(has_inputs & (equity > 0)).then(distance.clip(-MAX_DISTANCE, MAX_DISTANCE))
+        .alias("distance_to_default")
+    )  # fmt: skip
+
+
+def _interest_coverage() -> pl.Expr:
+    """Operating income over interest expense; companies without debt get the top."""
+    c = pl.col
+    no_debt = (_debt() == 0) & (c("interest").is_null() | (c("interest") <= 0))
+    coverage = (c("operating_income") / c("interest")).clip(-MAX_COVERAGE, MAX_COVERAGE)
+    return (
+        pl.when(no_debt).then(MAX_COVERAGE)
+        .when(c("interest") > 0).then(coverage)
+        .alias("interest_coverage")
+    )  # fmt: skip
+
+
+def roa_stability(states: pl.DataFrame) -> pl.DataFrame:
+    """Add ``_roa_volatility`` to each filing state: how much annual ROA has swung.
+
+    (Underscored like the other state columns; the feature is ``roa_volatility``.)
+
+    The standard deviation of annual return on assets over the last
+    :data:`STABILITY_YEARS` fiscal years (10-Ks) known when the state was filed.
+    """
+    annual = (
+        states.filter(pl.col("form").str.starts_with("10-K") & (pl.col("assets") > 0))
+        .with_columns((pl.col("net_income") / pl.col("assets")).alias("_roa"))
+        .drop_nulls("_roa")
+        .sort("cik", "period_end", "filed")
+        .unique(["cik", "period_end"], keep="last", maintain_order=True)
+    )
+    annual = annual.with_columns(
+        pl.col("_roa")
+        .rolling_std(STABILITY_YEARS, min_samples=STABILITY_MIN_YEARS)
+        .over("cik")
+        .alias("_roa_volatility")
+    ).select("cik", pl.col("filed").alias("_stable_filed"), "_roa_volatility")
+    return states.sort("filed").join_asof(
+        annual.sort("_stable_filed"), left_on="filed", right_on="_stable_filed", by="cik",
+        strategy="backward", check_sortedness=False,
+    ).drop("_stable_filed")  # fmt: skip
 
 
 def _asof(grid: pl.DataFrame, table: pl.DataFrame, max_age: int) -> pl.DataFrame:
@@ -201,7 +282,9 @@ def build_features(
         date, symbol, sic2, market_value, the features, and ``fscore``.
     """
     grid = _price_grid(panel, start or panel.dates[0])
-    by_symbol = states.join(tickers, on="cik").drop("accn", "form")
+    if "interest" not in states.columns:  # states built before interest was extracted
+        states = states.with_columns(pl.lit(None, pl.Float64).alias("interest"))
+    by_symbol = roa_stability(states).join(tickers, on="cik").drop("accn", "form")
     grid = _asof(grid, by_symbol, MAX_FILING_AGE_DAYS)
     grid = grid.with_columns(_market_value(grid, panel))
     grid = grid.with_columns(_fundamental_features())

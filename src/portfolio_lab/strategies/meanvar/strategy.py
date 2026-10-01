@@ -9,7 +9,7 @@ import pandas as pd
 from portfolio_lab.core.calendar import Frequency
 from portfolio_lab.research import regimes, stress
 from portfolio_lab.research.dataview import DataView
-from portfolio_lab.research.piotroski import PIOTROSKI, health_scores
+from portfolio_lab.research.piotroski import EXTRA_HEALTH, PIOTROSKI, health_scores
 from portfolio_lab.strategies import explain
 from portfolio_lab.strategies.base import Weights, register
 from portfolio_lab.strategies.meanvar.forecast import (
@@ -91,6 +91,9 @@ class MeanVar:
         health_rank_pool: If set, candidates are the ``top_n`` healthiest (continuous
             F-score) of the ``health_rank_pool`` most liquid stocks, instead of the most liquid
             of a healthy share.
+        health_extra: Financial-strength metrics added to the nine in the health score
+            (keys of ``research.piotroski.EXTRA_HEALTH``: distance to default, ROA
+            volatility, interest coverage).
         bear_defense: In a bear market (``research.regimes.market_state``) hold the
             minimum-variance portfolio instead of max Sharpe.
         rebound: In a rebound (panic easing after a deep fall), when past losers tend to beat
@@ -123,6 +126,7 @@ class MeanVar:
     healthy_share: float | None = None
     health_schedule: str | None = None
     health_rank_pool: int | None = None
+    health_extra: tuple[str, ...] = ()
     bear_defense: bool = False
     rebound: str | None = None
     rebound_lookback: int = 21
@@ -258,6 +262,11 @@ class MeanVar:
             self._forecaster = Forecaster(spec, self.cache_dir, self.workers)
         return self._forecaster
 
+    def _health(self, view: DataView, pool: list[str]) -> dict[str, float]:
+        """Continuous health score of ``pool``: the nine Piotroski metrics plus any extras."""
+        metrics = PIOTROSKI | {m: EXTRA_HEALTH[m] for m in self.health_extra}
+        return health_scores(view.features(pool, list(metrics)), metrics)
+
     def _healthy_set(self, view: DataView, among: list[str] | None) -> list[str]:
         """The healthiest ``healthy_share`` of candidates, refreshed per ``health_schedule``."""
         quarter = (view.asof.year, (view.asof.month - 1) // 3)
@@ -265,7 +274,7 @@ class MeanVar:
             eligible = set(among if among is not None else view.eligible())
             return [s for s in self._healthy[1] if s in eligible]
         pool = among if among is not None else view.eligible()
-        health = health_scores(view.features(pool, list(PIOTROSKI)))
+        health = self._health(view, pool)
         ranked = sorted(health, key=lambda s: -health[s])
         chosen = ranked[: round(len(ranked) * self.healthy_share)]
         self._healthy = (quarter, chosen)
@@ -345,7 +354,7 @@ class MeanVar:
             among = self._healthy_set(view, among)
         if self.health_rank_pool:
             pool = view.top_liquid(self.health_rank_pool, among=among)
-            health = health_scores(view.features(pool, list(PIOTROSKI)))
+            health = self._health(view, pool)
             candidates = sorted(health, key=lambda s: -health[s])[: self.top_n]
         else:
             candidates = view.top_liquid(self.top_n, among=among)

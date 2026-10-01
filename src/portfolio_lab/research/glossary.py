@@ -90,6 +90,25 @@ GLOSSARY: dict[str, Entry] = {
         "is mixed.",
         "unclear",
     ),
+    "distance_to_default": Entry(
+        "How many standard deviations of yearly swings in the company's total value (stock "
+        "plus debt) stand between it and the point where it can't cover its debt (the naive "
+        "Merton model). Debt-free companies get the top value.",
+        "Firms close to default are fragile: they tend to crash in downturns, and the market "
+        "often prices that risk too late.",
+    ),
+    "roa_volatility": Entry(
+        "How much annual return on assets has swung over the last five fiscal years "
+        "(standard deviation).",
+        "Steady earners are easier to value and less likely to disappoint; erratic ones carry "
+        "more hidden risk.",
+        "lower",
+    ),
+    "interest_coverage": Entry(
+        "Operating income divided by interest expense: how many times over profits cover "
+        "interest. Debt-free companies get the top value.",
+        "Companies that can barely pay interest are one bad year from trouble.",
+    ),
     "current_ratio": Entry(
         "Current assets divided by current liabilities: the cushion to pay the next year's bills.",
         "Liquidity lowers the risk of distress, but a very high ratio can mean idle cash.",

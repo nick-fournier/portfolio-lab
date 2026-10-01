@@ -1,11 +1,19 @@
-from datetime import timedelta
+from datetime import date, timedelta
 
 import numpy as np
 import polars as pl
 import pytest
 
 from portfolio_lab.core.calendar import rebalance_dates
-from portfolio_lab.research.features import MAX_FILING_AGE_DAYS, build_features
+from portfolio_lab.research.features import (
+    MAX_COVERAGE,
+    MAX_DISTANCE,
+    MAX_FILING_AGE_DAYS,
+    _distance_to_default,
+    _interest_coverage,
+    build_features,
+    roa_stability,
+)
 from portfolio_lab.research.fundamentals import CONCEPTS
 
 from ..strategies.test_strategies import _poisoned
@@ -99,3 +107,34 @@ def test_stale_filings_are_ignored(inputs):
         out.filter(age > MAX_FILING_AGE_DAYS)["earnings_yield"].null_count()
         == out.filter(age > MAX_FILING_AGE_DAYS).height
     )
+
+
+def test_financial_strength_features():
+    rows = pl.DataFrame({
+        "market_value": [100.0, 100.0, 100.0, None],
+        "volatility": [0.02, 0.02, 0.02, 0.02],
+        "lt_debt": [0.0, 100.0, 100.0, None],
+        "debt_cur": [0.0, 0.0, 50.0, None],
+        "liabilities": [10.0, 120.0, 170.0, None],
+        "operating_income": [5.0, 30.0, 30.0, 1.0],
+        "interest": [None, 6.0, 10.0, None],
+    })  # fmt: skip
+    out = rows.select(_distance_to_default(), _interest_coverage())
+    dd, cov = out["distance_to_default"].to_list(), out["interest_coverage"].to_list()
+    assert dd[0] == MAX_DISTANCE and cov[0] == MAX_COVERAGE  # no debt
+    assert 0 < dd[2] < dd[1] < MAX_DISTANCE  # more debt due soon: closer to default
+    assert cov[1:3] == pytest.approx([5.0, 3.0])
+    assert dd[3] is None and cov[3] is None  # unknown debt
+
+
+def test_roa_stability_uses_only_known_annual_filings():
+    rows = [(1, "10-K", date(2000 + y, 3, 1), date(1999 + y, 12, 31), roa * 100, 100.0)
+            for y, roa in enumerate([0.10, 0.12, 0.08, 0.30])]  # fmt: skip
+    rows.append((1, "10-Q", date(2003, 5, 1), date(2003, 3, 31), 5.0, 100.0))
+    states = pl.DataFrame(rows, schema=["cik", "form", "filed", "period_end", "net_income",
+                                        "assets"], orient="row")  # fmt: skip
+    out = roa_stability(states).sort("filed")["_roa_volatility"].to_list()
+    assert out[:2] == [None, None]  # fewer than three years
+    assert out[2] == pytest.approx(0.02)  # std of 0.10, 0.12, 0.08
+    assert out[3] == pytest.approx(pl.Series([0.10, 0.12, 0.08, 0.30]).std())
+    assert out[4] == out[3]  # a 10-Q carries the latest annual figure

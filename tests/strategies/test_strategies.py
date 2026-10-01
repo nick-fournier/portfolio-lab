@@ -150,7 +150,7 @@ def test_meanvar_healthy_share_keeps_the_healthiest(make_panel):
 def test_meanvar_quarterly_health_refresh_reuses_the_set_within_a_quarter(make_panel, monkeypatch):
     calls = []
     real = mv.health_scores
-    monkeypatch.setattr(mv, "health_scores", lambda f: calls.append(1) or real(f))
+    monkeypatch.setattr(mv, "health_scores", lambda *a: calls.append(1) or real(*a))
     panel = make_panel(symbols=[f"S{i:02d}" for i in range(12)], days=400)
     strategy = create("meanvar", model="historical_mean", healthy_share=0.5,
                       health_schedule="Q")  # fmt: skip
