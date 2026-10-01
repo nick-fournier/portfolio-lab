@@ -131,7 +131,9 @@ class _Known:
         """Discrete quarter values by period end, derived from year-to-date values if needed.
 
         A quarter ending at ``e2`` is ``ytd(e2) - ytd(e1)`` for two year-to-date values with
-        the same start whose ends are a quarter apart (e.g. six months minus three).
+        the same start whose ends are a quarter apart (e.g. six months minus three). A fourth
+        quarter that is never reported on its own (10-Ks give only the year) is the year
+        minus the three quarters inside it.
         """
         if concept in self._quarters:
             return self._quarters[concept]
@@ -149,6 +151,12 @@ class _Known:
                 gap = (e2 - e1).days
                 if QUARTER_DAYS[0] <= gap <= QUARTER_DAYS[1] and _near(quarters, e2) is None:
                     quarters[e2] = v2 - v1
+        for (start, end), value in self.durations.get(concept, {}).items():
+            if _kind((end - start).days) != "fy" or _near(quarters, end) is not None:
+                continue
+            inside = [e for e in quarters if start + QUARTER_GAP[0] <= e < end - SAME_DAY]
+            if len(inside) == 3:
+                quarters[end] = value - sum(quarters[e] for e in inside)
         self._quarters[concept] = quarters
         return quarters
 
@@ -162,13 +170,13 @@ class _Known:
     def ttm(self, concept: str, end: date) -> float | None:
         """Sum of the four quarters ending at ``end``, else a fiscal year ending there."""
         quarters = self.quarters(concept)
-        total, cursor = 0.0, end
+        match = _near(quarters, end)
+        total = 0.0
         for _ in range(4):
-            match = _near(quarters, cursor)
             if match is None:
                 return self.year(concept, end)
             total += quarters[match]
-            cursor = match - timedelta(days=91)
+            match = _previous(quarters, match)
         return total
 
     def latest_quarter(self, concept: str, end: date) -> float | None:
@@ -187,6 +195,16 @@ class _Known:
         """The most recent shares-outstanding count (latest date)."""
         values = self.instants.get("shares_out")
         return values[max(values)] if values else None
+
+
+#: Days between consecutive quarter ends: 12 to 16 weeks, with slack.
+QUARTER_GAP = (timedelta(days=QUARTER_DAYS[0] - 7), timedelta(days=QUARTER_DAYS[1] + 7))
+
+
+def _previous(quarters: dict[date, float], end: date) -> date | None:
+    """The quarter end before ``end``: the latest one 11 to 18 weeks earlier."""
+    earlier = [e for e in quarters if QUARTER_GAP[0] <= end - e <= QUARTER_GAP[1]]
+    return max(earlier) if earlier else None
 
 
 def _near(values: dict[date, float], when: date) -> date | None:

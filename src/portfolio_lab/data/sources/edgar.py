@@ -71,9 +71,11 @@ DEI_TAGS: dict[str, str] = {"EntityCommonStockSharesOutstanding": "instant"}
 ANNUAL_FORMS = frozenset({"10-K", "10-K/A"})
 FORMS = ANNUAL_FORMS | {"10-Q", "10-Q/A"}
 #: Duration facts kept, by length in days: quarters, six- and nine-month year-to-date, years.
-QUARTER_DAYS = (80, 100)
-HALF_YEAR_DAYS = (170, 195)
-NINE_MONTH_DAYS = (260, 285)
+#: Wide enough for 52/53-week calendars, whose quarters run 12 to 16 weeks (Costco,
+#: AutoZone): a 16-week quarter is 112 days, 24 weeks to date 168, 36 weeks 252.
+QUARTER_DAYS = (77, 118)
+HALF_YEAR_DAYS = (160, 200)
+NINE_MONTH_DAYS = (245, 290)
 YEAR_DAYS = (350, 380)
 
 FACT_SCHEMA = {

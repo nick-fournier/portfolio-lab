@@ -85,3 +85,22 @@ def test_cash_flow_quarters_from_year_to_date_values():
     ]  # fmt: skip
     state = filing_states(pl.DataFrame(rows, schema=FACT_SCHEMA, orient="row"), workers=1)
     assert state["cfo"].to_list() == [pytest.approx(70.0)]  # 10 + 15 + 20 + 25
+
+
+def test_52_week_calendar_with_a_16_week_quarter():
+    """Costco-style: three 12-week quarters reported alone, a 16-week fourth only in the 10-K."""
+    rows = []
+
+    def add(start, end, value, filed, accn, form):
+        rows.append((1, "NetIncomeLoss", end, float(value), filed, accn, form, start))
+        rows.append((1, "Assets", end, 1000.0, filed, accn, form, None))
+
+    add(D(2023, 9, 4), D(2023, 11, 26), 10, D(2023, 12, 20), "q1", "10-Q")
+    add(D(2023, 11, 27), D(2024, 2, 18), 11, D(2024, 3, 13), "q2", "10-Q")
+    add(D(2024, 2, 19), D(2024, 5, 12), 12, D(2024, 6, 6), "q3", "10-Q")
+    add(D(2023, 9, 4), D(2024, 9, 1), 50, D(2024, 10, 9), "k", "10-K")  # 16-week Q4: 17
+    add(D(2024, 9, 2), D(2024, 11, 24), 13, D(2024, 12, 19), "q1b", "10-Q")
+    facts = pl.DataFrame(rows, schema=FACT_SCHEMA, orient="row")
+    states = {r["accn"]: r for r in filing_states(facts, workers=1).iter_rows(named=True)}
+    assert states["k"]["net_income"] == pytest.approx(50)
+    assert states["q1b"]["net_income"] == pytest.approx(11 + 12 + 17 + 13)
