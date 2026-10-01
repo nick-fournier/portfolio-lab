@@ -20,7 +20,6 @@ from portfolio_lab.core.config import Settings
 from portfolio_lab.core.http import RateLimitedClient
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic, write_status
-from portfolio_lab.data.ingest import sharadar
 from portfolio_lab.data.ingest.delisted import ingest_delisted
 from portfolio_lab.data.ingest.fundamentals import ingest_fundamentals
 from portfolio_lab.data.ingest.funds import ingest_funds
@@ -397,36 +396,36 @@ HISTORY_COMPARE_START = date(1999, 1, 4)
 HISTORY_OURS = "ours: production (healthiest 100 of 400 + bear defense)"
 
 
-def make_vs_buy_history_task(settings: Settings, raw: Path, publish: Path | None = None) -> dict:
+def make_vs_buy_history_task(settings: Settings, publish: Path | None = None) -> dict:
     """Make vs buy over the Sharadar history: funds since launch vs our strategies since 1999.
 
-    Exchange-traded funds and Berkshire come from Sharadar's bulk files in ``raw``, open-end
-    mutual funds from Tiingo. Ours: meanvar, meanvar behind F-score >= 7, meanvar behind
-    the continuous F-score (healthiest 27%) and :data:`PRODUCTION`, all from
-    :data:`HISTORY_COMPARE_START`.
+    Fund prices (distribution-adjusted) come from Tiingo, so nothing published below is
+    Sharadar data; ours are backtests on the Sharadar history in ``settings.data_dir``:
+    meanvar, meanvar behind F-score >= 7, meanvar behind the continuous F-score (healthiest
+    27%) and :data:`PRODUCTION`, all from :data:`HISTORY_COMPARE_START`.
 
-    With ``publish`` (the main data directory), the summary is also written there as
-    ``make_vs_buy/history_summary.parquet`` for the Compare page: derived statistics
-    only, which the Sharadar license lets us keep.
+    With ``publish`` (the main data directory), the summary and the growth of $1 are also
+    written there (``make_vs_buy/history_summary.parquet``, ``history_growth.parquet``) for
+    the Compare page: fund series from Tiingo and our derived results, which the Sharadar
+    license lets us keep.
     """
     paths = DataPaths(settings.data_dir)
-    traded = {f.symbol for f in FUNDS if f.source != "tiingo"}
-    prices = sharadar.fund_history(raw, traded)
-    token = settings.tiingo_api_key.get_secret_value() if settings.tiingo_api_key else None
-    if token:
-        with RateLimitedClient(max_per_minute=30) as tiingo:
-            mutual = [
-                fetch_fund_history(tiingo, f.symbol, token, HISTORY_COMPARE_START)
-                for f in FUNDS if f.source == "tiingo"
-            ]  # fmt: skip
-        mutual = (
-            pl.concat(mutual)
-            .sort("symbol", "date")
-            .with_columns(
-                (pl.col("adj_close") / pl.col("adj_close").shift(1).over("symbol") - 1).alias("ret")
-            )
+    if not settings.tiingo_api_key:
+        raise RuntimeError("TIINGO_API_KEY is needed for fund prices")
+    token = settings.tiingo_api_key.get_secret_value()
+    with RateLimitedClient(max_per_minute=30) as tiingo:
+        frames = [
+            fetch_fund_history(tiingo, f.symbol.replace(".", "-"), token, HISTORY_COMPARE_START)
+            .with_columns(pl.lit(f.symbol).alias("symbol"))
+            for f in FUNDS
+        ]  # fmt: skip
+    prices = (
+        pl.concat(frames)
+        .sort("symbol", "date")
+        .with_columns(
+            (pl.col("adj_close") / pl.col("adj_close").shift(1).over("symbol") - 1).alias("ret")
         )
-        prices = pl.concat([prices, mutual])
+    )
     write_parquet_atomic(prices, paths.fund_prices)
     start = HISTORY_COMPARE_START
     ours = {
@@ -451,5 +450,7 @@ def make_vs_buy_history_task(settings: Settings, raw: Path, publish: Path | None
     write_parquet_atomic(summary, paths.make_vs_buy / "summary.parquet")
     write_parquet_atomic(growth, paths.make_vs_buy / "growth.parquet")
     if publish is not None:
-        write_parquet_atomic(summary, DataPaths(publish).make_vs_buy / "history_summary.parquet")
+        folder = DataPaths(publish).make_vs_buy
+        write_parquet_atomic(summary, folder / "history_summary.parquet")
+        write_parquet_atomic(growth, folder / "history_growth.parquet")
     return {"runs": ours, "series": len(series)}

@@ -57,8 +57,22 @@ def compare(request: Request) -> HTMLResponse:
         context["chart"] = growth_figure(growth, names, _visible(common), groups)
     history = folder / "history_summary.parquet"
     if history.exists():
-        context["history"] = _history(pl.read_parquet(history))
+        summary = pl.read_parquet(history)
+        context["history"] = _history(summary)
+        growth_path = folder / "history_growth.parquet"
+        if growth_path.exists():
+            context["history_chart"] = _history_chart(summary, pl.read_parquet(growth_path))
     return request.app.state.templates.TemplateResponse(request, "compare.html", context)
+
+
+def _history_chart(summary: pl.DataFrame, growth: pl.DataFrame) -> str:
+    """Growth of $1 since 1999: ours, SPY, QQQ and the best fund drawn, the rest hidden."""
+    common = summary.filter(pl.col("period") == "common")
+    names = dict(summary.select("key", "name").unique("key").iter_rows())
+    order = {c: k for k, c in enumerate(CATEGORIES)}
+    keyed = common.sort(pl.col("category").replace_strict(order), "name")
+    groups = {k: CATEGORIES[c] for k, c in keyed.select("key", "category").iter_rows()}
+    return growth_figure(growth, names, _visible(common), groups)
 
 
 def _history(summary: pl.DataFrame) -> dict:

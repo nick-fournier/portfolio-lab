@@ -262,6 +262,9 @@ def test_compare_page(client, tmp_path):
         full | {"key": "ours: h", "name": "healthy meanvar", "category": "ours",
                 "period": "ours_since:SPY", "cagr": 0.173, "max_drawdown": -0.43},
     ]).write_parquet(folder / "history_summary.parquet")  # fmt: skip
+    pl.DataFrame(
+        {"date": [date(1999, 1, 4)] * 2, "key": ["SPY", "ours: h"], "growth": [1.0, 1.0]}
+    ).write_parquet(folder / "history_growth.parquet")
     page = client.get("/compare").text
-    for expected in ("Since 1999", "17.3%", "8.7%", "8.6%", "healthy meanvar"):
+    for expected in ("Since 1999", "17.3%", "8.7%", "8.6%", "healthy meanvar", "history-growth"):
         assert expected in page, expected
