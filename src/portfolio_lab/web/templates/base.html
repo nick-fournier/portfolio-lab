@@ -20,7 +20,40 @@
     const HOVER_MS = 3000;
     window.drawPlot = (id, fig) => {
       if (TOUCH) fig.layout.hovermode = "closest";
-      Plotly.newPlot(id, fig.data, fig.layout, window.PLOT_CONFIG);
+      Plotly.newPlot(id, fig.data, fig.layout, window.PLOT_CONFIG).then((el) => {
+        if (fig.layout.xaxis && fig.layout.xaxis.rangeselector) rebaseOnZoom(el);
+      });
+    };
+    // Growth charts with zoom buttons: on any zoom, every line is rescaled to $1 at the left
+    // edge of the window and the y-axis fits the visible part, so a 1-year view isn't flat.
+    // "Max" (autorange) restores the original curves.
+    const rebaseOnZoom = (el) => {
+      const original = el.data.map((t) => t.y.slice());
+      el.on("plotly_relayout", (ev) => {
+        const reset = ev["xaxis.autorange"];
+        const range = ev["xaxis.range"] || [ev["xaxis.range[0]"], ev["xaxis.range[1]"]];
+        if (!reset && range[0] === undefined) return;  // not an x zoom (e.g. our own y update)
+        const from = reset ? "" : String(range[0]).slice(0, 10);
+        const end = reset ? "9999" : String(range[1]).slice(0, 10);
+        let lo = Infinity, hi = -Infinity;
+        const ys = el.data.map((t, i) => {
+          const k = reset ? -1 : t.x.findIndex((x) => x >= from);
+          const base = k < 0 ? 1 : original[i][k];
+          const y = original[i].map((v) => v / base);
+          if (t.visible === true) {
+            t.x.forEach((x, j) => {
+              if (x >= from && x <= end) { lo = Math.min(lo, y[j]); hi = Math.max(hi, y[j]); }
+            });
+          }
+          return y;
+        });
+        Plotly.restyle(el, {y: ys});
+        if (lo < hi) {
+          const log = el.layout.yaxis.type === "log";
+          const pad = (v, f) => (log ? Math.log10(v * f) : v * f);
+          Plotly.relayout(el, {"yaxis.range": [pad(lo, 0.97), pad(hi, 1.03)]});
+        }
+      });
     };
     if (TOUCH) {
       // Plotly fires no hover event for taps, so time the label from the touch itself.
