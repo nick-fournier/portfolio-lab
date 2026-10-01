@@ -30,9 +30,10 @@
 {% endif %}
 
 {% if chart %}
-<h2>Growth of $1 <span class="muted">(since {{ common_start }})</span></h2>
-<p class="muted">SPY (dotted), QQQ, the best fund and our three best strategies are drawn; tap a
-  name in the legend to show the others.</p>
+<h2>Growth of $1 <span class="muted">(since {{ chart_start }})</span></h2>
+<p class="muted">{% if chart_is_history %}Our strategies backtested on the survivorship-free
+  1998+ history, funds at their real prices, log scale. {% endif %}SPY (dotted), QQQ, the best
+  fund and our three best strategies are drawn; tap a name in the legend to show the others.</p>
 <div id="growth" class="chart tall"></div>
 {% endif %}
 
@@ -55,11 +56,6 @@
 <h2>Since 1999, on a survivorship-free history</h2>
 <p class="muted">Backtests on Sharadar's 1998+ data (dead stocks included) against each fund
   over its own lifetime: the fund's return per year beside ours over exactly the same days.</p>
-{% if history_chart %}
-<p class="muted">Growth of $1 since 1999 (log scale). SPY (dotted), QQQ, the best fund and our
-  three best strategies are drawn; tap a name in the legend to show the others.</p>
-<div id="history-growth" class="chart tall"></div>
-{% endif %}
 <div class="table-wrap"><table>
   <thead><tr><th>Ours</th><th class="num">Return / yr</th><th class="num">Sharpe</th>
     <th class="num">Worst drop</th><th class="num">From</th></tr></thead>
@@ -91,7 +87,6 @@
 <script>
   document.addEventListener("DOMContentLoaded", () => {
     drawPlot("growth", {{ chart | safe }});
-    {% if history_chart %}drawPlot("history-growth", {{ history_chart | safe }});{% endif %}
   });
 </script>
 {% endif %}
