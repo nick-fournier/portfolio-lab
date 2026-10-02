@@ -26,8 +26,7 @@
 {% if fit %}
 <h2>Forecast vs what happened</h2>
 <div id="fit" class="chart tall"></div>
-<p class="muted">Each month, stocks are sorted by forecast and split into 20 equal groups (the
-  lowest 5% of forecasts, the next 5%, and so on). Each dot is one group: its average forecast
+<p class="muted">Stocks are binned by forecasted-return percentile each month (20 bins of 5%). Each dot is one group: its average forecast
   (across) against its average actual return (up), with a 90% margin. If forecasts were exactly
   right, the dots would sit on the dotted line. They rise in the right order but more slowly
   than the line: the forecasts exaggerate the differences between stocks. The shaded band shows
@@ -39,6 +38,38 @@
 <div id="years" class="chart"></div>
 <p class="muted">Each year's average ranking score (IC) with its 90% margin; a margin
   crossing zero means that year alone can't be told from chance.</p>
+
+<h2>How the forecast is built</h2>
+<div class="formula">
+  <p><b>1. Linear model.</b> Each stock's inputs are converted to percentiles within the month
+    (x), and a straight-line fit gives a first forecast:</p>
+  <p class="eq">linear forecast = b₁·x₁ + b₂·x₂ + … + bₙ·xₙ</p>
+  <p class="muted">About 25 inputs: health and profitability, momentum (with separate weights in
+    bear and rebound markets), year-on-year changes, valuation, industry-relative versions. The
+    b's are fit across all stocks and earlier months, with a penalty that keeps them small
+    (ridge regression).</p>
+  <p><b>2. Trees on what the line misses.</b> On the training months, the leftover is each
+    stock's actual return minus its linear forecast. Gradient-boosted trees learn to predict
+    that leftover from the same inputs plus the market environment, which catches thresholds
+    and interactions a straight line can't.</p>
+  <p class="eq">correction = trees(inputs, market) ≈ actual − linear forecast</p>
+  <p><b>3. Blend.</b> The trees' correction is added at half strength, since part of what they
+    learn is noise:</p>
+  <p class="eq">forecast = linear forecast + 0.5 × correction</p>
+</div>
+
+<h2>From forecast to expected return (for the optimizer)</h2>
+<div class="formula">
+  <p>The ranking is reliable but the sizes are exaggerated, so mean-variance would get expected
+    returns rebuilt from the ranking with Grinold's rule:</p>
+  <p class="eq">expected extra return = IC × volatility × score</p>
+  <p class="muted">Score: the stock's forecast rank, standardized (0 for the middle stock, about
+    ±2 near the ends). IC: the ranking's measured skill (about 0.04), which shrinks everything to
+    a realistic size. Volatility: how much the stock typically moves in a month, so riskier stocks
+    get proportionally larger expected returns. Per unit of risk, every stock's expected return is
+    IC × score: it depends only on its rank. Example: score +2, 8% monthly volatility →
+    0.04 × 8% × 2 = +0.64% a month. Not used yet; this is the next step.</p>
+</div>
 
 <h2>What it uses</h2>
 <p class="muted">How much the ranking score (IC, {{ "%.3f" | format(h.ic) }} in total) drops when
@@ -69,10 +100,7 @@
     <td class="num">{{ "%.3f" | format(t.second_half) }}</td><td class="num">{{ t.years_right }}/{{ t.years }}</td></tr>{% endfor %}</tbody>
 </table></div>
 
-<p class="muted">The forecaster: a linear model on health, momentum (different in bear and rebound
-  markets), year-on-year changes and valuation, plus gradient-boosted trees trained on what it
-  gets wrong, added at half strength. The ranking is reliable; predicted sizes are not
-  (they swing year to year), so use the order, not the numbers.</p>
+<p class="muted">The ranking is reliable; predicted sizes are not (they swing year to year), so use the order, not the numbers.</p>
 <script>
   document.addEventListener("DOMContentLoaded", () => {
     drawPlot("years", {{ chart | safe }});

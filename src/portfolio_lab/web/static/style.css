@@ -84,3 +84,6 @@ tr.ours td { background: #f6f8fa; }
 .metrics dd { margin: 0; }
 @media (max-width: 600px) { .metrics { grid-template-columns: 1fr; } .metrics dd { margin-bottom: 0.4rem; } }
 .bar-value { display: grid; grid-template-columns: 1fr 3.5rem; gap: 0.5rem; align-items: center; }
+.formula { max-width: 60rem; }
+.formula p { margin: 0.4rem 0; }
+.formula .eq { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #f6f8fa; border: 1px solid var(--line); border-radius: 6px; padding: 0.4rem 0.7rem; overflow-x: auto; }
