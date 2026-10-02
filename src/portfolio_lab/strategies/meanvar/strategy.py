@@ -13,6 +13,13 @@ from portfolio_lab.research.dataview import DataView
 from portfolio_lab.research.piotroski import PIOTROSKI, health_scores
 from portfolio_lab.strategies import explain
 from portfolio_lab.strategies.base import Weights, register
+from portfolio_lab.strategies.meanvar.expected import (
+    FORECASTS,
+    INPUTS,
+    ForecastCheck,
+    PooledModel,
+    james_stein,
+)
 from portfolio_lab.strategies.meanvar.forecast import (
     TRADING_DAYS,
     Forecaster,
@@ -93,6 +100,10 @@ class MeanVar:
         health_rank_pool: If set, candidates are the ``top_n`` healthiest (continuous
             F-score) of the ``health_rank_pool`` most liquid stocks, instead of the most liquid
             of a healthy share.
+        forecast: Replace the per-stock AR(1) expected returns (``strategies.meanvar.expected``):
+            ``shrink`` toward the candidates' average (James-Stein), or a pooled model
+            learned across stocks, ``pooled_health`` / ``pooled_nine`` / ``pooled_top``
+            (past returns plus health inputs). ``None`` keeps the AR(1).
         soften: With ``health_rank_pool``, choose candidates without hard cutoffs
             (``strategies.meanvar.soft``): ``average`` over several pool and list sizes,
             ``taper`` weight caps near the edges, or ``sticky`` (easy in, slow out).
@@ -129,6 +140,7 @@ class MeanVar:
     health_schedule: str | None = None
     health_rank_pool: int | None = None
     soften: str | None = None
+    forecast: str | None = None
     bear_defense: bool = False
     rebound: str | None = None
     rebound_lookback: int = 21
@@ -162,6 +174,10 @@ class MeanVar:
         self._soft = SoftSelector(self.soften, self._health) if self.soften else None
         self._caps: dict[str, float] | None = None  # per-stock caps of the set being weighed
         self._state: tuple[date, str] | None = None  # market state, once per rebalance
+        if self.forecast is not None and self.forecast not in FORECASTS:
+            raise ValueError(f"unknown forecast {self.forecast!r}; choose from {FORECASTS}")
+        self._pooled = PooledModel(self.forecast) if self.forecast in INPUTS else None
+        self._check = ForecastCheck()
         self._held: dict[str, float] = {}
 
     example_columns: ClassVar[dict[str, str]] = {
@@ -287,6 +303,17 @@ class MeanVar:
             caps = {s: self.max_weight * self._caps[s] for s in mu.index if s in self._caps}
         return optimize(mu, prices, rf, objective, self.max_weight, caps=caps)
 
+    def _expected(self, view: DataView, mu: pd.Series, prices: pd.DataFrame) -> pd.Series:
+        """The expected returns meanvar optimizes: the AR(1), or ``forecast``'s version."""
+        if self.forecast == "shrink":
+            vol = prices.pct_change().std() * TRADING_DAYS**0.5
+            return james_stein(mu, vol, len(prices) / TRADING_DAYS)
+        if self._pooled is not None:
+            pooled = self._pooled.predict(view, list(mu.index))
+            if pooled is not None:
+                return pooled.reindex(mu.index).fillna(mu)
+        return mu
+
     def _healthy_set(self, view: DataView, among: list[str] | None) -> list[str]:
         """The healthiest ``healthy_share`` of candidates, refreshed per ``health_schedule``."""
         quarter = (view.asof.year, (view.asof.month - 1) // 3)
@@ -368,7 +395,7 @@ class MeanVar:
     def diagnostics(self) -> dict:
         """Stress gauge readings or market states at each rebalance, when either is on."""
         on = self.risk_gauge or self.bear_defense or self.rebound or self.defend_dates
-        return {"gauge": self._gauge_log} if on else {}
+        return ({"gauge": self._gauge_log} if on else {}) | {"forecast": self._check.log}
 
     def target_weights(self, view: DataView) -> Weights:
         """Forecast the most liquid eligible stocks and optimize their weights."""
@@ -408,6 +435,8 @@ class MeanVar:
         self._caps = caps
         windows = {s: prices[s].to_numpy() for s in prices.columns}
         mu = pd.Series(self._get_forecaster().forecast(view.asof, windows), dtype=float)
+        mu = self._expected(view, mu, prices)
+        self._check.record(view, mu)
         weights = self._optimize(mu, prices, view.risk_free(), self.objective)
         if self.risk_gauge and weights:
             weights = self._tilt(view, mu, prices, weights)

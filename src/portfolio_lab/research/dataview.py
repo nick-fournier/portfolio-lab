@@ -162,6 +162,42 @@ class DataView:
         latest = past.filter(pl.col("date") == past["date"].max())
         return latest.filter(pl.col("symbol").is_in(list(symbols))).select("symbol", *columns)
 
+    def feature_history(self, columns: Sequence[str], since: date | None = None) -> pl.DataFrame:
+        """Every monthly feature row dated on or before ``asof`` (from ``since``, if given).
+
+        Returns:
+            date, symbol plus ``columns``; empty if the panel has no features.
+        """
+        table = self._panel.features
+        if table is None:
+            return pl.DataFrame(schema={"date": pl.Date, "symbol": pl.String})
+        rows = table.filter(pl.col("date") <= self.asof)
+        if since is not None:
+            rows = rows.filter(pl.col("date") >= since)
+        return rows.select("date", "symbol", *columns)
+
+    def period_returns(self, symbols: Sequence[str], start: date, end: date) -> pd.Series:
+        """Compounded return of each symbol from the close of ``start`` to the close of ``end``.
+
+        Missing bars count as zero return. ``end`` must not be after ``asof``.
+
+        Raises:
+            ValueError: If ``end`` is after the decision date (that would look ahead).
+        """
+        if end > self.asof:
+            raise ValueError(f"period ends {end}, after the decision date {self.asof}")
+        names, cols = self._columns(symbols)
+        dates = self._panel.dates
+        lo = int(
+            np.searchsorted(np.array(dates, dtype="datetime64[D]"), np.datetime64(start), "right")
+        )
+        hi = int(
+            np.searchsorted(np.array(dates, dtype="datetime64[D]"), np.datetime64(end), "right")
+        )
+        block = self._panel.field("ret_cc")[lo:hi][:, cols]
+        growth = np.prod(1 + np.nan_to_num(block), axis=0) - 1
+        return pd.Series(growth, index=names, dtype=float)
+
     def risk_free(self) -> float:
         """Annual risk-free rate as of the decision date (fraction, e.g. 0.05)."""
         return float(self._panel.rf_daily[self._index] * TRADING_DAYS)
