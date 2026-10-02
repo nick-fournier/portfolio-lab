@@ -278,7 +278,11 @@ def forecast_fit_figure(bins: list[dict]) -> str:
     """
     x = [round(b["forecast"] * 100, 3) for b in bins]
     pct = lambda k: [round(b[k] * 100, 3) for b in bins]  # noqa: E731
-    lo, hi = min(x), max(x)
+    # One scale on both axes, square and centered on 0, wide enough for every dot and its
+    # margin (the band of single stocks runs off the edges: that's the noise).
+    reach = max(*(abs(v) for v in x), *((abs(b["actual"]) + b["margin"]) * 100 for b in bins))
+    lim = round(reach * 1.15, 1)
+    lo, hi = -lim, lim
     traces = [  # dots first: the band traces must stay consecutive for the fill
         {"type": "scatter", "mode": "markers", "x": x, "y": pct("actual"),
          "marker": {"color": "#1f77b4", "size": 7}, "name": "Group average",
@@ -294,6 +298,9 @@ def forecast_fit_figure(bins: list[dict]) -> str:
     ]  # fmt: skip
     layout = {**_LAYOUT, "hovermode": "closest", "template": _white_template(),
               "margin": {**_LAYOUT["margin"], "l": 55, "b": 45},
-              "xaxis": {"title": {"text": "Forecast, % next month (vs average stock)"}},
-              "yaxis": {"title": {"text": "Outcome, % next month"}}}  # fmt: skip
+              "xaxis": {"title": {"text": "Forecast, % next month (vs average stock)"},
+                        "range": [lo, hi], "dtick": 1, "zeroline": True},
+              "yaxis": {"title": {"text": "Outcome, % next month"}, "range": [lo, hi],
+                        "dtick": 1, "zeroline": True, "scaleanchor": "x", "scaleratio": 1,
+                        "constrain": "domain"}}  # fmt: skip
     return json.dumps({"data": traces, "layout": layout})
