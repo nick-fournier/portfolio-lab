@@ -107,8 +107,6 @@ class MeanVar:
         rebound_lookback: Sessions of recent return used by ``rebound="recent"``.
         bear_drawdown: Fall from the two-year high that, with a broken trend, makes a bear.
         vix_easing: Drop of the VIX from its three-month peak that signals a rebound.
-        defend_dates: Research only (the oracle test): rebalance dates (ISO) on which to
-            hold the minimum-variance portfolio, chosen with hindsight.
         risk_gauge: Tilt from max Sharpe toward minimum variance as the stress gauge
             (``research.stress``) rises: fully invested always, only the mix changes.
         gauge_band: Stress levels (0 to 1) where the tilt starts and where it is complete
@@ -134,7 +132,6 @@ class MeanVar:
     rebound_lookback: int = 21
     bear_drawdown: float = 0.15
     vix_easing: float = 0.20
-    defend_dates: tuple[str, ...] = ()
     risk_gauge: bool = False
     gauge_band: tuple[float, float] = (0.5, 0.9)
     schedule: Frequency = "M"
@@ -155,7 +152,6 @@ class MeanVar:
         self._forecaster: Forecaster | None = None
         self._healthy: tuple[tuple[int, int], list[str]] | None = None  # (quarter, set)
         self.gauge_band = tuple(float(b) for b in self.gauge_band)
-        self.defend_dates = tuple(self.defend_dates)
         self.rebound_lookback = int(self.rebound_lookback)
         self._gauge = stress.StressGauge()
         self._gauge_log: list[dict] = []
@@ -336,11 +332,9 @@ class MeanVar:
     def _regime_weights(
         self, view: DataView, mu: pd.Series, prices: pd.DataFrame, weights: Weights
     ) -> Weights:
-        """Adjust for the market state (see ``bear_defense``, ``rebound``, ``defend_dates``)."""
+        """Adjust for the market state (see ``bear_defense`` and ``rebound``)."""
         if self._state is not None and self._state[0] == view.asof:
             state = self._state[1]  # several candidate sets on one date: classify once
-        elif self.defend_dates:
-            state = "bear" if view.asof.isoformat() in set(self.defend_dates) else "normal"
         else:
             market = view.returns(view.index + 1, ["SPY"]).get("SPY", pd.Series(dtype=float))
             vix = view.environment("vix")["vix"].to_list()
@@ -349,7 +343,7 @@ class MeanVar:
             self._state = (view.asof, state)
             self._gauge_log.append({"date": view.asof.isoformat(), "state": state})
         rf = view.risk_free()
-        if state == "bear" and (self.bear_defense or self.defend_dates):
+        if state == "bear" and self.bear_defense:
             return self._optimize(mu, prices, rf, "min_volatility") or weights
         if state == "rebound" and self.rebound == "equal":
             share = {s: (self._caps or {}).get(s, 1.0) for s in prices.columns}
@@ -367,7 +361,7 @@ class MeanVar:
 
     def diagnostics(self) -> dict:
         """Stress gauge readings or market states at each rebalance, when either is on."""
-        on = self.risk_gauge or self.bear_defense or self.rebound or self.defend_dates
+        on = self.risk_gauge or self.bear_defense or self.rebound
         return {"gauge": self._gauge_log} if on else {}
 
     def target_weights(self, view: DataView) -> Weights:
@@ -411,7 +405,7 @@ class MeanVar:
         weights = self._optimize(mu, prices, view.risk_free(), self.objective)
         if self.risk_gauge and weights:
             weights = self._tilt(view, mu, prices, weights)
-        if (self.bear_defense or self.rebound or self.defend_dates) and weights:
+        if (self.bear_defense or self.rebound) and weights:
             weights = self._regime_weights(view, mu, prices, weights)
         return weights, mu, prices.pct_change().std() * TRADING_DAYS**0.5
 

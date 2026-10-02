@@ -8,7 +8,6 @@ the last price, stocks that fell to OTC take the delisting return, as in the bac
 the session index the label reaches, used to keep training labels out of test periods.
 """
 
-import numpy as np
 import polars as pl
 
 from portfolio_lab.research.context import STOCK_FEATURES
@@ -103,24 +102,3 @@ def rank_features(data: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
         ((pl.col(c).rank("average").over("date") - 0.5) / pl.col(c).count().over("date")).alias(c)
         for c in columns
     )
-
-
-def missing_flags(data: pl.DataFrame) -> pl.DataFrame:
-    """Indicators for missing groups of inputs (no filings, no F-score, no sensitivities)."""
-    groups = {"no_fundamentals": "earnings_yield", "no_fscore": "fscore",
-              "no_context": "oil_beta"}  # fmt: skip
-    return data.with_columns(
-        pl.col(col).is_null().cast(pl.Float64).alias(name)
-        for name, col in groups.items()
-        if col in data.columns
-    )
-
-
-def month_weights(dates: pl.Series) -> np.ndarray:
-    """Weights giving every month the same total weight.
-
-    Months with more stocks would otherwise dominate training.
-    """
-    counts = dates.value_counts()
-    per = dict(zip(counts[dates.name], counts["count"], strict=True))
-    return np.array([1.0 / per[d] for d in dates])

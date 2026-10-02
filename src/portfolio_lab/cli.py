@@ -10,22 +10,16 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Any
 
-import httpx
 import polars as pl
 import typer
 
 from portfolio_lab.backtest.results import load_run
 from portfolio_lab.core.config import get_settings
 from portfolio_lab.core.log import setup_logging
-from portfolio_lab.core.paths import DataPaths
-from portfolio_lab.core.store import write_parquet_atomic
 from portfolio_lab.data.ingest import sharadar
 from portfolio_lab.forecast_cli import forecast_app
 from portfolio_lab.jobs import tasks, taxes
-from portfolio_lab.research import history, regimes, sources
-from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.scorecard import scorecard
-from portfolio_lab.strategies.base import create
 
 app = typer.Typer(help="Portfolio lab: ingest data, run backtests, serve the dashboard.")
 ingest_app = typer.Typer(help="Fetch and store market data.")
@@ -207,12 +201,6 @@ def context_cmd() -> None:
     typer.echo(tasks.context_task(get_settings()))
 
 
-@app.command("models")
-def models_cmd() -> None:
-    """Train and evaluate the relaxed models walk-forward (results under results/models)."""
-    typer.echo(tasks.models_task(get_settings()))
-
-
 @app.command("make-vs-buy")
 def make_vs_buy_cmd() -> None:
     """Compare our strategies with funds anyone can buy (needs TIINGO_API_KEY for mutual funds)."""
@@ -240,40 +228,6 @@ def tax_runs_cmd(
         typer.echo(f"{key:>14}: {run_id}")
 
 
-@app.command("sources")
-def sources_cmd(
-    live: Annotated[Path, typer.Option(help="Live data directory (Alpaca + SEC).")],
-    sharadar: Annotated[Path, typer.Option(help="Sharadar data directory.")],
-    scratch: Annotated[Path, typer.Option(help="Folder for the mixed data directories.")],
-    start: Day = datetime(2017, 1, 3),
-    swap: Annotated[bool, typer.Option(help="Also run the four-way swap test.")] = True,
-) -> None:
-    """Split production's live-vs-Sharadar gap: prices vs fundamentals, inputs, timing."""
-    settings = get_settings()
-    feats = {n: pl.read_parquet(d / "features" / "monthly.parquet") for n, d in
-             (("live", live), ("sharadar", sharadar))}  # fmt: skip
-    out = sources.compare_inputs(feats["live"], feats["sharadar"], start.date())
-    with pl.Config(tbl_rows=50, float_precision=3, tbl_width_chars=200):
-        typer.echo(
-            f"Sharadar's top-{sources.POOL} pool found in live data: {out['pool_in_live']:.1%}"
-        )
-        typer.echo(out["inputs"])
-        overlap = out["overlap"]
-        by_year = overlap.group_by(pl.col("date").dt.year().alias("year")).agg(
-            pl.col("overlap").mean()).sort("year")  # fmt: skip
-        typer.echo(f"Healthiest-{sources.TOP} overlap: {overlap['overlap'].mean():.1%}")
-        typer.echo(by_year)
-        typer.echo(f"Filing timing (live minus Sharadar days since filing): {out['timing']}")
-        if swap:
-
-            def factory():
-                return tasks._attach_runtime(create(*tasks.PRODUCTION[:1], **tasks.PRODUCTION[1]),
-                                             settings)  # fmt: skip
-
-            dirs = {"live": live, "sharadar": sharadar}
-            typer.echo(sources.swap_test(factory, dirs, scratch, start.date()))
-
-
 @app.command("scorecard")
 def scorecard_cmd(
     run: Annotated[list[str], typer.Option(help="name=run_id; repeatable.")],
@@ -290,57 +244,6 @@ def scorecard_cmd(
     )
     with pl.Config(tbl_rows=50, tbl_cols=30, float_precision=3, tbl_width_chars=250):
         typer.echo(table)
-
-
-@app.command("regimes")
-def regimes_cmd() -> None:
-    """Event study: what followed fragile, bear and rebound signals (``research.regimes``)."""
-    settings = get_settings()
-    paths = DataPaths(settings.data_dir)
-    frame = regimes.signals(Panel.load(settings.data_dir), pl.read_parquet(paths.environment))
-    write_parquet_atomic(frame, settings.data_dir / "results" / "regimes.parquet")
-    with pl.Config(tbl_rows=20, tbl_cols=20, float_precision=3, tbl_width_chars=250,
-                   fmt_str_lengths=400):  # fmt: skip
-        typer.echo(regimes.summarize(frame))
-
-
-@app.command("oracle")
-def oracle_cmd(
-    months: Annotated[int, typer.Option(help="Crash-warning window in months.")],
-    start: Day,
-) -> None:
-    """Research only: healthy meanvar with a perfect crash warning (hindsight), its ceiling."""
-    settings = get_settings()
-    dates = regimes.crash_ahead(Panel.load(settings.data_dir), months)
-    params = {"healthy_share": 0.27, "defend_dates": dates}
-    run_id, metrics = tasks.backtest_task(settings, "meanvar", start.date(), params=params)
-    typer.echo(f"run {run_id}: {len(dates)} defended month ends, cagr {metrics['cagr']:.4f}")
-
-
-@app.command("history")
-def history_cmd(
-    french: Annotated[Path, typer.Option(help="Folder with Kenneth French's daily zips.")],
-) -> None:
-    """Regime signals since 1926 and a momentum proxy with the bear/rebound switches."""
-    texts = {
-        s: httpx.get("https://fred.stlouisfed.org/graph/fredgraph.csv", params={"id": s},
-                     timeout=60).text
-        for s in history.FRED_SERIES
-    }  # fmt: skip
-    daily = history.load_french(french)
-    frame = history.signals(daily, history.load_fred(texts))
-    out = get_settings().data_dir / "results" / "history"
-    write_parquet_atomic(frame, out / "signals.parquet")
-    proxy = history.momentum_proxy(daily, frame)
-    write_parquet_atomic(proxy, out / "momentum_proxy.parquet")
-    with pl.Config(tbl_rows=60, float_precision=3, tbl_width_chars=200):
-        typer.echo(history.summarize(frame))
-        typer.echo(history.summarize(frame, by_era=True))
-        typer.echo(proxy)
-    episodes = history.bear_episodes(frame)
-    typer.echo(
-        f"{len(episodes)} bear episodes: " + ", ".join(f"{a:%Y-%m}..{b:%Y-%m}" for a, b in episodes)
-    )
 
 
 @app.command("paper")

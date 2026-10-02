@@ -62,7 +62,6 @@ JOBS: tuple[Job, ...] = (
     Job("make_vs_buy", tasks.make_vs_buy_task, "weekly"),
     Job("scoreboard", tasks.scoreboard_task, "weekly"),
     Job("context", tasks.context_task, "weekly"),
-    Job("models", tasks.models_task, "weekly"),
 )
 
 
