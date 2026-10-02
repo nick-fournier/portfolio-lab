@@ -83,3 +83,4 @@ tr.ours td { background: #f6f8fa; }
 .metrics dt { font-weight: 600; color: var(--fg); }
 .metrics dd { margin: 0; }
 @media (max-width: 600px) { .metrics { grid-template-columns: 1fr; } .metrics dd { margin-bottom: 0.4rem; } }
+.bar-value { display: grid; grid-template-columns: 1fr 3.5rem; gap: 0.5rem; align-items: center; }

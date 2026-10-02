@@ -26,24 +26,27 @@
 {% if fit %}
 <h2>Forecast vs what happened</h2>
 <div id="fit" class="chart tall"></div>
-<p class="muted">Each month the stocks are split into 20 groups by forecast. Dots: each
-  group's average outcome, with a 95% margin. Band: the middle half of individual stocks in
-  that group (it runs far off the chart). Both axes use the same scale. Dotted line: forecast =
-  outcome. Dots rising left to right means the order is
-  right; dots flatter than the line means the forecasts overstate the differences; the wide
-  band is the noise in single stocks.</p>
+<p class="muted">Each month, stocks are sorted by forecast and split into 20 equal groups (the
+  lowest 5% of forecasts, the next 5%, and so on). Each dot is one group: its average forecast
+  (across) against its average actual return (up), with a 90% margin. If forecasts were exactly
+  right, the dots would sit on the dotted line. They rise in the right order but more slowly
+  than the line: the forecasts exaggerate the differences between stocks. The shaded band shows
+  how widely single stocks in a group landed (it runs far off the chart): most of any one
+  stock's return is noise.</p>
 {% endif %}
 
 <h2>How well it ranked stocks, each year</h2>
 <div id="years" class="chart"></div>
-<p class="muted">Each year's average ranking score (IC) with its 95% margin; a margin
+<p class="muted">Each year's average ranking score (IC) with its 90% margin; a margin
   crossing zero means that year alone can't be told from chance.</p>
 
 <h2>What it uses</h2>
+<p class="muted">How much the ranking score (IC, {{ "%.3f" | format(h.ic) }} in total) drops when
+  a group's values are scrambled between stocks.</p>
 <div class="bars">
   {% for g in s.groups %}<div class="bar-row{% if g.dropped %} muted{% endif %}">
     <span>{{ g.label }}</span>
-    {% if g.dropped %}<span class="small">dropped: no signal</span>{% else %}<span class="bar"><i style="width: {{ g.width | round(1) }}%"></i></span>{% endif %}
+    {% if g.dropped %}<span class="small">dropped: no signal ({{ "%+.3f" | format(-g.drop) }})</span>{% else %}<span class="bar-value"><span class="bar"><i style="width: {{ g.width | round(1) }}%"></i></span><span class="num small">−{{ "%.3f" | format(g.drop) }}</span></span>{% endif %}
   </div>{% endfor %}
 </div>
 
@@ -68,8 +71,7 @@
 
 <p class="muted">The forecaster: a linear model on health, momentum (different in bear and rebound
   markets), year-on-year changes and valuation, plus gradient-boosted trees trained on what it
-  gets wrong, added at half strength. "What it uses": how much the ranking drops when a
-  group's values are shuffled between stocks. The ranking is reliable; predicted sizes are not
+  gets wrong, added at half strength. The ranking is reliable; predicted sizes are not
   (they swing year to year), so use the order, not the numbers.</p>
 <script>
   document.addEventListener("DOMContentLoaded", () => {

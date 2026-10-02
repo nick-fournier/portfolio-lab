@@ -273,7 +273,7 @@ def forecast_years_figure(yearly: list[dict]) -> str:
 def forecast_fit_figure(bins: list[dict]) -> str:
     """Forecast vs outcome by forecast group, in % per month.
 
-    Group averages with 95% margins, the middle half of individual stocks as a band, and
+    Group averages with 90% margins, the middle half of individual stocks as a band, and
     the line where forecast and outcome would be equal.
     """
     x = [round(b["forecast"] * 100, 3) for b in bins]
@@ -299,7 +299,7 @@ def forecast_fit_figure(bins: list[dict]) -> str:
     layout = {**_LAYOUT, "hovermode": "closest", "template": _white_template(),
               "margin": {**_LAYOUT["margin"], "l": 55, "b": 45},
               "xaxis": {"title": {"text": "Forecast, % next month (vs average stock)"},
-                        "range": [lo, hi], "dtick": 1, "zeroline": True},
+                        "range": [lo, hi], "dtick": 1, "zeroline": True, "constrain": "domain"},
               "yaxis": {"title": {"text": "Outcome, % next month"}, "range": [lo, hi],
                         "dtick": 1, "zeroline": True, "scaleanchor": "x", "scaleratio": 1,
                         "constrain": "domain"}}  # fmt: skip

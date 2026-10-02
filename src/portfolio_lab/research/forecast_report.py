@@ -39,7 +39,8 @@ GROUP_LABELS = {
 DROPPED = ("sensitivities", "size")
 #: Groups in the fit plot: each month's stocks split into this many by forecast.
 FIT_BINS = 20
-Z95 = 1.96
+#: Margins are 90% (1.645 standard errors either side).
+Z90 = 1.645
 SUMMARY = "summary.json"
 
 
@@ -99,7 +100,7 @@ def build(folder: Path, env: pl.DataFrame | None) -> dict[str, Any]:
     yearly = (
         chosen.group_by(pl.col("date").dt.year().alias("year")).agg(
             pl.col("ic").mean().alias("model"),
-            (Z95 * pl.col("ic").std() / pl.len().sqrt()).alias("margin"))
+            (Z90 * pl.col("ic").std() / pl.len().sqrt()).alias("margin"))
         .join(linear.group_by(pl.col("date").dt.year().alias("year"))
               .agg(pl.col("ic").mean().alias("linear")), on="year")
         .sort("year")
@@ -130,7 +131,7 @@ def fit_bins(forecasts: pl.DataFrame) -> list[dict[str, Any]]:
 
     Each month the stocks are split into :data:`FIT_BINS` equal groups by forecast. Per
     group, over all months: the average forecast and outcome (next-month return relative
-    to the month's average), a 95% margin on the outcome's average (from how much it varied
+    to the month's average), a 90% margin on the outcome's average (from how much it varied
     between months), and the middle half of individual stocks' outcomes.
     """
     f = forecasts.drop_nulls(["forecast", "actual"]).with_columns(
@@ -138,7 +139,7 @@ def fit_bins(forecasts: pl.DataFrame) -> list[dict[str, Any]]:
          // (pl.len().over("date") + 1)).alias("bin"))  # fmt: skip
     monthly = f.group_by("bin", "date").agg(pl.col("actual").mean().alias("m"))
     margin = monthly.group_by("bin").agg(
-        (Z95 * pl.col("m").std() / pl.len().sqrt()).alias("margin")
+        (Z90 * pl.col("m").std() / pl.len().sqrt()).alias("margin")
     )
     return (
         f.group_by("bin")
