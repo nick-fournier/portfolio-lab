@@ -36,6 +36,14 @@ def test_due_on_month_ends_once_or_immediately_when_empty():
     assert due(date(2026, 9, 29), sessions, set(), holding=False)  # first run
 
 
+def test_latest_session_is_not_a_month_end_just_because_data_stops_there():
+    # Data through Thu Oct 1: October's later sessions haven't happened yet.
+    sessions = [date(2026, 9, 29), date(2026, 9, 30), date(2026, 10, 1)]
+    assert not due(date(2026, 10, 1), sessions, {date(2026, 9, 30)}, holding=False)
+    assert not due(date(2026, 10, 1), sessions, {date(2026, 9, 30)}, holding=True)
+    assert due(date(2026, 10, 30), [*sessions, date(2026, 10, 30)], {date(2026, 9, 30)}, True)
+
+
 def test_broker_refuses_anything_but_paper():
     settings = Settings(alpaca_paper_url="https://api.alpaca.markets",
                         ALPACA_API_KEY_ID="k", ALPACA_API_SECRET_KEY="s")  # fmt: skip

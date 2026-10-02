@@ -24,7 +24,7 @@ from typing import Any
 
 import polars as pl
 
-from portfolio_lab.core.calendar import rebalance_dates
+from portfolio_lab.core.calendar import next_session
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import upsert_parquet
 from portfolio_lab.research.dataview import DataView
@@ -117,10 +117,16 @@ def _float(value: Any) -> float | None:
 
 
 def due(session: date, sessions: list[date], rebalanced: set[date], holding: bool) -> bool:
-    """Rebalance on a month's last session not yet done, or right away when holding nothing."""
+    """Rebalance on a month's last session not yet done, or right away when holding nothing.
+
+    A month's last session comes from the exchange calendar, not from ``sessions``: the
+    latest session in the data is not a month end just because the month's later sessions
+    haven't happened yet.
+    """
     if session in rebalanced:
         return False
-    return session in set(rebalance_dates(sessions, "M")) or (not holding and not rebalanced)
+    month_end = next_session(session).month != session.month
+    return month_end or (not holding and not rebalanced)
 
 
 def run(
