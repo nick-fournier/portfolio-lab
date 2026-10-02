@@ -5,6 +5,15 @@
 <h1>Forecasts</h1>
 {% if s %}
 {% set h = s.headline %}
+<div class="formula">
+  <p><b>What it predicts:</b> each stock's return over the next month minus that month's average
+    return across all stocks, i.e. how much it beats or trails the typical stock.</p>
+  <math display="block"><mrow><msub><mi>r</mi><mi>i</mi></msub><mo>=</mo><msub><mi>R</mi><mi>i</mi></msub><mo>−</mo><mover><mi>R</mi><mo>‾</mo></mover></mrow></math>
+  <p class="muted">R<sub>i</sub>: the stock's total return next month (price change plus dividends,
+    in plain %). R̄: the average of R over all stocks that month. Example: the market rises 3% and
+    the stock 5%, so r = +2%. The market's own rise or fall is removed because it's the same for
+    every stock and can't help rank them. Every number on this page is in these units.</p>
+</div>
 <div class="cards">
   <div class="card"><div class="label">Ranking (IC)</div><div class="value">{{ "%.3f" | format(h.ic) }}</div></div>
   <div class="card"><div class="label">Years right</div><div class="value">{{ h.years_right }} of {{ h.years }}</div></div>
@@ -19,8 +28,7 @@
   <dt>Years right</dt><dd>Years whose average IC was above zero.</dd>
   <dt>Best vs worst tenth</dt><dd>Each month, the average return of the tenth of stocks with the
     highest forecasts minus the tenth with the lowest, compounded over a year, before costs.</dd>
-  <dt>Tested</dt><dd>Each year predicted by a model trained only on earlier years; all stocks,
-    next-month return relative to that month's average.</dd>
+  <dt>Tested</dt><dd>Each year predicted by a model trained only on earlier years; all stocks.</dd>
 </dl>
 
 {% if fit %}
@@ -43,8 +51,9 @@
 <div class="formula">
   <p><b>1. Linear model.</b> Each stock's inputs are converted to percentiles within the month
     (x), and a straight-line fit gives a first forecast:</p>
-  <p class="eq">linear forecast = b₁·x₁ + b₂·x₂ + … + bₙ·xₙ</p>
-  <p class="muted">About 25 inputs: health and profitability, momentum (with separate weights in
+  <math display="block"><mrow><msub><mover><mi>r</mi><mo>^</mo></mover><mtext>lin</mtext></msub><mo>=</mo><msub><mi>b</mi><mn>1</mn></msub><msub><mi>x</mi><mn>1</mn></msub><mo>+</mo><msub><mi>b</mi><mn>2</mn></msub><msub><mi>x</mi><mn>2</mn></msub><mo>+</mo><mo>…</mo><mo>+</mo><msub><mi>b</mi><mi>n</mi></msub><msub><mi>x</mi><mi>n</mi></msub></mrow></math>
+  <p class="muted">r: the target above (each month's most extreme 1% at either end clipped for
+    training). x: inputs as percentiles within the month. About 25 inputs: health and profitability, momentum (with separate weights in
     bear and rebound markets), year-on-year changes, valuation, industry-relative versions. The
     b's are fit across all stocks and earlier months, with a penalty that keeps them small
     (ridge regression).</p>
@@ -52,23 +61,25 @@
     stock's actual return minus its linear forecast. Gradient-boosted trees learn to predict
     that leftover from the same inputs plus the market environment, which catches thresholds
     and interactions a straight line can't.</p>
-  <p class="eq">correction = trees(inputs, market) ≈ actual − linear forecast</p>
+  <math display="block"><mrow><mi>c</mi><mo>=</mo><mtext>trees</mtext><mo>(</mo><mtext>inputs, market</mtext><mo>)</mo><mo>≈</mo><mi>r</mi><mo>−</mo><msub><mover><mi>r</mi><mo>^</mo></mover><mtext>lin</mtext></msub></mrow></math>
   <p><b>3. Blend.</b> The trees' correction is added at half strength, since part of what they
     learn is noise:</p>
-  <p class="eq">forecast = linear forecast + 0.5 × correction</p>
+  <math display="block"><mrow><mover><mi>r</mi><mo>^</mo></mover><mo>=</mo><msub><mover><mi>r</mi><mo>^</mo></mover><mtext>lin</mtext></msub><mo>+</mo><mn>0.5</mn><mo>·</mo><mi>c</mi></mrow></math>
 </div>
 
 <h2>From forecast to expected return (for the optimizer)</h2>
 <div class="formula">
   <p>The ranking is reliable but the sizes are exaggerated, so mean-variance would get expected
     returns rebuilt from the ranking with Grinold's rule:</p>
-  <p class="eq">expected extra return = IC × volatility × score</p>
-  <p class="muted">Score: the stock's forecast rank, standardized (0 for the middle stock, about
-    ±2 near the ends). IC: the ranking's measured skill (about 0.04), which shrinks everything to
-    a realistic size. Volatility: how much the stock typically moves in a month, so riskier stocks
-    get proportionally larger expected returns. Per unit of risk, every stock's expected return is
-    IC × score: it depends only on its rank. Example: score +2, 8% monthly volatility →
-    0.04 × 8% × 2 = +0.64% a month. Not used yet; this is the next step.</p>
+  <math display="block"><mrow><msub><mi>α</mi><mi>i</mi></msub><mo>=</mo><mtext>IC</mtext><mo>·</mo><msub><mi>σ</mi><mi>i</mi></msub><mo>·</mo><msub><mi>z</mi><mi>i</mi></msub></mrow></math>
+  <p class="muted">α: expected return over the average stock next month. z: the stock's forecast
+    rank, standardized (0 for the middle stock, about ±2 near the ends). IC: the ranking's measured
+    skill (about 0.04), which shrinks everything to a realistic size. σ: the stock's monthly
+    volatility, so riskier stocks get proportionally larger expected returns. Per unit of risk,
+    expected return depends only on rank:</p>
+  <math display="block"><mrow><mfrac><msub><mi>α</mi><mi>i</mi></msub><msub><mi>σ</mi><mi>i</mi></msub></mfrac><mo>=</mo><mtext>IC</mtext><mo>·</mo><msub><mi>z</mi><mi>i</mi></msub></mrow></math>
+  <p class="muted">Example: z = +2, σ = 8% a month →
+    α = 0.04 × 8% × 2 = +0.64% a month. Not used yet; this is the next step.</p>
 </div>
 
 <h2>What it uses</h2>
