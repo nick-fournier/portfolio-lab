@@ -275,6 +275,12 @@ def sources_cmd(
 @app.command("forecast-study")
 def forecast_study_cmd(
     model: Annotated[list[str] | None, typer.Option(help="Models to run (default: all).")] = None,
+    drop: Annotated[
+        list[str] | None, typer.Option(help="Input groups to leave out; repeatable.")
+    ] = None,
+    importance: Annotated[
+        bool, typer.Option(help="Also measure each input group's importance.")
+    ] = False,
 ) -> None:
     """Can next month's stock returns be forecast? Walk-forward study (research.forecasting)."""
     settings = get_settings()
@@ -285,15 +291,27 @@ def forecast_study_cmd(
     del panel
     out = settings.data_dir / "results" / "forecast_study"
     out.mkdir(parents=True, exist_ok=True)
+    tag = "".join(f"-no_{g}" for g in drop or ())
     rows = []
     for name in model or forecasting.MODELS:
-        months = forecasting.grade_months(forecasting.walk_forward(data, name))
-        write_parquet_atomic(months, out / f"{name}.parquet")
+        scores: list | None = [] if importance else None
+        forecasts = forecasting.walk_forward(data, name, tuple(drop or ()), scores)
+        months = forecasting.grade_months(forecasts)
+        write_parquet_atomic(months, out / f"{name}{tag}.parquet")
+        if scores:
+            table = pl.DataFrame(scores)
+            write_parquet_atomic(table, out / f"{name}{tag}.importance.parquet")
+            with pl.Config(tbl_rows=20, float_precision=4):
+                typer.echo(f"{name}: IC drop when each group is shuffled (mean over years)")
+                typer.echo(table.group_by("group").agg(pl.col("drop").mean(),
+                           (pl.col("drop") > 0).mean().alias("years_helped"))
+                           .sort("drop", descending=True))  # fmt: skip
         summary = forecasting.summarize(months)
         for part in ("all", "first_half", "second_half"):
-            rows.append({"model": name, "period": part, **summary[part]})
-        rows.append({"model": name, "period": "years IC > 0", "ic": summary["years_ic_positive"]})
-    with pl.Config(tbl_rows=40, tbl_cols=20, float_precision=3, tbl_width_chars=200):
+            rows.append({"model": name + tag, "period": part, **summary[part]})
+        rows.append({"model": name + tag, "period": "years IC > 0",
+                     "ic": summary["years_ic_positive"]})  # fmt: skip
+    with pl.Config(tbl_rows=60, tbl_cols=20, float_precision=3, tbl_width_chars=200):
         typer.echo(pl.DataFrame(rows))
 
 
