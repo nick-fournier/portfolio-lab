@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, date, datetime, timedelta
 
 import polars as pl
@@ -210,32 +211,30 @@ def test_context_page(client, tmp_path):
         assert expected in page, expected
 
 
-def test_models_page(client, tmp_path):
-    assert "No model results yet" in client.get("/forecasts").text
-    folder = tmp_path / "results" / "models"
+def test_forecasts_page(client, tmp_path):
+    assert "No forecasting study published yet" in client.get("/forecasts").text
+    head = {"ic": 0.04, "t": 5.5, "first_half": 0.03, "second_half": 0.05, "spread": 0.147,
+            "years": 23, "years_right": 20, "start": 2004, "end": 2026}  # fmt: skip
+    summary = {
+        "headline": head,
+        "yearly": [{"year": 2004 + k, "model": 0.04, "linear": 0.03} for k in range(23)],
+        "tried": [{"label": "Momentum alone", **head},
+                  {"label": "Trees on linear, half strength (chosen)", **head}],
+        "groups": [{"label": "Health & profitability", "drop": 0.016, "dropped": False},
+                   {"label": "Size & liquidity", "drop": -0.002, "dropped": True}],
+        "sizes": {"model": {"small": 0.05, "mid": 0.035, "large": 0.025},
+                  "linear": {"small": 0.04, "mid": 0.027, "large": 0.024}},
+        "conditions": [{"credit": "calm", "linear": 0.043, "model": 0.066}],
+        "strength": 0.5,
+    }  # fmt: skip
+    folder = tmp_path / "results" / "forecast_study"
     folder.mkdir(parents=True)
-    row = {"horizon": 21, "months": 60, "auc": 0.52, "ic": 0.04, "ic_t": 3.0, "brier": 0.25,
-           "ece": 0.02, "up_share": 0.1, "up_hit": 0.52, "down_share": 0.1, "down_hit": 0.55,
-           "up_months_ok": 0.6, "top10_hit": 0.53, "bottom10_hit": 0.56, "top10_months_ok": 0.6,
-           "worst_year_auc": 0.505}  # fmt: skip
-    rows = [
-        row | {"model": "gbm", "pool": "all"},
-        row | {"model": "gbm+cal", "pool": "all", "ece": 0.01},
-        row | {"model": "gbm", "pool": "top500"},
-    ]
-    pl.DataFrame(rows).write_parquet(folder / "summary.parquet")
-    pl.DataFrame(
-        {"model": ["gbm", "gbm"], "horizon": [21, 21], "bin": [0, 1], "predicted": [0.45, 0.55],
-         "realized": [0.47, 0.53], "n": [100, 100]}
-    ).write_parquet(folder / "calibration.parquet")  # fmt: skip
-    pl.DataFrame(
-        {"feature": ["cfo_to_assets"], "auc_drop": [0.004], "model": ["gbm"], "horizon": [21]}
-    ).write_parquet(folder / "importance.parquet")
+    (folder / "summary.json").write_text(json.dumps(summary))
     page = client.get("/forecasts").text
-    for expected in ("Next month", "All eligible stocks", "500 most liquid stocks", "0.520",
-                     "53.0%", "→ 0.010", "Does a stated probability come true?",
-                     "What the tree model relies on"):  # fmt: skip
+    for expected in ("20 of 23", "15%/yr", "2004\N{EN DASH}2026", "Health &amp; profitability",
+                     "dropped: no signal", "Credit calm", "0.066", "(chosen)"):  # fmt: skip
         assert expected in page, expected
+    assert client.get("/models", follow_redirects=False).status_code == 301
 
 
 def test_compare_page(client, tmp_path):

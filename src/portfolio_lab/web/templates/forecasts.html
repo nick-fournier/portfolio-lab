@@ -2,61 +2,58 @@
 {% block title %}Forecasts · Portfolio lab{% endblock %}
 {% block head %}<script src="/vendor/plotly.min.js?v={{ plotly_version }}" defer></script>{% endblock %}
 {% block content %}
-<h1>Return forecasts</h1>
-<p class="lede">Can a model predict which stocks beat the median next month or quarter?
-  Each combines every stock trait, trained each January on earlier years only. Research only:
-  production doesn't use them.</p>
+<h1>Forecasts</h1>
+<p class="lede">Can we predict next month's stock returns? Yes, weakly but reliably.</p>
+{% if s %}
+{% set h = s.headline %}
+<div class="cards">
+  <div class="card"><div class="label">Ranking (IC)</div><div class="value">{{ "%.3f" | format(h.ic) }}</div></div>
+  <div class="card"><div class="label">Years right</div><div class="value">{{ h.years_right }} of {{ h.years }}</div></div>
+  <div class="card"><div class="label">Best vs worst tenth</div><div class="value">{{ h.spread | pct(0) }}/yr</div></div>
+  <div class="card"><div class="label">Tested</div><div class="value">{{ h.start }}–{{ h.end }}</div></div>
+</div>
 
-{% if sections %}
-{% for s in sections %}
-<h2>{{ s.title }}</h2>
-{% for pool in s.pools %}
-<h3>{{ pool.title }}</h3>
-<div class="table-wrap wrap-head"><table>
-  <thead><tr><th>Model</th><th class="num">Top tenth beat median</th>
-    <th class="num">Bottom tenth lagged</th><th class="num">Months top tenth &gt;50%</th>
-    <th class="num">AUC</th><th class="num">IC (t)</th><th class="num">Calibration error</th>
-    <th class="num">Worst year AUC</th></tr></thead>
-  <tbody>{% for r in pool.rows %}<tr>
-    <td><a href="/signals#g-model-{{ r.model | replace('_', '-') }}">{{ r.model }}</a></td>
-    <td class="num">{{ r.top10_hit | pct }}</td><td class="num">{{ r.bottom10_hit | pct }}</td>
-    <td class="num">{{ r.top10_months_ok | pct(0) }}</td>
-    <td class="num">{{ "%.3f" | format(r.auc) }}</td>
-    <td class="num">{{ "%+.3f" | format(r.ic) }} <span class="muted">({{ "%+.1f" | format(r.ic_t) }})</span></td>
-    <td class="num">{{ "%.3f" | format(r.ece) }}{% if s.ece_cal.get(r.model) is not none %} <span class="muted">→ {{ "%.3f" | format(s.ece_cal[r.model]) }}</span>{% endif %}</td>
-    <td class="num">{{ "%.3f" | format(r.worst_year_auc) if r.worst_year_auc is not none else "–" }}</td>
-  </tr>{% endfor %}</tbody>
+<h2>How well it ranked stocks, each year</h2>
+<div id="years" class="chart"></div>
+
+<h2>What it uses</h2>
+<div class="bars">
+  {% for g in s.groups %}<div class="bar-row{% if g.dropped %} muted{% endif %}">
+    <span>{{ g.label }}</span>
+    {% if g.dropped %}<span class="small">dropped: no signal</span>{% else %}<span class="bar"><i style="width: {{ g.width | round(1) }}%"></i></span>{% endif %}
+  </div>{% endfor %}
+</div>
+
+<h2>Where it works</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th></th><th class="num">Forecaster</th><th class="num">Linear alone</th></tr></thead>
+  <tbody>
+    {% for name in ("small", "mid", "large") %}<tr><td>{{ name | capitalize }} stocks</td>
+      <td class="num">{{ "%.3f" | format(s.sizes.model[name]) }}</td><td class="num">{{ "%.3f" | format(s.sizes.linear[name]) }}</td></tr>{% endfor %}
+    {% for c in s.conditions %}<tr><td>Credit {{ c.credit }}</td>
+      <td class="num">{{ "%.3f" | format(c.model) }}</td><td class="num">{{ "%.3f" | format(c.linear) }}</td></tr>{% endfor %}
+  </tbody>
 </table></div>
-{% endfor %}
 
-{% if s.calibration %}
-<h3>Does a stated probability come true?</h3>
-<p class="muted">On the dotted line a stated 55% comes true 55% of the time.</p>
-<div id="cal-{{ s.key }}" class="chart"></div>
-{% endif %}
-{% if s.importance %}
-<h3>What the tree model relies on</h3>
-<p class="muted">Drop in ranking accuracy when an input is shuffled.</p>
-<div id="imp-{{ s.key }}" class="chart auto"></div>
-{% endif %}
-{% endfor %}
+<h2>Models tried</h2>
+<div class="table-wrap labelled"><table>
+  <thead><tr><th>Model</th><th class="num">IC</th><th class="num">First half</th><th class="num">Second half</th><th class="num">Years right</th></tr></thead>
+  <tbody>{% for t in s.tried %}<tr{% if loop.last %} class="ours"{% endif %}><td>{{ t.label }}</td>
+    <td class="num">{{ "%.3f" | format(t.ic) }}</td><td class="num">{{ "%.3f" | format(t.first_half) }}</td>
+    <td class="num">{{ "%.3f" | format(t.second_half) }}</td><td class="num">{{ t.years_right }}/{{ t.years }}</td></tr>{% endfor %}</tbody>
+</table></div>
 
-<p class="muted">AUC: chance the model ranks the later winner higher (0.5 = coin flip; 0.52 is a
-  useful monthly edge). Top / bottom tenth: how often the best-rated beat and the worst-rated
-  lagged the median. Calibration error: gap between stated and realized probabilities (arrow:
-  after calibration).</p>
-{% else %}
-<p class="muted">No model results yet (<code>plab models</code>).</p>
-{% endif %}
-
-{% if sections %}
+<p class="muted">The forecaster: a linear model on health, momentum (different in bear and rebound
+  markets), year-on-year changes and valuation, plus gradient-boosted trees trained on what it
+  gets wrong, added at half strength. Target: each stock's next-month return relative to the
+  month's average, all stocks; each year predicted from earlier years only. IC: how well the
+  ranking matched what happened (0 = chance; 0.02–0.05 is typical of real signals). The
+  ranking is reliable; predicted sizes are not (they swing year to year), so use the order,
+  not the numbers.</p>
 <script>
-  document.addEventListener("DOMContentLoaded", () => {
-    {% for s in sections %}
-    {% if s.calibration %}drawPlot("cal-{{ s.key }}", {{ s.calibration | safe }});{% endif %}
-    {% if s.importance %}drawPlot("imp-{{ s.key }}", {{ s.importance | safe }});{% endif %}
-    {% endfor %}
-  });
+  document.addEventListener("DOMContentLoaded", () => drawPlot("years", {{ chart | safe }}));
 </script>
+{% else %}
+<p class="muted">No forecasting study published yet (<code>plab forecast publish</code>).</p>
 {% endif %}
 {% endblock %}
