@@ -88,3 +88,8 @@ tr.ours td { background: #f6f8fa; }
 .formula p { margin: 0.4rem 0; }
 .formula .eq { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #f6f8fa; border: 1px solid var(--line); border-radius: 6px; padding: 0.4rem 0.7rem; overflow-x: auto; }
 .formula math[display="block"] { font-size: 1.15rem; margin: 0.6rem 0; overflow-x: auto; }
+.parts { display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; margin-bottom: 0.5rem; font-size: 0.9rem; }
+h2.part { border-top: 1px solid var(--line); padding-top: 1rem; margin-top: 2rem; }
+.inputs { margin: 0.4rem 0; padding-left: 1.2rem; columns: 2 14rem; }
+.steps { padding-left: 1.2rem; }
+.steps li { margin: 0.3rem 0; }

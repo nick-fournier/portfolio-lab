@@ -15,6 +15,7 @@ from portfolio_lab.web import series
 from portfolio_lab.web.charts import forecast_fit_figure, forecast_years_figure
 
 router = APIRouter()
+ALPHA = "\N{GREEK SMALL LETTER ALPHA}"
 
 
 def page_context(data_dir: Path) -> dict:
@@ -29,7 +30,13 @@ def page_context(data_dir: Path) -> dict:
         for g in summary["groups"]:
             g["width"] = max(0.0, g["drop"]) / top * 100
         fit = forecast_fit_figure(summary["fit"]) if summary.get("fit") else None
-        return {"s": summary, "chart": forecast_years_figure(summary["yearly"]), "fit": fit}
+        grinold = None
+        if summary.get("grinold"):
+            grinold = forecast_fit_figure(
+                summary["grinold"], f"Grinold expected return {ALPHA}, % next month"
+            )
+        return {"s": summary, "chart": forecast_years_figure(summary["yearly"]), "fit": fit,
+                "grinold": grinold}  # fmt: skip
 
     return series.cached(f"forecasts:{data_dir}", [path], build)
 

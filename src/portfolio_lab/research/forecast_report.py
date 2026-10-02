@@ -13,7 +13,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import polars as pl
+from scipy.stats import norm
 
 from portfolio_lab.research.forecasting import blend, by_size, grade_months, summarize
 
@@ -91,8 +93,50 @@ def _conditions(forecasts: pl.DataFrame, env: pl.DataFrame) -> list[dict[str, An
     return sorted(table.to_dicts(), key=lambda r: order[r["credit"]])
 
 
-def build(folder: Path, env: pl.DataFrame | None) -> dict[str, Any]:
-    """The page's summary from the study results in ``folder`` (see module docs)."""
+#: Years of earlier results needed before Grinold's rule has an IC to use.
+GRINOLD_MIN_YEARS = 3
+TRADING_DAYS_PER_MONTH = 21
+
+
+def grinold(forecasts: pl.DataFrame, volatility: pl.DataFrame) -> pl.DataFrame:
+    """Forecasts rebuilt as expected returns with Grinold's rule: alpha = IC x vol x score.
+
+    Score: the forecast's percentile within the month as a standard normal value. Vol: the
+    stock's daily volatility over the past year (``volatility``: date, symbol, volatility)
+    scaled to a month. IC: the average monthly IC of all earlier test years, so no year uses
+    its own result; the first :data:`GRINOLD_MIN_YEARS` years are dropped. Returns the
+    forecasts with ``forecast`` replaced by alpha.
+    """
+    f = forecasts.drop_nulls(["forecast", "actual"])
+    ic = grade_months(f).with_columns(pl.col("date").dt.year().alias("year"))
+    years = sorted(ic["year"].unique().to_list())
+    past = {y: float(ic.filter(pl.col("year") < y)["ic"].mean())
+            for k, y in enumerate(years) if k >= GRINOLD_MIN_YEARS}  # fmt: skip
+    f = (
+        f.join(volatility, on=["date", "symbol"], how="inner")
+        .with_columns(pl.col("date").dt.year().alias("year"))
+        .filter(pl.col("year").is_in(list(past)))
+        .with_columns(((pl.col("forecast").rank("average").over("date") - 0.5)
+                       / pl.len().over("date")).alias("_pct"))
+    )  # fmt: skip
+    score = pl.Series("_z", norm.ppf(f["_pct"].to_numpy()))
+    month_vol = pl.col("volatility") * np.sqrt(TRADING_DAYS_PER_MONTH)
+    alpha = pl.col("year").replace_strict(past) * month_vol * pl.col("_z")
+    return (
+        f.with_columns(score)
+        .with_columns(alpha.alias("forecast"))
+        .drop("_pct", "_z", "year", "volatility")
+        .drop_nulls("forecast")
+    )
+
+
+def build(
+    folder: Path, env: pl.DataFrame | None, volatility: pl.DataFrame | None = None
+) -> dict[str, Any]:
+    """The page's summary from the study results in ``folder`` (see module docs).
+
+    ``volatility`` (date, symbol, volatility from the feature panel) adds Grinold's rule.
+    """
     run, k = LOCKED
     forecasts = pl.read_parquet(folder / f"{run}.forecasts.parquet")
     chosen = grade_months(_strength(forecasts, k))
@@ -123,6 +167,9 @@ def build(folder: Path, env: pl.DataFrame | None) -> dict[str, Any]:
         "conditions": _conditions(forecasts, env) if env is not None else [],
         "strength": k,
         "fit": fit_bins(_strength(forecasts, k)),
+        "grinold": fit_bins(grinold(_strength(forecasts, k), volatility))
+        if volatility is not None
+        else [],
     }
 
 
@@ -150,9 +197,11 @@ def fit_bins(forecasts: pl.DataFrame) -> list[dict[str, Any]]:
     )  # fmt: skip
 
 
-def publish(source: Path, dest: Path, env: pl.DataFrame | None) -> Path:
+def publish(
+    source: Path, dest: Path, env: pl.DataFrame | None, volatility: pl.DataFrame | None = None
+) -> Path:
     """Write :func:`build`'s summary to ``dest`` (a forecast_study results folder)."""
     dest.mkdir(parents=True, exist_ok=True)
     path = dest / SUMMARY
-    path.write_text(json.dumps(build(source, env), indent=1, default=str))
+    path.write_text(json.dumps(build(source, env, volatility), indent=1, default=str))
     return path

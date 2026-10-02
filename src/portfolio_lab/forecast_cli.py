@@ -134,4 +134,5 @@ def forecast_publish_cmd(
     env = pl.read_parquet(paths.environment) if paths.environment.exists() else None
     source = settings.data_dir / "results" / "forecast_study"
     target = DataPaths(dest).root / "results" / "forecast_study"
-    typer.echo(forecast_report.publish(source, target, env))
+    volatility = pl.read_parquet(paths.features, columns=["date", "symbol", "volatility"])
+    typer.echo(forecast_report.publish(source, target, env, volatility))

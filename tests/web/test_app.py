@@ -226,14 +226,19 @@ def test_forecasts_page(client, tmp_path):
                   "linear": {"small": 0.04, "mid": 0.027, "large": 0.024}},
         "conditions": [{"credit": "calm", "linear": 0.043, "model": 0.066}],
         "strength": 0.5,
+        "fit": [{"bin": k, "forecast": k / 1000, "actual": k / 2500, "q25": -0.05, "q75": 0.05,
+                 "margin": 0.002} for k in range(-10, 10)],
     }  # fmt: skip
+    summary["grinold"] = summary["fit"]
     folder = tmp_path / "results" / "forecast_study"
     folder.mkdir(parents=True)
     (folder / "summary.json").write_text(json.dumps(summary))
     page = client.get("/forecasts").text
     for expected in ("20 of 23", "Spearman", "15%/yr", "2004\N{EN DASH}2026",
                      "Health &amp; profitability",
-                     "dropped: no signal", "Credit calm", "0.066", "(chosen)"):  # fmt: skip
+                     "dropped: no signal", "Credit calm", "0.066", "(chosen)",
+                     "1. How it works", "2. Results", "3. From forecast to expected return",
+                     'id="grinold"'):  # fmt: skip
         assert expected in page, expected
     assert client.get("/models", follow_redirects=False).status_code == 301
 

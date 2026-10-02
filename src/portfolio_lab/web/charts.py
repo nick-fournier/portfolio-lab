@@ -270,7 +270,9 @@ def forecast_years_figure(yearly: list[dict]) -> str:
     return json.dumps({"data": traces, "layout": layout})
 
 
-def forecast_fit_figure(bins: list[dict]) -> str:
+def forecast_fit_figure(
+    bins: list[dict], x_title: str = "Forecast, % next month (vs average stock)"
+) -> str:
     """Forecast vs outcome by forecast group, in % per month.
 
     Group averages with 90% margins, the middle half of individual stocks as a band, and
@@ -298,7 +300,7 @@ def forecast_fit_figure(bins: list[dict]) -> str:
     ]  # fmt: skip
     layout = {**_LAYOUT, "hovermode": "closest", "template": _white_template(),
               "margin": {**_LAYOUT["margin"], "l": 55, "b": 45},
-              "xaxis": {"title": {"text": "Forecast, % next month (vs average stock)"},
+              "xaxis": {"title": {"text": x_title},
                         "range": [lo, hi], "dtick": 1, "zeroline": True, "constrain": "domain"},
               "yaxis": {"title": {"text": "Outcome, % next month"}, "range": [lo, hi],
                         "dtick": 1, "zeroline": True, "scaleanchor": "x", "scaleratio": 1,
