@@ -4,12 +4,12 @@
 {% block content %}
 <h1>Signals</h1>
 <p class="lede">How well each stock trait ranked production's candidates (the 500 most traded
-  stocks) by the return that followed.</p>
+  stocks) by the next month's return.</p>
 
 {% if sections %}
-<div class="toggle" role="tablist">
+{% if sections | length > 1 %}<div class="toggle" role="tablist">
   {% for s in sections %}<button type="button" data-key="{{ s.key }}" {% if loop.first %}class="on"{% endif %}>{{ s.title }}</button>{% endfor %}
-</div>
+</div>{% endif %}
 <p class="muted">{{ period[0] }} → {{ period[1] }}, companies that later failed included.</p>
 
 {% for s in sections %}

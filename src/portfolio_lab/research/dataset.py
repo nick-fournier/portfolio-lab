@@ -16,7 +16,7 @@ from portfolio_lab.research.features import FEATURES
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.scoreboard import forward_returns
 
-HORIZONS = (21, 63)
+HORIZONS = (21,)
 #: Per-stock model inputs.
 STOCK_COLUMNS = (*FEATURES, *STOCK_FEATURES)
 #: Liquidity pool reported separately (the 500 most liquid stocks each month).
