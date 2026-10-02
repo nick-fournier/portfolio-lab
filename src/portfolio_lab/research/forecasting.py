@@ -24,6 +24,13 @@ next month ended before the year began.
   bear and rebound), all as known at the month end.
 - ``pls``: partial least squares on every stock input: inputs compressed to the few
   combinations that best predict returns (a check on dropping inputs instead).
+- ``trees_rank``: ``trees_regime`` trained on each stock's rank within its month instead
+  of its return, so volatile stocks' big moves don't dominate the fit.
+- ``linear_trees``: ``linear_regime`` first, then ``trees_regime`` trained on what the
+  linear model got wrong (its residuals); the forecast is their sum. The trees' share is
+  saved as ``correction``, so a half-strength version can be graded too.
+- ``linear_trees_rank``: the same on rank targets, with each tree split choosing among a
+  random half of the inputs (so price inputs can't take every split).
 
 :func:`importance` measures how much each input group matters: the drop in a fitted
 model's out-of-sample IC when that group's values are shuffled between stocks.
@@ -52,7 +59,12 @@ H = 21
 TARGET = "target"
 #: First test year: earlier years are training only (five years of history).
 FIRST_TEST_YEAR = 2004
-MODELS = ("momentum", "linear", "trees", "linear_regime", "trees_regime", "pls")
+MODELS = ("momentum", "linear", "trees", "linear_regime", "trees_regime", "pls", "trees_rank",
+          "linear_trees", "linear_trees_rank")  # fmt: skip
+#: Models fit on each stock's within-month rank rather than its return.
+RANK_MODELS = ("trees_rank", "linear_trees_rank")
+#: Models built as a linear model plus trees on its residuals.
+STACKED = ("linear_trees", "linear_trees_rank")
 #: Input groups, for importance and for dropping (``mkt`` and ``env`` are market-wide).
 GROUPS: dict[str, tuple[str, ...]] = {
     "valuation": ("earnings_yield", "book_to_market", "cf_yield", "fcf_yield", "sales_yield",
@@ -101,7 +113,8 @@ def load(panel: Panel, features: pl.DataFrame, env: pl.DataFrame | None) -> pl.D
     fwd = pl.col(f"fwd_{H}")
     rel = fwd - fwd.mean().over("date")
     lo, hi = (rel.quantile(q).over("date") for q in CLIP)
-    return data.with_columns(rel.alias("actual"), rel.clip(lo, hi).alias(TARGET))
+    rank = (fwd.rank("average").over("date") / fwd.count().over("date") - 0.5).alias("target_rank")
+    return data.with_columns(rel.alias("actual"), rel.clip(lo, hi).alias(TARGET), rank)
 
 
 def _inputs(data: pl.DataFrame, model: str, drop: tuple[str, ...] = ()) -> list[str]:
@@ -115,8 +128,14 @@ def _inputs(data: pl.DataFrame, model: str, drop: tuple[str, ...] = ()) -> list[
     return {
         "trees": stock + env,
         "trees_regime": stock + env + market,
+        "trees_rank": stock + env + market,
         "linear_regime": stock + crossed,
     }.get(model, stock)
+
+
+def _usable(data: pl.DataFrame, train: pl.DataFrame, model: str, drop: tuple[str, ...]) -> list:
+    """The model's inputs that have any values in ``train`` (empty ones break tree binning)."""
+    return [c for c in _inputs(data, model, drop) if train[c].drop_nans().drop_nulls().len()]
 
 
 def _fit(model: str, x: np.ndarray, y: np.ndarray):
@@ -125,7 +144,8 @@ def _fit(model: str, x: np.ndarray, y: np.ndarray):
         return Ridge(alpha=10.0).fit(np.nan_to_num(x), y)
     if model == "pls":
         return PLSRegression(n_components=5, scale=False).fit(np.nan_to_num(x), y)
-    return HistGradientBoostingRegressor(**TREE_PARAMS).fit(x, y)
+    params = TREE_PARAMS | ({"max_features": 0.5} if model == "trees_sampled" else {})
+    return HistGradientBoostingRegressor(**params).fit(x, y)
 
 
 def _predict(fit, model: str, x: np.ndarray) -> np.ndarray:
@@ -167,18 +187,30 @@ def walk_forward(
         else:
             first = test["session"].min()
             train = labeled.filter(pl.col(f"label_end_{H}") < first)
-            # Inputs with no values yet (a series that starts later) break the tree binning.
-            columns = [
-                c for c in _inputs(data, model, drop) if train[c].drop_nans().drop_nulls().len()
-            ]
-            x_test = test.select(columns).to_numpy()
-            fit = _fit(model, train.select(columns).to_numpy(), train[TARGET].to_numpy())
-            forecast = _predict(fit, model, x_test)
-            if importance is not None:
-                importance += _importance(fit, model, test, columns, x_test, forecast, rng)
+            target = train["target_rank" if model in RANK_MODELS else TARGET].to_numpy()
+
+            if model in STACKED:
+                lin_cols = _usable(data, train, "linear_regime", drop)
+                tree_cols = _usable(data, train, "trees_regime", drop)
+                lin = _fit("linear", train.select(lin_cols).to_numpy(), target)
+                base = _predict(lin, "linear", train.select(lin_cols).to_numpy())
+                kind = "trees_sampled" if model == "linear_trees_rank" else "trees"
+                trees = _fit(kind, train.select(tree_cols).to_numpy(), target - base)
+                correction = _predict(trees, "trees", test.select(tree_cols).to_numpy())
+                forecast = _predict(lin, "linear", test.select(lin_cols).to_numpy()) + correction
+            else:
+                columns = _usable(data, train, model, drop)
+                x_test = test.select(columns).to_numpy()
+                fit = _fit(model, train.select(columns).to_numpy(), target)
+                forecast = _predict(fit, model, x_test)
+                if importance is not None:
+                    importance += _importance(fit, model, test, columns, x_test, forecast, rng)
         log.info("forecast %s %d: %d stock-months", model, year, test.height)
-        out.append(test.select("date", "symbol", "actual", pl.col("log_size").alias("size"))
-                   .with_columns(pl.Series("forecast", forecast, dtype=pl.Float64)))  # fmt: skip
+        rows = test.select("date", "symbol", "actual", pl.col("log_size").alias("size"))
+        rows = rows.with_columns(pl.Series("forecast", forecast, dtype=pl.Float64))
+        if model in STACKED:
+            rows = rows.with_columns(pl.Series("correction", correction, dtype=pl.Float64))
+        out.append(rows)
     return pl.concat(out)
 
 

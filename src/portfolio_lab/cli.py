@@ -299,6 +299,11 @@ def forecast_study_cmd(
         months = forecasting.grade_months(forecasts)
         write_parquet_atomic(months, out / f"{name}{tag}.parquet")
         write_parquet_atomic(forecasts, out / f"{name}{tag}.forecasts.parquet")
+        variants = [(name + tag, months)]
+        if "correction" in forecasts.columns:  # stacked: also grade the half-strength version
+            half = forecasts.with_columns(pl.col("forecast") - 0.5 * pl.col("correction"))
+            write_parquet_atomic(half, out / f"{name}_half{tag}.forecasts.parquet")
+            variants.append((f"{name}_half{tag}", forecasting.grade_months(half)))
         if scores:
             table = pl.DataFrame(scores)
             write_parquet_atomic(table, out / f"{name}{tag}.importance.parquet")
@@ -307,11 +312,12 @@ def forecast_study_cmd(
                 typer.echo(table.group_by("group").agg(pl.col("drop").mean(),
                            (pl.col("drop") > 0).mean().alias("years_helped"))
                            .sort("drop", descending=True))  # fmt: skip
-        summary = forecasting.summarize(months)
-        for part in ("all", "first_half", "second_half"):
-            rows.append({"model": name + tag, "period": part, **summary[part]})
-        rows.append({"model": name + tag, "period": "years IC > 0",
-                     "ic": summary["years_ic_positive"]})  # fmt: skip
+        for label, graded in variants:
+            summary = forecasting.summarize(graded)
+            for part in ("all", "first_half", "second_half"):
+                rows.append({"model": label, "period": part, **summary[part]})
+            rows.append({"model": label, "period": "years IC > 0",
+                         "ic": summary["years_ic_positive"]})  # fmt: skip
     with pl.Config(tbl_rows=60, tbl_cols=20, float_precision=3, tbl_width_chars=200):
         typer.echo(pl.DataFrame(rows))
 
