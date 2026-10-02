@@ -292,3 +292,52 @@ def by_size(forecasts: pl.DataFrame) -> dict[str, dict]:
         group = forecasts.filter((pl.col("size") >= lo) & (pl.col("size") < hi))
         out[name] = summarize(grade_months(group))
     return out
+
+
+#: Weights on the first model tried by :func:`blend` (the rest goes to the second).
+BLEND_WEIGHTS = tuple(k / 10 for k in range(11))
+
+
+def _rank_within_months(forecasts: pl.DataFrame) -> pl.DataFrame:
+    """Forecasts as percentiles within each month, centered on 0 (comparable across models)."""
+    f = pl.col("forecast")
+    return forecasts.with_columns((f.rank("average").over("date") / f.count().over("date") - 0.5)
+                                  .alias("forecast"))  # fmt: skip
+
+
+def blend(first: pl.DataFrame, second: pl.DataFrame, weight: float | None = 0.5) -> pl.DataFrame:
+    """Average two models' forecasts as within-month ranks.
+
+    Args:
+        first: Forecasts of one model (date, symbol, forecast, actual, size).
+        second: Forecasts of another, for the same stock-months.
+        weight: Weight on ``first``. ``None`` learns it walk-forward: each year uses the
+            weight from :data:`BLEND_WEIGHTS` whose blend had the best average monthly IC
+            over all earlier years (from :data:`CALIBRATION_YEARS` on; the first years
+            use 0.5). The weight used is returned as ``weight``.
+    """
+    a = _rank_within_months(first)
+    b = _rank_within_months(second).select("date", "symbol", pl.col("forecast").alias("_b"))
+    both = a.join(b, on=["date", "symbol"]).with_columns(pl.col("date").dt.year().alias("_y"))
+    if weight is not None:
+        mixed = pl.col("forecast") * weight + pl.col("_b") * (1 - weight)
+        return both.with_columns(mixed.alias("forecast"), pl.lit(weight).alias("weight")).drop(
+            "_b", "_y"
+        )
+    ics = {
+        w: grade_months(both.with_columns(
+            (pl.col("forecast") * w + pl.col("_b") * (1 - w)).alias("forecast")))
+        .with_columns(pl.col("date").dt.year().alias("_y")).select("_y", "ic")
+        for w in BLEND_WEIGHTS
+    }  # fmt: skip
+    years = sorted(both["_y"].unique().to_list())
+    out = []
+    for k, year in enumerate(years):
+        w = 0.5
+        if k >= CALIBRATION_YEARS:
+            w = max(BLEND_WEIGHTS,
+                    key=lambda v: ics[v].filter(pl.col("_y") < year)["ic"].mean())  # fmt: skip
+        mixed = pl.col("forecast") * w + pl.col("_b") * (1 - w)
+        out.append(both.filter(pl.col("_y") == year).with_columns(
+            mixed.alias("forecast"), pl.lit(w).alias("weight")))  # fmt: skip
+    return pl.concat(out).drop("_b", "_y")

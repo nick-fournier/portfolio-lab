@@ -340,6 +340,37 @@ def forecast_review_cmd(
         typer.echo(pl.DataFrame(rows))
 
 
+@app.command("forecast-blend")
+def forecast_blend_cmd(
+    first: Annotated[str, typer.Argument(help="Saved study run (weight goes on this one).")],
+    second: Annotated[str, typer.Argument(help="Another saved study run.")],
+) -> None:
+    """Blend two saved forecast-study runs: 50/50 ranks vs a walk-forward-learned weight."""
+    folder = get_settings().data_dir / "results" / "forecast_study"
+    a, b = (pl.read_parquet(folder / f"{n}.forecasts.parquet") for n in (first, second))
+    rows = []
+    for label, frame in (
+        (first, forecasting.blend(a, b, 1.0)),
+        (second, forecasting.blend(a, b, 0.0)),
+        ("50/50", forecasting.blend(a, b, 0.5)),
+        ("learned weight", forecasting.blend(a, b, None)),
+    ):
+        months = forecasting.grade_months(frame)
+        s = forecasting.summarize(months)
+        years = months.group_by(pl.col("date").dt.year().alias("y")).agg(pl.col("ic").mean())
+        crisis = {f"ic_{y}": years.filter(pl.col("y") == y)["ic"].item() for y in (2009, 2020)}
+        rows.append({"forecast": label, "ic": s["all"]["ic"], "t": s["all"]["ic_t"],
+                     "first_half": s["first_half"]["ic"], "second_half": s["second_half"]["ic"],
+                     "years_right": s["years_ic_positive"], "spread_yr": s["all"]["spread_yr"],
+                     **crisis})  # fmt: skip
+        if label == "learned weight":
+            w = frame.group_by(pl.col("date").dt.year().alias("y")).agg(pl.col("weight").first())
+            typer.echo("learned weight on first, by year: "
+                       + ", ".join(f"{y}: {v:.1f}" for y, v in w.sort("y").rows()))  # fmt: skip
+    with pl.Config(tbl_rows=10, tbl_cols=12, float_precision=3, tbl_width_chars=200):
+        typer.echo(pl.DataFrame(rows))
+
+
 @app.command("scorecard")
 def scorecard_cmd(
     run: Annotated[list[str], typer.Option(help="name=run_id; repeatable.")],

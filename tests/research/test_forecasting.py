@@ -4,7 +4,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from portfolio_lab.research.forecasting import calibrate, grade_months, summarize
+from portfolio_lab.research.forecasting import blend, calibrate, grade_months, summarize
 
 
 def _forecasts(noise: float, months: int = 24, n: int = 200, seed: int = 0) -> pl.DataFrame:
@@ -43,3 +43,13 @@ def test_calibration_learns_the_scale_from_earlier_years():
     assert calibrated["date"].min().year == 2013  # three earlier years needed
     assert calibrated["factor"].mean() == pytest.approx(0.25, rel=0.15)
     assert grade_months(calibrated)["slope"].median() == pytest.approx(1.0, abs=0.2)
+
+
+def test_blend_learns_to_favor_the_better_model():
+    good = _forecasts(noise=0.02, months=72).with_columns(pl.lit(0.0).alias("size"))
+    rng = np.random.default_rng(1)
+    junk = good.with_columns(pl.Series("forecast", rng.normal(size=good.height)))
+    half = grade_months(blend(good, junk, 0.5))["ic"].mean()
+    learned = blend(good, junk, None)
+    assert learned.filter(pl.col("date").dt.year() >= 2013)["weight"].min() >= 0.9
+    assert grade_months(learned)["ic"].mean() > half
