@@ -14,7 +14,7 @@ from portfolio_lab.web.charts import calibration_figure, importance_figure
 
 router = APIRouter()
 
-HORIZONS = {21: "Next month", 63: "Next quarter"}
+HORIZONS = {21: "Next month"}  # production rebalances monthly
 POOLS = {"all": "All eligible stocks", "top500": "500 most liquid stocks"}
 #: Models shown in the calibration chart (raw and calibrated tree model, and the baseline).
 CALIBRATION_MODELS = ("gbm", "gbm+cal", "cfo_to_assets")

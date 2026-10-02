@@ -148,10 +148,11 @@ def test_signals_page(client, tmp_path):
     pl.DataFrame(rows, schema=schema, orient="row").write_parquet(path)
     page = client.get("/signals")
     assert page.status_code == 200
-    for expected in ("Next month", "Next quarter", "momentum", "+0.030", "Lower is better",
+    for expected in ("next month's return", "momentum", "+0.030", "Lower is better",
                      "Reliability", "High 20%"):  # fmt: skip
         assert expected in page.text, expected
-    assert page.text.count("<tbody>") == 2  # one table per horizon, not per pool
+    assert page.text.count("<tbody>") == 1  # next month only, production's pool only
+    assert "Next quarter" not in page.text
     # accruals: lower is better, IC negative every month, so it was right 100% of the time.
     assert ">100%<" in page.text
 

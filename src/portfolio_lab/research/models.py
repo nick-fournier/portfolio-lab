@@ -107,7 +107,7 @@ def walk_forward(
     Args:
         data: Output of :func:`prepare` (with labels from ``dataset.build_dataset``).
         spec: The model.
-        horizon: Label horizon in sessions (21 or 63).
+        horizon: Label horizon in sessions (21: next month).
         first_year: First year to predict (default: the first with enough history).
 
     Returns:
@@ -163,7 +163,7 @@ def _importance_groups(columns: list[str]) -> dict[str, list[str]]:
     return groups
 
 
-def run_all(data: pl.DataFrame, horizons: tuple[int, ...] = (21, 63)) -> dict[str, pl.DataFrame]:
+def run_all(data: pl.DataFrame, horizons: tuple[int, ...] = (21,)) -> dict[str, pl.DataFrame]:
     """Walk-forward every model at every horizon and evaluate it.
 
     Args:

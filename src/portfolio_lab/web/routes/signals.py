@@ -17,7 +17,7 @@ router = APIRouter()
 #: The pool shown: production's candidates.
 POOL = "top500"
 #: Horizons in display order, with their toggle labels.
-HORIZON_TITLES = {21: "Next month", 63: "Next quarter", 5: "Next week", 1: "Next day"}
+HORIZON_TITLES = {21: "Next month"}  # production rebalances monthly
 #: Signals drawn on the chart at first: the most reliable each way (the rest are in the legend).
 CHART_SHOWN = 6
 

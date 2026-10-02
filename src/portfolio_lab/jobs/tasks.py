@@ -87,8 +87,9 @@ SCOREBOARD_SIGNALS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("low_vol", {}),
     ("fscore", {}),
     # Every feature of the monthly panel, predicting the next month and the next quarter.
-    *(("feature", {"column": c, "horizon": h}) for h in (21, 63) for c in FEATURES),
-    *(("feature", {"column": c, "horizon": h}) for h in (21, 63) for c in STOCK_FEATURES),
+    # Next month only: production rebalances monthly, so that is the horizon that matters.
+    *(("feature", {"column": c}) for c in FEATURES),
+    *(("feature", {"column": c}) for c in STOCK_FEATURES),
 )
 #: Worker processes for model fits: orange's four fast A76 cores (more workers land on the
 #: slow A55 cores and measured slower).
