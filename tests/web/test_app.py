@@ -231,7 +231,8 @@ def test_forecasts_page(client, tmp_path):
     folder.mkdir(parents=True)
     (folder / "summary.json").write_text(json.dumps(summary))
     page = client.get("/forecasts").text
-    for expected in ("20 of 23", "15%/yr", "2004\N{EN DASH}2026", "Health &amp; profitability",
+    for expected in ("20 of 23", "Spearman", "15%/yr", "2004\N{EN DASH}2026",
+                     "Health &amp; profitability",
                      "dropped: no signal", "Credit calm", "0.066", "(chosen)"):  # fmt: skip
         assert expected in page, expected
     assert client.get("/models", follow_redirects=False).status_code == 301

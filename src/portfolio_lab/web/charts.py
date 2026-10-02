@@ -258,10 +258,42 @@ def forecast_years_figure(yearly: list[dict]) -> str:
     years = [r["year"] for r in yearly]
     traces = [
         {"type": "bar", "name": "Forecaster", "x": years,
-         "y": [round(r["model"], 4) for r in yearly], "marker": {"color": "#1f77b4"}},
+         "y": [round(r["model"], 4) for r in yearly], "marker": {"color": "#1f77b4"},
+         "error_y": {"type": "data", "array": [round(r.get("margin") or 0, 4) for r in yearly],
+                     "color": "#57606a", "thickness": 1}},
         {"type": "scatter", "mode": "lines+markers", "name": "Linear alone", "x": years,
          "y": [round(r["linear"], 4) for r in yearly], "line": _REFERENCE},
     ]  # fmt: skip
-    layout = {**_LAYOUT, "hovermode": "x", "yaxis": {"tickformat": ".2f", "zeroline": True},
-              "template": _white_template()}  # fmt: skip
+    yaxis = {"tickformat": ".2f", "zeroline": True, "title": {"text": "Ranking (IC)"}}
+    layout = {**_LAYOUT, "hovermode": "x", "yaxis": yaxis, "template": _white_template(),
+              "margin": {**_LAYOUT["margin"], "l": 55}}  # fmt: skip
+    return json.dumps({"data": traces, "layout": layout})
+
+
+def forecast_fit_figure(bins: list[dict]) -> str:
+    """Forecast vs outcome by forecast group, in % per month.
+
+    Group averages with 95% margins, the middle half of individual stocks as a band, and
+    the line where forecast and outcome would be equal.
+    """
+    x = [round(b["forecast"] * 100, 3) for b in bins]
+    pct = lambda k: [round(b[k] * 100, 3) for b in bins]  # noqa: E731
+    lo, hi = min(x), max(x)
+    traces = [  # dots first: the band traces must stay consecutive for the fill
+        {"type": "scatter", "mode": "markers", "x": x, "y": pct("actual"),
+         "marker": {"color": "#1f77b4", "size": 7}, "name": "Group average",
+         "error_y": {"type": "data", "array": pct("margin"), "thickness": 1},
+         "hovertemplate": "forecast %{x:.2f}%<br>outcome %{y:.2f}%<extra></extra>"},
+        {"type": "scatter", "mode": "lines", "x": x, "y": pct("q75"), "line": {"width": 0},
+         "hoverinfo": "skip", "showlegend": False},
+        {"type": "scatter", "mode": "lines", "x": x, "y": pct("q25"), "line": {"width": 0},
+         "fill": "tonexty", "fillcolor": "rgba(31,119,180,0.15)",
+         "name": "Middle half of stocks", "hoverinfo": "skip"},
+        {"type": "scatter", "mode": "lines", "x": [lo, hi], "y": [lo, hi],
+         "line": {"color": "#6e7781", "dash": "dot", "width": 1.2}, "name": "Forecast = outcome"},
+    ]  # fmt: skip
+    layout = {**_LAYOUT, "hovermode": "closest", "template": _white_template(),
+              "margin": {**_LAYOUT["margin"], "l": 55, "b": 45},
+              "xaxis": {"title": {"text": "Forecast, % next month (vs average stock)"}},
+              "yaxis": {"title": {"text": "Outcome, % next month"}}}  # fmt: skip
     return json.dumps({"data": traces, "layout": layout})

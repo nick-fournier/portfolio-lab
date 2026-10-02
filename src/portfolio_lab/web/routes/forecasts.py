@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from portfolio_lab.research.forecast_report import SUMMARY
 from portfolio_lab.web import series
-from portfolio_lab.web.charts import forecast_years_figure
+from portfolio_lab.web.charts import forecast_fit_figure, forecast_years_figure
 
 router = APIRouter()
 
@@ -28,7 +28,8 @@ def page_context(data_dir: Path) -> dict:
         top = max((g["drop"] for g in summary["groups"]), default=1.0) or 1.0
         for g in summary["groups"]:
             g["width"] = max(0.0, g["drop"]) / top * 100
-        return {"s": summary, "chart": forecast_years_figure(summary["yearly"])}
+        fit = forecast_fit_figure(summary["fit"]) if summary.get("fit") else None
+        return {"s": summary, "chart": forecast_years_figure(summary["yearly"]), "fit": fit}
 
     return series.cached(f"forecasts:{data_dir}", [path], build)
 

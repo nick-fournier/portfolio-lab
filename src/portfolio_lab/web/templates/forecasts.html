@@ -3,7 +3,6 @@
 {% block head %}<script src="/vendor/plotly.min.js?v={{ plotly_version }}" defer></script>{% endblock %}
 {% block content %}
 <h1>Forecasts</h1>
-<p class="lede">Can we predict next month's stock returns? Yes, weakly but reliably.</p>
 {% if s %}
 {% set h = s.headline %}
 <div class="cards">
@@ -12,9 +11,32 @@
   <div class="card"><div class="label">Best vs worst tenth</div><div class="value">{{ h.spread | pct(0) }}/yr</div></div>
   <div class="card"><div class="label">Tested</div><div class="value">{{ h.start }}–{{ h.end }}</div></div>
 </div>
+<dl class="metrics">
+  <dt>Ranking (IC)</dt><dd>Each month, rank all stocks by forecast and again by their actual
+    return that month, then take the correlation of the two rankings (Spearman): +1 = same
+    order, 0 = no relation, −1 = reversed. Averaged over months. Real stock signals typically
+    score 0.02–0.05.</dd>
+  <dt>Years right</dt><dd>Years whose average IC was above zero.</dd>
+  <dt>Best vs worst tenth</dt><dd>Each month, the average return of the tenth of stocks with the
+    highest forecasts minus the tenth with the lowest, compounded over a year, before costs.</dd>
+  <dt>Tested</dt><dd>Each year predicted by a model trained only on earlier years; all stocks,
+    next-month return relative to that month's average.</dd>
+</dl>
+
+{% if fit %}
+<h2>Forecast vs what happened</h2>
+<div id="fit" class="chart tall"></div>
+<p class="muted">Each month the stocks are split into 20 groups by forecast. Dots: each
+  group's average outcome, with a 95% margin. Band: the middle half of individual stocks in
+  that group. Dotted line: forecast = outcome. Dots rising left to right means the order is
+  right; dots flatter than the line means the forecasts overstate the differences; the wide
+  band is the noise in single stocks.</p>
+{% endif %}
 
 <h2>How well it ranked stocks, each year</h2>
 <div id="years" class="chart"></div>
+<p class="muted">Each year's average ranking score (IC) with its 95% margin; a margin
+  crossing zero means that year alone can't be told from chance.</p>
 
 <h2>What it uses</h2>
 <div class="bars">
@@ -45,13 +67,14 @@
 
 <p class="muted">The forecaster: a linear model on health, momentum (different in bear and rebound
   markets), year-on-year changes and valuation, plus gradient-boosted trees trained on what it
-  gets wrong, added at half strength. Target: each stock's next-month return relative to the
-  month's average, all stocks; each year predicted from earlier years only. IC: how well the
-  ranking matched what happened (0 = chance; 0.02–0.05 is typical of real signals). The
-  ranking is reliable; predicted sizes are not (they swing year to year), so use the order,
-  not the numbers.</p>
+  gets wrong, added at half strength. "What it uses": how much the ranking drops when a
+  group's values are shuffled between stocks. The ranking is reliable; predicted sizes are not
+  (they swing year to year), so use the order, not the numbers.</p>
 <script>
-  document.addEventListener("DOMContentLoaded", () => drawPlot("years", {{ chart | safe }}));
+  document.addEventListener("DOMContentLoaded", () => {
+    drawPlot("years", {{ chart | safe }});
+    {% if fit %}drawPlot("fit", {{ fit | safe }});{% endif %}
+  });
 </script>
 {% else %}
 <p class="muted">No forecasting study published yet (<code>plab forecast publish</code>).</p>

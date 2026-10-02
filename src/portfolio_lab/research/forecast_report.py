@@ -37,6 +37,9 @@ GROUP_LABELS = {
     "sensitivities": "Macro sensitivities", "size": "Size & liquidity",
 }  # fmt: skip
 DROPPED = ("sensitivities", "size")
+#: Groups in the fit plot: each month's stocks split into this many by forecast.
+FIT_BINS = 20
+Z95 = 1.96
 SUMMARY = "summary.json"
 
 
@@ -94,10 +97,11 @@ def build(folder: Path, env: pl.DataFrame | None) -> dict[str, Any]:
     chosen = grade_months(_strength(forecasts, k))
     linear = grade_months(_strength(forecasts, 0.0))
     yearly = (
-        chosen.group_by(pl.col("date").dt.year().alias("year")).agg(pl.col("ic").alias("model"))
+        chosen.group_by(pl.col("date").dt.year().alias("year")).agg(
+            pl.col("ic").mean().alias("model"),
+            (Z95 * pl.col("ic").std() / pl.len().sqrt()).alias("margin"))
         .join(linear.group_by(pl.col("date").dt.year().alias("year"))
-              .agg(pl.col("ic").alias("linear")), on="year")
-        .with_columns(pl.col("model").list.mean(), pl.col("linear").list.mean())
+              .agg(pl.col("ic").mean().alias("linear")), on="year")
         .sort("year")
     )  # fmt: skip
     importance = pl.read_parquet(folder / "linear_regime.importance.parquet")
@@ -117,7 +121,32 @@ def build(folder: Path, env: pl.DataFrame | None) -> dict[str, Any]:
         "sizes": sizes,
         "conditions": _conditions(forecasts, env) if env is not None else [],
         "strength": k,
+        "fit": fit_bins(_strength(forecasts, k)),
     }
+
+
+def fit_bins(forecasts: pl.DataFrame) -> list[dict[str, Any]]:
+    """Forecast against outcome by forecast group (see the Forecasts page's fit plot).
+
+    Each month the stocks are split into :data:`FIT_BINS` equal groups by forecast. Per
+    group, over all months: the average forecast and outcome (next-month return relative
+    to the month's average), a 95% margin on the outcome's average (from how much it varied
+    between months), and the middle half of individual stocks' outcomes.
+    """
+    f = forecasts.drop_nulls(["forecast", "actual"]).with_columns(
+        (pl.col("forecast").rank("ordinal").over("date") * FIT_BINS
+         // (pl.len().over("date") + 1)).alias("bin"))  # fmt: skip
+    monthly = f.group_by("bin", "date").agg(pl.col("actual").mean().alias("m"))
+    margin = monthly.group_by("bin").agg(
+        (Z95 * pl.col("m").std() / pl.len().sqrt()).alias("margin")
+    )
+    return (
+        f.group_by("bin")
+        .agg(pl.col("forecast").mean(), pl.col("actual").mean(),
+             pl.col("actual").quantile(0.25).alias("q25"),
+             pl.col("actual").quantile(0.75).alias("q75"))
+        .join(margin, on="bin").sort("bin").to_dicts()
+    )  # fmt: skip
 
 
 def publish(source: Path, dest: Path, env: pl.DataFrame | None) -> Path:
