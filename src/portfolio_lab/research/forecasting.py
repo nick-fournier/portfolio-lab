@@ -153,7 +153,8 @@ def walk_forward(
             appended to it (year, group, drop).
 
     Returns:
-        date, symbol, forecast, actual (next-month return relative to the month's mean).
+        date, symbol, forecast, actual (next-month return relative to the month's mean) and
+        size (market value's percentile that month, centered on 0).
     """
     out = []
     rng = np.random.default_rng(0)
@@ -176,8 +177,8 @@ def walk_forward(
             if importance is not None:
                 importance += _importance(fit, model, test, columns, x_test, forecast, rng)
         log.info("forecast %s %d: %d stock-months", model, year, test.height)
-        out.append(test.select("date", "symbol", "actual").with_columns(
-            pl.Series("forecast", forecast, dtype=pl.Float64)))  # fmt: skip
+        out.append(test.select("date", "symbol", "actual", pl.col("log_size").alias("size"))
+                   .with_columns(pl.Series("forecast", forecast, dtype=pl.Float64)))  # fmt: skip
     return pl.concat(out)
 
 
@@ -250,3 +251,44 @@ def summarize(months: pl.DataFrame, split: date = date(2015, 1, 1)) -> dict:
         .select((pl.col("ic") > 0).mean())
         .item(),
     }
+
+
+#: Years of earlier out-of-sample forecasts needed before calibrating.
+CALIBRATION_YEARS = 3
+#: Size groups by market-value percentile (centered on 0), smallest first.
+SIZE_GROUPS = {"small": (-0.5, -1 / 6), "mid": (-1 / 6, 1 / 6), "large": (1 / 6, 0.5)}
+
+
+def calibrate(forecasts: pl.DataFrame) -> pl.DataFrame:
+    """Rescale each year's forecasts by the size factor measured on earlier years only.
+
+    The factor is the slope of (clipped, demeaned) outcomes on demeaned forecasts over all
+    earlier test years; years with fewer than :data:`CALIBRATION_YEARS` before them are
+    dropped. Returns the forecasts with ``forecast`` rescaled and the ``factor`` used.
+    """
+    frame = forecasts.drop_nulls(["forecast", "actual"]).with_columns(
+        (pl.col("forecast") - pl.col("forecast").mean().over("date")).alias("_f"),
+        pl.col("actual").clip(pl.col("actual").quantile(CLIP[0]).over("date"),
+                              pl.col("actual").quantile(CLIP[1]).over("date")).alias("_a"),
+        pl.col("date").dt.year().alias("_y"),
+    ).with_columns((pl.col("_a") - pl.col("_a").mean().over("date")).alias("_a"))  # fmt: skip
+    out = []
+    years = sorted(frame["_y"].unique().to_list())
+    for k, year in enumerate(years):
+        if k < CALIBRATION_YEARS:
+            continue
+        past = frame.filter(pl.col("_y") < year)
+        factor = float((past["_f"] * past["_a"]).sum() / (past["_f"] ** 2).sum())
+        scaled = (pl.col("forecast") * factor).alias("forecast")
+        out.append(frame.filter(pl.col("_y") == year).with_columns(
+            scaled, pl.lit(factor).alias("factor")))  # fmt: skip
+    return pl.concat(out).drop("_f", "_a", "_y")
+
+
+def by_size(forecasts: pl.DataFrame) -> dict[str, dict]:
+    """:func:`summarize` of the forecasts graded within each of :data:`SIZE_GROUPS`."""
+    out = {}
+    for name, (lo, hi) in SIZE_GROUPS.items():
+        group = forecasts.filter((pl.col("size") >= lo) & (pl.col("size") < hi))
+        out[name] = summarize(grade_months(group))
+    return out

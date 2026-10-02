@@ -4,7 +4,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from portfolio_lab.research.forecasting import grade_months, summarize
+from portfolio_lab.research.forecasting import calibrate, grade_months, summarize
 
 
 def _forecasts(noise: float, months: int = 24, n: int = 200, seed: int = 0) -> pl.DataFrame:
@@ -33,3 +33,13 @@ def test_noisy_forecasts_have_realistic_slope_and_low_r2():
     summary = summarize(months, split=date(2011, 1, 1))
     assert summary["all"]["months"] == 24 and summary["first_half"]["months"] == 12
     assert summary["all"]["ic"] > 0
+
+
+def test_calibration_learns_the_scale_from_earlier_years():
+    overconfident = _forecasts(noise=0.02, months=72).with_columns(
+        (pl.col("forecast") * 4).alias("forecast"), pl.lit(0.0).alias("size")
+    )
+    calibrated = calibrate(overconfident)
+    assert calibrated["date"].min().year == 2013  # three earlier years needed
+    assert calibrated["factor"].mean() == pytest.approx(0.25, rel=0.15)
+    assert grade_months(calibrated)["slope"].median() == pytest.approx(1.0, abs=0.2)

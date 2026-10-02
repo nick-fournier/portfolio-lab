@@ -298,6 +298,7 @@ def forecast_study_cmd(
         forecasts = forecasting.walk_forward(data, name, tuple(drop or ()), scores)
         months = forecasting.grade_months(forecasts)
         write_parquet_atomic(months, out / f"{name}{tag}.parquet")
+        write_parquet_atomic(forecasts, out / f"{name}{tag}.forecasts.parquet")
         if scores:
             table = pl.DataFrame(scores)
             write_parquet_atomic(table, out / f"{name}{tag}.importance.parquet")
@@ -312,6 +313,30 @@ def forecast_study_cmd(
         rows.append({"model": name + tag, "period": "years IC > 0",
                      "ic": summary["years_ic_positive"]})  # fmt: skip
     with pl.Config(tbl_rows=60, tbl_cols=20, float_precision=3, tbl_width_chars=200):
+        typer.echo(pl.DataFrame(rows))
+
+
+@app.command("forecast-review")
+def forecast_review_cmd(
+    model: Annotated[str, typer.Argument(help="Saved study run, e.g. linear_regime-no_size.")],
+) -> None:
+    """Calibration and size breakdown of a saved forecast-study run's forecasts."""
+    folder = get_settings().data_dir / "results" / "forecast_study"
+    forecasts = pl.read_parquet(folder / f"{model}.forecasts.parquet")
+    calibrated = forecasting.calibrate(forecasts)
+    raw = forecasting.summarize(forecasting.grade_months(
+        forecasts.filter(pl.col("date") >= calibrated["date"].min())))  # fmt: skip
+    cal = forecasting.summarize(forecasting.grade_months(calibrated))
+    factors = calibrated.group_by(pl.col("date").dt.year().alias("year")).agg(
+        pl.col("factor").first()).sort("year")  # fmt: skip
+    first, second = cal["first_half"]["slope"], cal["second_half"]["slope"]
+    lo, hi = factors["factor"].min(), factors["factor"].max()
+    typer.echo(f"Calibration ({calibrated['date'].min()}+): slope raw {raw['all']['slope']:.2f}"
+               f" -> calibrated {cal['all']['slope']:.2f} (halves {first:.2f}, {second:.2f});"
+               f" factor {lo:.2f} to {hi:.2f}")  # fmt: skip
+    rows = [{"stocks": name, **s["all"], "years_right": s["years_ic_positive"]}
+            for name, s in forecasting.by_size(forecasts).items()]  # fmt: skip
+    with pl.Config(tbl_rows=10, tbl_cols=12, float_precision=3, tbl_width_chars=200):
         typer.echo(pl.DataFrame(rows))
 
 
