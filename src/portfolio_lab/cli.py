@@ -21,7 +21,7 @@ from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
 from portfolio_lab.data.ingest import sharadar
 from portfolio_lab.jobs import tasks, taxes
-from portfolio_lab.research import history, regimes, sources
+from portfolio_lab.research import forecasting, history, regimes, sources
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.scorecard import scorecard
 from portfolio_lab.strategies.base import create
@@ -270,6 +270,31 @@ def sources_cmd(
 
             dirs = {"live": live, "sharadar": sharadar}
             typer.echo(sources.swap_test(factory, dirs, scratch, start.date()))
+
+
+@app.command("forecast-study")
+def forecast_study_cmd(
+    model: Annotated[list[str] | None, typer.Option(help="Models to run (default: all).")] = None,
+) -> None:
+    """Can next month's stock returns be forecast? Walk-forward study (research.forecasting)."""
+    settings = get_settings()
+    paths = DataPaths(settings.data_dir)
+    panel = Panel.load(settings.data_dir)
+    env = pl.read_parquet(paths.environment) if paths.environment.exists() else None
+    data = forecasting.load(panel, pl.read_parquet(paths.features), env)
+    del panel
+    out = settings.data_dir / "results" / "forecast_study"
+    out.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for name in model or forecasting.MODELS:
+        months = forecasting.grade_months(forecasting.walk_forward(data, name))
+        write_parquet_atomic(months, out / f"{name}.parquet")
+        summary = forecasting.summarize(months)
+        for part in ("all", "first_half", "second_half"):
+            rows.append({"model": name, "period": part, **summary[part]})
+        rows.append({"model": name, "period": "years IC > 0", "ic": summary["years_ic_positive"]})
+    with pl.Config(tbl_rows=40, tbl_cols=20, float_precision=3, tbl_width_chars=200):
+        typer.echo(pl.DataFrame(rows))
 
 
 @app.command("scorecard")
