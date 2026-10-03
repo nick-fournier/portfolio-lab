@@ -45,11 +45,12 @@ def _num(value: float | None, digits: int = 2) -> str:
     return MISSING if value is None else f"{value:,.{digits}f}"
 
 
-def create_app(data_dir: Path) -> FastAPI:
+def create_app(data_dir: Path, trading_dir: Path | None = None) -> FastAPI:
     """Build the dashboard app reading from ``data_dir``.
 
     Args:
         data_dir: The data directory (mounted read-only in production).
+        trading_dir: Where trading records live (default ``data_dir/trading``).
     """
 
     @asynccontextmanager
@@ -72,6 +73,7 @@ def create_app(data_dir: Path) -> FastAPI:
     templates.env.filters["num"] = _num
     templates.env.globals["plotly_version"] = plotly.__version__
     app.state.data_dir = Path(data_dir)
+    app.state.trading_dir = Path(trading_dir) if trading_dir else None
     app.state.templates = templates
 
     app.add_middleware(GZipMiddleware, minimum_size=1000)
