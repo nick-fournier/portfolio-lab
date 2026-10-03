@@ -10,6 +10,7 @@ month as the one with the lowest squared error (each part demeaned within the mo
 against ``actual``) summed over all earlier forecast months.
 """
 
+import gc
 import logging
 import time
 from collections.abc import Callable
@@ -72,6 +73,14 @@ def run(
     market_cols = [c for c in market.columns if c.startswith(("env_", "mkt_"))]
     xt = np.hstack([raw, conditions.select(market_cols).to_numpy()]).astype(np.float32)
     del raw
+    fit_x, to_device, release = xt, np.asarray, None
+    if device == "cuda":  # keep the tree inputs on the GPU once; bin there each month
+        import cupy  # noqa: PLC0415 - GPU only; not installed on orange
+
+        fit_x, to_device = cupy.asarray(xt), cupy.asarray
+        # CuPy keeps freed blocks in its own pool, out of XGBoost's reach: hand them back
+        # after every month or the GPU fills up within a few years
+        release = cupy.get_default_memory_pool().free_all_blocks
     out = []
     for t in months:
         if t < start or t in (skip or set()):
@@ -80,14 +89,23 @@ def run(
         rows = slice(0, span[t].start)  # every earlier month (sorted by date)
         tic = time.monotonic()
         coef, k = linear.fit(train, sums)
-        trees = Trees(xt[rows], y[rows] - x[rows] @ coef, device, threads)
+        trees = Trees(fit_x[rows], to_device(y[rows] - x[rows] @ coef), device, threads)
         here = span[t]
-        month = stocks[here].select("date", "symbol", "actual", "size").with_columns(
-            pl.Series("linear", x[here] @ coef), pl.Series("correction", trees.predict(xt[here])),
-            pl.lit(k).alias("components"),
-        )  # fmt: skip
+        month = (
+            stocks[here]
+            .select("date", "symbol", "actual", "size")
+            .with_columns(
+                pl.Series("linear", x[here] @ coef),
+                pl.Series("correction", trees.predict(fit_x[here])),
+                pl.lit(k).alias("components"),
+            )
+        )
         log.info("forecast %s: %d stocks, %d components, %.0fs", t, month.height, k,
                  time.monotonic() - tic)  # fmt: skip
+        del trees
+        if release is not None:
+            gc.collect()
+            release()
         out.append(month)
         if save is not None:
             save(month)
