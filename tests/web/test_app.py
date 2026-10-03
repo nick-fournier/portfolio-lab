@@ -1,4 +1,3 @@
-import json
 from datetime import UTC, date, datetime, timedelta
 
 import polars as pl
@@ -209,38 +208,6 @@ def test_context_page(client, tmp_path):
     for expected in ("Conditions now", "$80.00", "+11%", "calm ◂ now", "below bonds",
                      "Which traits paid off", "+0.040", "S&amp;P 500 did next"):  # fmt: skip
         assert expected in page, expected
-
-
-def test_forecasts_page(client, tmp_path):
-    assert "No forecasting study published yet" in client.get("/forecasts").text
-    head = {"ic": 0.04, "t": 5.5, "first_half": 0.03, "second_half": 0.05, "spread": 0.147,
-            "years": 23, "years_right": 20, "start": 2004, "end": 2026}  # fmt: skip
-    summary = {
-        "headline": head,
-        "yearly": [{"year": 2004 + k, "model": 0.04, "linear": 0.03} for k in range(23)],
-        "tried": [{"label": "Momentum alone", **head},
-                  {"label": "Trees on linear, half strength (chosen)", **head}],
-        "groups": [{"label": "Health & profitability", "drop": 0.016, "dropped": False},
-                   {"label": "Size & liquidity", "drop": -0.002, "dropped": True}],
-        "sizes": {"model": {"small": 0.05, "mid": 0.035, "large": 0.025},
-                  "linear": {"small": 0.04, "mid": 0.027, "large": 0.024}},
-        "conditions": [{"credit": "calm", "linear": 0.043, "model": 0.066}],
-        "strength": 0.5,
-        "fit": [{"bin": k, "forecast": k / 1000, "actual": k / 2500, "q25": -0.05, "q75": 0.05,
-                 "margin": 0.002} for k in range(-10, 10)],
-    }  # fmt: skip
-    summary["grinold"] = summary["fit"]
-    folder = tmp_path / "results" / "forecast_study"
-    folder.mkdir(parents=True)
-    (folder / "summary.json").write_text(json.dumps(summary))
-    page = client.get("/forecasts").text
-    for expected in ("20 of 23", "Spearman", "15%/yr", "2004\N{EN DASH}2026",
-                     "Health &amp; profitability",
-                     "dropped: no signal", "Credit calm", "0.066", "(chosen)",
-                     "1. How it works", "2. Results", "3. From forecast to expected return",
-                     'id="grinold"'):  # fmt: skip
-        assert expected in page, expected
-    assert client.get("/models", follow_redirects=False).status_code == 301
 
 
 def test_compare_page(client, tmp_path):

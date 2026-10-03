@@ -124,6 +124,16 @@ class DataPaths:
         return self.root / "features" / "monthly.parquet"
 
     @property
+    def characteristics(self) -> Path:
+        """Extra monthly stock inputs from Sharadar (``research.characteristics``)."""
+        return self.root / "features" / "characteristics.parquet"
+
+    @property
+    def forecaster(self) -> Path:
+        """The next-month forecaster's data, forecasts and grades (``research.forecaster``)."""
+        return self.root / "results" / "forecaster"
+
+    @property
     def forecast_cache(self) -> Path:
         """Cached return forecasts, one folder per model configuration."""
         return self.root / "cache" / "forecasts"

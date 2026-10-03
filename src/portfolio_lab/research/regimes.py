@@ -1,7 +1,7 @@
 """Market-state signals at each month end: fragile, bear, rebound.
 
 ``market_state`` is production's bear/rebound switch; :func:`signals` builds every
-indicator per month end (the forecasting study uses them as inputs).
+indicator per month end (the forecaster uses them as inputs).
 
 Three different situations, each with its own candidate signals, read at every month end
 from data known then:

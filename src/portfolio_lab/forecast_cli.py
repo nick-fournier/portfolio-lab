@@ -1,9 +1,12 @@
-"""``plab forecast ...``: the next-month forecasting study (``research.forecasting``).
+"""``plab forecast ...``: the next-month forecaster (``research.forecaster``).
 
-``study`` runs walk-forward models, ``review`` checks calibration and stock size, ``blend``
-compares two-model blends, and ``publish`` writes the Forecasts page's summary.
+Run in order on a Sharadar data directory: ``inputs`` builds the extra stock inputs,
+``dataset`` assembles the stock and market tables, ``run`` walks forward (resuming where
+an earlier run stopped) and ``grade`` prints the grades.
 """
 
+import json
+from datetime import date
 from pathlib import Path
 from typing import Annotated
 
@@ -13,126 +16,93 @@ import typer
 from portfolio_lab.core.config import get_settings
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
-from portfolio_lab.research import forecast_report, forecasting
+from portfolio_lab.research.characteristics import build as characteristics
+from portfolio_lab.research.forecaster import dataset, grade, walk
 from portfolio_lab.research.panel import Panel
 
-forecast_app = typer.Typer(help="Can next month's stock returns be forecast? (research study)")
+forecast_app = typer.Typer(help="Next-month stock forecaster (research).")
 
 
-@forecast_app.command("study")
-def forecast_study_cmd(
-    model: Annotated[list[str] | None, typer.Option(help="Models to run (default: all).")] = None,
-    drop: Annotated[
-        list[str] | None, typer.Option(help="Input groups to leave out; repeatable.")
+@forecast_app.command("inputs")
+def inputs_cmd(
+    raw: Annotated[
+        Path | None, typer.Option(help="Sharadar bulk zips (default: <data dir>/raw).")
     ] = None,
-    importance: Annotated[
-        bool, typer.Option(help="Also measure each input group's importance.")
-    ] = False,
 ) -> None:
-    """Can next month's stock returns be forecast? Walk-forward study (research.forecasting)."""
-    settings = get_settings()
-    paths = DataPaths(settings.data_dir)
-    panel = Panel.load(settings.data_dir)
-    env = pl.read_parquet(paths.environment) if paths.environment.exists() else None
-    data = forecasting.load(panel, pl.read_parquet(paths.features), env)
-    del panel
-    out = settings.data_dir / "results" / "forecast_study"
-    out.mkdir(parents=True, exist_ok=True)
-    tag = "".join(f"-no_{g}" for g in drop or ())
-    rows = []
-    for name in model or forecasting.MODELS:
-        scores: list | None = [] if importance else None
-        forecasts = forecasting.walk_forward(data, name, tuple(drop or ()), scores)
-        months = forecasting.grade_months(forecasts)
-        write_parquet_atomic(months, out / f"{name}{tag}.parquet")
-        write_parquet_atomic(forecasts, out / f"{name}{tag}.forecasts.parquet")
-        variants = [(name + tag, months)]
-        if "correction" in forecasts.columns:  # stacked: also grade the half-strength version
-            half = forecasts.with_columns(pl.col("forecast") - 0.5 * pl.col("correction"))
-            write_parquet_atomic(half, out / f"{name}_half{tag}.forecasts.parquet")
-            variants.append((f"{name}_half{tag}", forecasting.grade_months(half)))
-        if scores:
-            table = pl.DataFrame(scores)
-            write_parquet_atomic(table, out / f"{name}{tag}.importance.parquet")
-            with pl.Config(tbl_rows=20, float_precision=4):
-                typer.echo(f"{name}: IC drop when each group is shuffled (mean over years)")
-                typer.echo(table.group_by("group").agg(pl.col("drop").mean(),
-                           (pl.col("drop") > 0).mean().alias("years_helped"))
-                           .sort("drop", descending=True))  # fmt: skip
-        for label, graded in variants:
-            summary = forecasting.summarize(graded)
-            for part in ("all", "first_half", "second_half"):
-                rows.append({"model": label, "period": part, **summary[part]})
-            rows.append({"model": label, "period": "years IC > 0",
-                         "ic": summary["years_ic_positive"]})  # fmt: skip
-    with pl.Config(tbl_rows=60, tbl_cols=20, float_precision=3, tbl_width_chars=200):
-        typer.echo(pl.DataFrame(rows))
+    """Build the extra stock inputs (research.characteristics) into the features folder."""
+    data_dir = get_settings().data_dir
+    frame = characteristics.build(data_dir, raw or data_dir / "raw")
+    write_parquet_atomic(frame, DataPaths(data_dir).characteristics)
+    typer.echo(f"{frame.height:,} stock-months, {len(characteristics.COLUMNS)} inputs")
 
 
-@forecast_app.command("review")
-def forecast_review_cmd(
-    model: Annotated[str, typer.Argument(help="Saved study run, e.g. linear_regime-no_size.")],
+@forecast_app.command("dataset")
+def dataset_cmd() -> None:
+    """Assemble the forecaster's stock and market tables (research.forecaster.dataset)."""
+    data_dir = get_settings().data_dir
+    paths = DataPaths(data_dir)
+    panel = Panel.load(data_dir)
+    features = pl.read_parquet(paths.features)
+    env = pl.read_parquet(paths.environment)
+    stocks = dataset.stocks(panel, features, pl.read_parquet(paths.characteristics))
+    market = dataset.market(panel, env, features)
+    paths.forecaster.mkdir(parents=True, exist_ok=True)
+    write_parquet_atomic(stocks, paths.forecaster / "stocks.parquet")
+    write_parquet_atomic(market, paths.forecaster / "market.parquet")
+    typer.echo(f"{stocks.height:,} stock-months, {stocks['date'].n_unique()} months "
+               f"({stocks['date'].min()} to {stocks['date'].max()})")  # fmt: skip
+
+
+@forecast_app.command("run")
+def run_cmd(
+    start: Annotated[str, typer.Option(help="First month to forecast (YYYY-MM).")] = (
+        f"{walk.FIRST_FORECAST:%Y-%m}"
+    ),
+    device: Annotated[str, typer.Option(help="Where the trees are fitted: cpu or cuda.")] = "cpu",
+    threads: Annotated[int, typer.Option(help="CPU threads for the trees.")] = 6,
+    fresh: Annotated[bool, typer.Option(help="Discard earlier forecasts and start over.")] = False,
 ) -> None:
-    """Calibration and size breakdown of a saved forecast study run's forecasts."""
-    folder = get_settings().data_dir / "results" / "forecast_study"
-    forecasts = pl.read_parquet(folder / f"{model}.forecasts.parquet")
-    calibrated = forecasting.calibrate(forecasts)
-    raw = forecasting.summarize(forecasting.grade_months(
-        forecasts.filter(pl.col("date") >= calibrated["date"].min())))  # fmt: skip
-    cal = forecasting.summarize(forecasting.grade_months(calibrated))
-    factors = calibrated.group_by(pl.col("date").dt.year().alias("year")).agg(
-        pl.col("factor").first()).sort("year")  # fmt: skip
-    first, second = cal["first_half"]["slope"], cal["second_half"]["slope"]
-    lo, hi = factors["factor"].min(), factors["factor"].max()
-    typer.echo(f"Calibration ({calibrated['date'].min()}+): slope raw {raw['all']['slope']:.2f}"
-               f" -> calibrated {cal['all']['slope']:.2f} (halves {first:.2f}, {second:.2f});"
-               f" factor {lo:.2f} to {hi:.2f}")  # fmt: skip
-    rows = [{"stocks": name, **s["all"], "years_right": s["years_ic_positive"]}
-            for name, s in forecasting.by_size(forecasts).items()]  # fmt: skip
-    with pl.Config(tbl_rows=10, tbl_cols=12, float_precision=3, tbl_width_chars=200):
-        typer.echo(pl.DataFrame(rows))
+    """Walk forward: refit every month on all earlier months and forecast it."""
+    folder = DataPaths(get_settings().data_dir).forecaster
+    path = folder / "forecasts.parquet"
+    done = pl.read_parquet(path) if path.exists() and not fresh else None
+    year, month = (int(p) for p in start.split("-"))
+
+    def save(frame: pl.DataFrame) -> None:
+        nonlocal done
+        done = frame if done is None else pl.concat([done, frame], how="vertical_relaxed")
+        write_parquet_atomic(done, path)
+
+    walk.run(
+        pl.read_parquet(folder / "stocks.parquet"), pl.read_parquet(folder / "market.parquet"),
+        start=date(year, month, 1), device=device, threads=threads,
+        skip=set(done["date"].unique().to_list()) if done is not None else None, save=save,
+    )  # fmt: skip
+    typer.echo(f"forecasts: {path}")
 
 
-@forecast_app.command("blend")
-def forecast_blend_cmd(
-    first: Annotated[str, typer.Argument(help="Saved study run (weight goes on this one).")],
-    second: Annotated[str, typer.Argument(help="Another saved study run.")],
+@forecast_app.command("grade")
+def grade_cmd(
+    since: Annotated[int, typer.Option(help="First year graded.")] = walk.FIRST_GRADED,
 ) -> None:
-    """Blend two saved forecast study runs: 50/50 ranks vs a walk-forward-learned weight."""
-    folder = get_settings().data_dir / "results" / "forecast_study"
-    a, b = (pl.read_parquet(folder / f"{n}.forecasts.parquet") for n in (first, second))
-    rows = []
-    for label, frame in (
-        (first, forecasting.blend(a, b, 1.0)),
-        (second, forecasting.blend(a, b, 0.0)),
-        ("50/50", forecasting.blend(a, b, 0.5)),
-        ("learned weight", forecasting.blend(a, b, None)),
-    ):
-        months = forecasting.grade_months(frame)
-        s = forecasting.summarize(months)
-        years = months.group_by(pl.col("date").dt.year().alias("y")).agg(pl.col("ic").mean())
-        crisis = {f"ic_{y}": years.filter(pl.col("y") == y)["ic"].item() for y in (2009, 2020)}
-        rows.append({"forecast": label, "ic": s["all"]["ic"], "t": s["all"]["ic_t"],
-                     "first_half": s["first_half"]["ic"], "second_half": s["second_half"]["ic"],
-                     "years_right": s["years_ic_positive"], "spread_yr": s["all"]["spread_yr"],
-                     **crisis})  # fmt: skip
-        if label == "learned weight":
-            w = frame.group_by(pl.col("date").dt.year().alias("y")).agg(pl.col("weight").first())
-            typer.echo("learned weight on first, by year: "
-                       + ", ".join(f"{y}: {v:.1f}" for y, v in w.sort("y").rows()))  # fmt: skip
-    with pl.Config(tbl_rows=10, tbl_cols=12, float_precision=3, tbl_width_chars=200):
-        typer.echo(pl.DataFrame(rows))
-
-
-@forecast_app.command("publish")
-def forecast_publish_cmd(
-    dest: Annotated[Path, typer.Option(help="Main data directory to publish the summary to.")],
-) -> None:
-    """Summarize the forecasting study for the Forecasts page (research.forecast_report)."""
-    settings = get_settings()
-    paths = DataPaths(settings.data_dir)
-    env = pl.read_parquet(paths.environment) if paths.environment.exists() else None
-    source = settings.data_dir / "results" / "forecast_study"
-    target = DataPaths(dest).root / "results" / "forecast_study"
-    volatility = pl.read_parquet(paths.features, columns=["date", "symbol", "volatility"])
-    typer.echo(forecast_report.publish(source, target, env, volatility))
+    """Grade the forecasts on unseen months (research.forecaster.grade)."""
+    folder = DataPaths(get_settings().data_dir).forecaster
+    combined = walk.combine(pl.read_parquet(folder / "forecasts.parquet"))
+    graded = combined.filter(pl.col("date").dt.year() >= since)
+    out = grade.report(graded)
+    out["strength_by_year"] = (
+        graded.group_by(pl.col("date").dt.year().alias("year"))
+        .agg(pl.col("strength").mean())
+        .sort("year")
+        .to_dicts()
+    )
+    (folder / "grades.json").write_text(json.dumps(out, indent=1, default=str))
+    sizes = " / ".join(f"{v:.3f}" for v in out["ic_by_size"].values())
+    typer.echo(
+        f"{out['first']} to {out['last']} ({out['months']} months)\n"
+        f"IC {out['ic']:.3f} (t {out['ic_t']:.1f}), right in {out['years_right']} of "
+        f"{out['years']} years\n"
+        f"slope {out['slope']:.2f} (losers {out['slope_losers']:.2f}, winners "
+        f"{out['slope_winners']:.2f}), R² {out['r2']:+.3%}\n"
+        f"best-worst tenth {out['tenth_yr']:.1%}/yr, IC small/mid/large {sizes}"
+    )
