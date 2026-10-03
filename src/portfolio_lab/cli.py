@@ -132,12 +132,16 @@ def _parse_params(pairs: list[str]) -> dict[str, Any]:
 def ingest_sharadar_cmd(
     out: Annotated[Path, typer.Option(help="New data directory to write.")],
     raw: Annotated[
-        Path | None, typer.Option(help="Folder with the bulk zips (default: raw/sharadar).")
+        Path | None, typer.Option(help="Folder with the bulk zips (default: OUT/raw).")
     ] = None,
 ) -> None:
-    """Build a separate data directory from Sharadar's full-history bulk files."""
+    """Build a separate data directory from Sharadar's full-history bulk files.
+
+    The bulk zips live inside the Sharadar directory (``OUT/raw``) so everything under
+    the license sits in one folder.
+    """
     settings = get_settings()
-    raw = raw or settings.data_dir / "raw" / "sharadar"
+    raw = raw or out / "raw"
     typer.echo(sharadar.build(raw, out, settings.data_dir))
 
 
@@ -370,7 +374,9 @@ def serve_cmd(
 
     from portfolio_lab.web.app import create_app  # noqa: PLC0415 - keeps other commands fast
 
-    uvicorn.run(create_app(get_settings().data_dir), host=host, port=port, proxy_headers=True)
+    settings = get_settings()
+    app = create_app(settings.data_dir, settings.trading_dir)
+    uvicorn.run(app, host=host, port=port, proxy_headers=True)
 
 
 @app.command("schedule")

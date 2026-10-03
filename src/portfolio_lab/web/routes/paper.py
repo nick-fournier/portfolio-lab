@@ -99,7 +99,7 @@ def _last_orders(folder: Path) -> tuple[date | None, list[dict]]:
 def paper_page(request: Request) -> HTMLResponse:
     """Render paper equity against SPY and the backtest, holdings and the last orders."""
     data_dir = request.app.state.data_dir
-    paths = DataPaths(data_dir)
+    paths = DataPaths(data_dir, request.app.state.trading_dir)
     snapshots = _read(paths.paper / "snapshots.parquet")
     snapshots = snapshots.sort("date") if snapshots.height else snapshots
     context: dict = {"strategy": f"{PAPER_STRATEGY[0]} {PAPER_STRATEGY[1]}"}

@@ -6,6 +6,7 @@ import pytest
 
 from portfolio_lab.core.config import Settings
 from portfolio_lab.core.http import RateLimitedClient
+from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.trading import paper
 from portfolio_lab.trading.broker import Order, PaperBroker
 from portfolio_lab.trading.paper import MAX_INVESTED, due, plan_orders
@@ -123,3 +124,8 @@ def test_dry_run_places_nothing(tmp_path, make_panel, monkeypatch):
     plan = paper.run(tmp_path, FixedStrategy(), broker, dry_run=True)
     assert len(plan["orders"]) == 2 and not broker.submitted and broker.cancelled == 0
     assert not (tmp_path / "trading").exists()
+
+
+def test_paper_records_follow_the_trading_dir(tmp_path):
+    assert DataPaths(tmp_path).paper == tmp_path / "trading" / "paper"
+    assert DataPaths(tmp_path, tmp_path / "ops").paper == tmp_path / "ops" / "paper"

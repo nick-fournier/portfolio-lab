@@ -135,6 +135,7 @@ def run(
     broker: PaperBroker,
     refresh: Callable[[], Any] | None = None,
     dry_run: bool = False,
+    trading_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Record the account and, when due, rebalance to ``strategy``'s targets (module docs).
 
@@ -146,8 +147,9 @@ def run(
             features so the month just closed is included); skipped in a dry run.
         dry_run: Plan the rebalance now and return the orders without placing them or
             writing records.
+        trading_dir: Where trading records live (default ``data_dir/trading``).
     """
-    folder = DataPaths(data_dir).paper
+    folder = DataPaths(data_dir, trading_dir).paper
     panel = Panel.load(data_dir)
     session = panel.dates[-1]
     if dry_run:
