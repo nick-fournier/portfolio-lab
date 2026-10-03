@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     data_dir: Path = Field(default=Path("data"), alias="PORTFOLIO_DATA_DIR")
+    #: Trading records (paper account); default ``data_dir/trading``.
+    trading_dir: Path | None = Field(default=None, alias="PORTFOLIO_TRADING_DIR")
     alpaca_api_key_id: SecretStr | None = None
     alpaca_api_secret_key: SecretStr | None = None
     alpaca_data_url: str = "https://data.alpaca.markets"

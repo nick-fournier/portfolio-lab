@@ -453,7 +453,8 @@ def paper_task(settings: Settings, dry_run: bool = False) -> dict:
     broker = PaperBroker(settings)
     try:
         return paper.run(settings.data_dir, strategy, broker,
-                         refresh=lambda: features_task(settings), dry_run=dry_run)  # fmt: skip
+                         refresh=lambda: features_task(settings), dry_run=dry_run,
+                         trading_dir=settings.trading_dir)  # fmt: skip
     finally:
         broker.close()
         if callable(close := getattr(strategy, "close", None)):

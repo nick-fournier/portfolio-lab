@@ -33,8 +33,12 @@ the generic run artifacts each backtest writes.
 
 ## Data
 
-Datasets are Parquet files under `PORTFOLIO_DATA_DIR` (default `./data`; on orange it's
-`/home/nick/portfolio-data`). Every write is atomic. Backtest runs are immutable
+Datasets are Parquet files under `PORTFOLIO_DATA_DIR` (default `./data`). On orange the data
+root `/home/nick/portfolio-data` holds two data directories, split by license so the licensed
+one can be deleted on its own, `free/` (free sources; production runs on it) and `sharadar/`
+(Sharadar's licensed history and its raw bulk zips in `sharadar/raw/`), plus `trading/`, the
+paper account's records (`PORTFOLIO_TRADING_DIR`): operational history that can't be
+re-downloaded, kept apart from market data. Every write is atomic. Backtest runs are immutable
 directories, so the web app can read while jobs write.
 
 | Data | Source |

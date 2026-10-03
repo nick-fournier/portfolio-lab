@@ -314,3 +314,13 @@ def test_paper_page_empty_then_with_records(client, tmp_path):
     assert page.status_code == 200
     for expected in ("$101,000", "1.0%", "CCC", "filled", "5940.00", "Paper vs SPY"):
         assert expected in page.text
+
+
+def test_paper_page_reads_a_separate_trading_dir(tmp_path):
+    trading = tmp_path / "ops"
+    folder = trading / "paper"
+    folder.mkdir(parents=True)
+    _write(folder, "snapshots", {"date": [date(2024, 1, 2)], "equity": [100_000.0],
+                                 "cash": [1_000.0], "positions": [0]})  # fmt: skip
+    page = TestClient(create_app(tmp_path / "data", trading)).get("/paper")
+    assert page.status_code == 200 and "$100,000" in page.text

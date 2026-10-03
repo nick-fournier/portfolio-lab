@@ -10,9 +10,13 @@ class DataPaths:
 
     Args:
         root: The data directory (``Settings.data_dir``).
+        trading: Where trading records live (``Settings.trading_dir``); defaults to
+            ``root / "trading"``. Account records are operational, not market data, so
+            production keeps them outside the data directory.
     """
 
     root: Path
+    trading: Path | None = None
 
     @property
     def prices_daily(self) -> Path:
@@ -112,7 +116,7 @@ class DataPaths:
     @property
     def paper(self) -> Path:
         """Paper trading records: snapshots, positions, orders and rebalances."""
-        return self.root / "trading" / "paper"
+        return (self.trading or self.root / "trading") / "paper"
 
     @property
     def features(self) -> Path:
