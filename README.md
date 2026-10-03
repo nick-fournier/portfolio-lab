@@ -66,6 +66,17 @@ uv run plab serve                                 # dashboard on http://127.0.0.
 uv run plab schedule                              # long-running: jobs when due
 ```
 
+The next-month stock forecaster (research, on the Sharadar data directory; the trees can
+be fitted on a GPU with `--device cuda`):
+
+```bash
+export PORTFOLIO_DATA_DIR=/home/nick/portfolio-data/sharadar
+uv run plab forecast inputs                       # extra stock inputs from the bulk zips
+uv run plab forecast dataset                      # stock and market tables
+uv run plab forecast run                          # walk forward, refit monthly; resumes
+uv run plab forecast grade                        # grades on unseen months, 2009 on
+```
+
 The scheduler runs the daily ingest after 20:00 New York time on each session, catching up
 any missed sessions. Weekly, it spot-checks stored prices and refreshes the baseline
 backtests. Its state and every job's last result are shown on the dashboard's status page.

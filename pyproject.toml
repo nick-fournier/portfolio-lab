@@ -19,6 +19,7 @@ dependencies = [
     "scikit-learn>=1.5",
     "typer>=0.12",
     "uvicorn>=0.30",
+    "xgboost>=3.0",
 ]
 
 [project.scripts]

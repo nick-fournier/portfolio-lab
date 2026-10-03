@@ -165,43 +165,6 @@ def cumulative_ic_figure(scores: pl.DataFrame, shown: set[str] | None = None) ->
     return fig.to_json()
 
 
-def calibration_figure(bins: pl.DataFrame) -> str:
-    """Stated versus realized chance of beating the median, per confidence decile."""
-    fig = go.Figure(layout=_LAYOUT)
-    lo = min(bins["predicted"].min(), bins["realized"].min())
-    hi = max(bins["predicted"].max(), bins["realized"].max())
-    fig.add_scatter(x=[lo, hi], y=[lo, hi], mode="lines", name="perfectly calibrated",
-                    line=_REFERENCE)  # fmt: skip
-    for (model,), rows in bins.sort("model", "bin").group_by("model", maintain_order=True):
-        fig.add_scatter(
-            x=rows["predicted"].to_list(), y=rows["realized"].to_list(), name=model,
-            mode="lines+markers", line=_LINE,
-        )  # fmt: skip
-    fig.update_layout(
-        xaxis={"title": "stated probability", "tickformat": ".0%"},
-        yaxis={"title": "actually beat the median", "tickformat": ".0%"},
-        hovermode="closest",
-        legend={**_LAYOUT["legend"], "y": -0.3},  # below the axis title
-        margin={**_LAYOUT["margin"], "b": 20},
-    )
-    return fig.to_json()
-
-
-def importance_figure(table: pl.DataFrame, top: int = 15) -> str:
-    """Largest drops in ranking accuracy (AUC) when an input is shuffled."""
-    rows = table.sort("auc_drop", descending=True).head(top).reverse()
-    fig = go.Figure(
-        go.Bar(
-            x=rows["auc_drop"].to_list(), y=rows["feature"].to_list(), orientation="h",
-            hovertemplate="%{y}: %{x:.4f}<extra></extra>",
-        ),
-        layout=_LAYOUT,
-    )  # fmt: skip
-    fig.update_layout(height=80 + 24 * rows.height, showlegend=False, hovermode="closest",
-                      xaxis={"title": "drop in AUC when shuffled"})  # fmt: skip
-    return fig.to_json()
-
-
 def growth_figure(
     growth: pl.DataFrame,
     names: dict[str, str],

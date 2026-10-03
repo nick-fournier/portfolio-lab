@@ -69,11 +69,6 @@ class DataPaths:
         return self.root / "results" / "context_dial.parquet"
 
     @property
-    def models(self) -> Path:
-        """Model results: predictions, summary, calibration and importance tables."""
-        return self.root / "results" / "models"
-
-    @property
     def fund_prices(self) -> Path:
         """Daily prices adjusted for distributions for the make-vs-buy funds."""
         return self.root / "prices" / "funds.parquet"
@@ -127,6 +122,16 @@ class DataPaths:
     def features(self) -> Path:
         """Monthly point-in-time feature panel (``research.features``)."""
         return self.root / "features" / "monthly.parquet"
+
+    @property
+    def characteristics(self) -> Path:
+        """Extra monthly stock inputs from Sharadar (``research.characteristics``)."""
+        return self.root / "features" / "characteristics.parquet"
+
+    @property
+    def forecaster(self) -> Path:
+        """The next-month forecaster's data, forecasts and grades (``research.forecaster``)."""
+        return self.root / "results" / "forecaster"
 
     @property
     def forecast_cache(self) -> Path:
