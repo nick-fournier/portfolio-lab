@@ -7,10 +7,11 @@ squared error on the target (or part 1's residual) plus an L1 penalty on the wei
 Inputs: the stock inputs (percentiles, missing as 0) and the market inputs, each market input
 scaled by its mean and spread over the month's training rows (past only), missing as 0.
 
-Training stops early on held-out years: each calendar year is held out with probability
-:data:`HELD_SHARE` (drawn once, so a held-out year is never trained on later), and the
-weights with the lowest held-out error are kept. The first month trains from fresh weights
-for up to :data:`FIRST_PASSES` passes; every later month continues from the previous
+Training stops early on held-out rows: each stock-month is held out with probability
+:data:`HELD_SHARE` (drawn once per row, so a held-out row is never trained on later), and
+the weights with the lowest held-out error are kept. The output layer starts at zero, so a
+net that has learned nothing forecasts 0 rather than noise. The first month trains from
+fresh weights for up to :data:`FIRST_PASSES` passes; every later month continues from the previous
 month's nets for up to :data:`WARM_PASSES` passes over all past months (warm start).
 """
 
@@ -28,7 +29,6 @@ FIRST_PASSES = 100
 WARM_PASSES = 5
 #: Passes without a better held-out error before training stops.
 PATIENCE = 5
-FIRST_YEAR, LAST_YEAR = 1990, 2100
 
 
 class NetsPart:
@@ -44,8 +44,6 @@ class NetsPart:
         import torch  # noqa: PLC0415 - research only; not a dependency of production
 
         self.torch, self.device, self.seed, self.dispersion = torch, device, seed, dispersion
-        rng = np.random.default_rng(seed)
-        self.held = {y for y in range(FIRST_YEAR, LAST_YEAR) if rng.random() < HELD_SHARE}
         self.nets: list = []
         self.scale: tuple | None = None
         self.passes: list[int] = []
@@ -69,20 +67,25 @@ class NetsPart:
         for size in LAYERS:
             layers += [torch.nn.Linear(last, size), torch.nn.BatchNorm1d(size), torch.nn.ReLU()]
             last = size
-        layers.append(torch.nn.Linear(last, 1))
+        out = torch.nn.Linear(last, 1)
+        torch.nn.init.zeros_(out.weight)
+        torch.nn.init.zeros_(out.bias)
+        layers.append(out)
         return torch.nn.Sequential(*layers).to(self.device)
 
     def fit(self, x: np.ndarray, residual: np.ndarray, years: np.ndarray) -> None:
-        """Train (or keep training) the nets on these rows (module docs)."""
+        """Train (or keep training) the nets on these rows (module docs).
+
+        Rows are every month before the forecast month, in a fixed order, so row ``i`` is the
+        same stock-month every month and keeps its held-out draw.
+        """
         torch = self.torch
         market = np.asarray(x[:, len(INPUTS) :], dtype=np.float64)
         mean = np.nanmean(market, axis=0)
         sd = np.nanstd(market, axis=0)
         self.scale = (np.nan_to_num(mean).astype(np.float32),
                       np.where(np.isfinite(sd) & (sd > 0), sd, 1.0).astype(np.float32))  # fmt: skip
-        held = np.isin(years, list(self.held))
-        if held.all() or not held.any():
-            held = years == years.max()  # too little history: hold out the latest year
+        held = np.random.default_rng(self.seed).random(len(x)) < HELD_SHARE
         z = self._inputs(x)
         target = torch.as_tensor(np.asarray(residual, dtype=np.float32), device=self.device)
         fit_rows = torch.as_tensor(np.flatnonzero(~held), device=self.device)
