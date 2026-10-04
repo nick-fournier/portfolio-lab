@@ -45,6 +45,9 @@ rounds), forecast = linear + k × trees with k chosen walk-forward (0.25 every m
 | T4 diagnostic: nets on stock inputs only (no market inputs), warm start | 0.024 | 4.8 | 15 | 0.25 | −0.30% | 7.6% | The month-constant market inputs drove the overfitting; still below the front runner on IC, size and spread |
 | T4 diagnostic: stock + market inputs, fresh nets once a year | 0.020 | 2.0 | 11 | 0.16 | −1.69% | 9.1% | Worse than warm start: warm start was not the problem |
 | T12: XGBoost trees refit each January (linear part monthly) | 0.028 | 2.9 | 15 | 0.36 | −0.09% | 3.9% | Worse than monthly refits; the walk-forward strength often dropped the trees (0–0.25). The yearly scikit-learn run's 0.033 is within noise, so neither the library nor yearly refits is worth adopting |
+| Diagnostic: front runner with the trees given stock inputs only (no market inputs) | 0.027 | 3.3 | 16 | 0.47 | −0.02% | 7.4% | Worse: the tenth gap drops 3.1%/yr (beyond noise) and forecasts are worse-sized. The trees' market inputs do real work; in fits each January 2010–2026 they account for 52–63% of the trees' improvement (top: 10-year yield, credit spread, 2-year yield, absorption, oil) |
+| Conditioned nets, stock inputs only, month-wise batches, output centered per month (4 or 8 encoding numbers, picked monthly by held-out error) | 0.026 | 5.4 | 15 | 0.30 | −0.16% | 7.6% | Steadiest IC of any model (t 5.4) but below the front runner on IC, size and spread |
+| Conditioned nets, bilinear on VIX + dispersion (4 settings, picked monthly) | 0.024 | 4.3 | 15 | 0.25 | −0.42% | 9.1% | No better than stock-only; the pick favored the light market penalty, which graded worse |
 
 Linear part alone with 1–10 components (no trees): more components give a steadier but
 lower IC (0.029 → 0.023; t 3.1 → 4.0) and a wider tenth gap (5% → 9%), but forecasts too
