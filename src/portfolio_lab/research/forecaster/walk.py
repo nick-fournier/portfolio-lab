@@ -77,9 +77,12 @@ def run(
     market_cols = [c for c in market.columns if c.startswith(("env_", "mkt_"))]
     if part2.dispersion:
         market_cols.append("dispersion")
+    market_cols = getattr(part2, "columns", None) or market_cols
     xt = np.hstack([raw, conditions.select(market_cols).to_numpy()]).astype(np.float32)
     del raw
     years = stocks["date"].dt.year().to_numpy()
+    if hasattr(part2, "row_months"):  # month index of every row, for month-wise batches
+        part2.row_months = np.searchsorted(np.array(months, dtype=dates.dtype), dates)
     fit_x, to_device = part2.arrays(xt)
     out = []
     for t in months:
@@ -100,6 +103,7 @@ def run(
                 pl.Series("linear", x[here] @ coef),
                 pl.Series("correction", part2.predict(fit_x[here])),
                 pl.lit(k).alias("components"),
+                pl.lit(getattr(part2, "held_err", None), dtype=pl.Float64).alias("held_err"),
             )
         )
         log.info("forecast %s: %d stocks, %d components, %.0fs", t, month.height, k,
