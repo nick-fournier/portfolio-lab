@@ -73,7 +73,10 @@ def report(forecasts: pl.DataFrame) -> dict[str, Any]:
     r2 = 1 - float(((centered["actual"] - centered["forecast"]) ** 2).mean()) / float(
         (centered["actual"] ** 2).mean()
     )
-    bins = fit_bins(forecasts)
+    # forecasts relative to the month's average, so the loser/winner split is at 0
+    bins = fit_bins(
+        forecasts.with_columns(pl.col("forecast") - pl.col("forecast").mean().over("date"))
+    )
     x, a = bins["forecast"].to_numpy(), bins["actual"].to_numpy()
     sizes = {}
     for name, (lo, hi) in SIZE_GROUPS.items():
