@@ -48,6 +48,9 @@ rounds), forecast = linear + k × trees with k chosen walk-forward (0.25 every m
 | Diagnostic: front runner with the trees given stock inputs only (no market inputs) | 0.027 | 3.3 | 16 | 0.47 | −0.02% | 7.4% | Worse: the tenth gap drops 3.1%/yr (beyond noise) and forecasts are worse-sized. The trees' market inputs do real work; in fits each January 2010–2026 they account for 52–63% of the trees' improvement (top: 10-year yield, credit spread, 2-year yield, absorption, oil) |
 | Conditioned nets, stock inputs only, month-wise batches, output centered per month (4 or 8 encoding numbers, picked monthly by held-out error) | 0.026 | 5.4 | 15 | 0.30 | −0.16% | 7.6% | Steadiest IC of any model (t 5.4) but below the front runner on IC, size and spread |
 | Conditioned nets, bilinear on VIX + dispersion (4 settings, picked monthly) | 0.024 | 4.3 | 15 | 0.25 | −0.42% | 9.1% | No better than stock-only; the pick favored the light market penalty, which graded worse |
+| Conditioned nets, FiLM on VIX + dispersion (4 settings, picked monthly) | 0.026 | 5.2 | 15 | 0.31 | −0.17% | 8.4% | No better than stock-only |
+| Conditioned nets, bilinear on market PCA factors (4/8/15 factors × penalty 0.1/1.0; best: 8 factors, 1.0) | 0.029 | 5.2 | 15 | 0.30 | −0.15% | 9.2% | Strong penalty wins at every size; picked monthly by earlier accuracy: IC 0.027 |
+| Conditioned nets, bilinear on all 116 market inputs uncompressed, penalty 1.0 | 0.030 | 5.0 | 17 | 0.43 | −0.05% | 9.8% | Ties the front runner on IC, steadier (17/18 years), but smaller forecasts' slope and spread; best of 7 tries. Candidate to build on, not adopted |
 
 Linear part alone with 1–10 components (no trees): more components give a steadier but
 lower IC (0.029 → 0.023; t 3.1 → 4.0) and a wider tenth gap (5% → 9%), but forecasts too
