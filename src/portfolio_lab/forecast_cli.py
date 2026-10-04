@@ -70,6 +70,7 @@ def run_cmd(  # noqa: PLR0913, PLR0917 - one option per CLI flag
     sample: Annotated[float, typer.Option(help="Share of rows and columns each tree draws.")] = 1.0,
     seed: Annotated[int, typer.Option(help="Random seed for the trees.")] = 0,
     model: Annotated[str, typer.Option(help="Part 2: trees or nets.")] = "trees",
+    yearly_trees: Annotated[bool, typer.Option(help="Trees: refit each January only.")] = False,
     stock_only: Annotated[bool, typer.Option(help="Nets: stock inputs only.")] = False,
     yearly_fresh: Annotated[bool, typer.Option(help="Nets: fresh weights once a year.")] = False,
     dispersion: Annotated[
@@ -86,7 +87,8 @@ def run_cmd(  # noqa: PLR0913, PLR0917 - one option per CLI flag
         part2 = NetsPart(device, seed=seed, dispersion=dispersion, market=not stock_only,
                          yearly_fresh=yearly_fresh)  # fmt: skip
     else:
-        part2 = TreesPart(device, threads, sample, seed, dispersion=dispersion)
+        part2 = TreesPart(device, threads, sample, seed, dispersion=dispersion,
+                          yearly=yearly_trees)  # fmt: skip
 
     def save(frame: pl.DataFrame) -> None:
         nonlocal done

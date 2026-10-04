@@ -90,6 +90,7 @@ def run(
         tic = time.monotonic()
         coef, k = linear.fit(train, sums, components)
         residual = to_device(y[rows] - x[rows] @ coef)
+        part2.now = t
         part2.fit(fit_x[rows], residual, years[rows])
         here = span[t]
         month = (

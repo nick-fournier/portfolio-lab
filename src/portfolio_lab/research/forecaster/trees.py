@@ -62,11 +62,13 @@ class TreesPart:
         sample: Share of rows and of columns each tree draws (1 = all).
         seed: Random seed for that draw.
         dispersion: Add last month's return dispersion to the market inputs.
+        yearly: Refit only when forecasting January (part 1 still refits monthly); walk sets
+            ``now`` to the forecast month before each fit.
     """
 
     def __init__(self, device: str = "cpu", threads: int = 6, sample: float = 1.0, seed: int = 0,
-                 dispersion: bool = False):  # fmt: skip
-        self.device, self.dispersion = device, dispersion
+                 dispersion: bool = False, yearly: bool = False):  # fmt: skip
+        self.device, self.dispersion, self.yearly, self.now = device, dispersion, yearly, None
         self.settings = {"threads": threads, "sample": sample, "seed": seed}
         self.trees: Trees | None = None
         self._pool = None
@@ -84,6 +86,8 @@ class TreesPart:
 
     def fit(self, x, residual, years: np.ndarray) -> None:
         """Fit this month's trees (``years``: each row's calendar year, unused here)."""
+        if self.yearly and self.trees is not None and self.now.month != 1:
+            return
         self.trees = Trees(x, residual, self.device, **self.settings)
 
     def predict(self, x) -> np.ndarray:
@@ -91,8 +95,9 @@ class TreesPart:
         return self.trees.predict(x)
 
     def release(self) -> None:
-        """Free this month's trees (and the GPU memory they used)."""
-        self.trees = None
+        """Free this month's trees (and the GPU memory they used); yearly trees are kept."""
+        if not self.yearly:
+            self.trees = None
         if self._pool is not None:
             gc.collect()
             self._pool.free_all_blocks()
