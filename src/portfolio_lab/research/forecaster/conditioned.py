@@ -51,15 +51,18 @@ class CondNetsPart:
         seed: Seed for weights, batches and the held-out rows.
     """
 
-    dispersion = False
-
     def __init__(self, device: str = "cpu", arch: str = "bilinear", exposures: int = 4,
-                 market_penalty: float = 1e-3, seed: int = 0):  # fmt: skip
+                 market_penalty: float = 1e-3, seed: int = 0, factors: int | None = None):  # fmt: skip
         import torch  # noqa: PLC0415 - research only; not a dependency of production
 
         self.torch, self.device, self.arch, self.seed = torch, device, arch, seed
         self.exposures, self.market_penalty = exposures, market_penalty
-        self.columns = COLUMNS
+        # factors: every market input (walk's default list, plus dispersion), compressed each
+        # month to this many principal components of the past months' market readings
+        self.factors = factors
+        self.columns = None if factors else COLUMNS
+        self.dispersion = bool(factors)
+        self.pca: tuple | None = None
         self.row_months: np.ndarray | None = None  # set by walk.run: month index per row
         self.nets: list = []
         self.held_err: float | None = None
@@ -76,15 +79,18 @@ class CondNetsPart:
         """Train (or keep training) the nets on these rows (module docs)."""
         torch = self.torch
         n = len(INPUTS)
-        s, m = self._tensor(x[:, :n]), self._tensor(x[:, n:])
-        target = self._tensor(residual)
         month = self.row_months[: len(x)]
+        if self.factors:
+            self._fit_pca(np.asarray(x[:, n:], dtype=np.float64), month)
+        s, m = self._tensor(x[:, :n]), self._tensor(self._market(x[:, n:]))
+        target = self._tensor(residual)
         held = np.random.default_rng(self.seed).random(len(x)) < HELD_SHARE
         groups = _month_rows(month, ~held, self.device, torch)
         held_groups = _month_rows(month, held, self.device, torch)
         first = not self.nets
         if first:
-            self.nets = [_Net(torch, n, len(self.columns), self.arch, self.exposures,
+            width = len(self.columns) if not self.factors else (m.shape[1])
+            self.nets = [_Net(torch, n, width, self.arch, self.exposures,
                               self.seed * 1000 + k).to(self.device) for k in range(NETS)]  # fmt: skip
         passes = FIRST_PASSES if first else WARM_PASSES
         errs = [self._train(net, s, m, target, groups, held_groups, passes, k)
@@ -144,7 +150,7 @@ class CondNetsPart:
     def predict(self, x: np.ndarray) -> np.ndarray:
         """The nets' average forecast for the rows of one month, centered."""
         n = len(INPUTS)
-        s, m = self._tensor(x[:, :n]), self._tensor(x[:, n:])
+        s, m = self._tensor(x[:, :n]), self._tensor(self._market(x[:, n:]))
         with self.torch.no_grad():
             outs = []
             for net in self.nets:
@@ -152,6 +158,36 @@ class CondNetsPart:
                 f = net(s, m)
                 outs.append((f - f.mean()).cpu().numpy())
         return np.mean(outs, axis=0).astype(np.float64)
+
+    def _fit_pca(self, market: np.ndarray, month: np.ndarray) -> None:
+        """Principal components of the past months' market readings (one row per month).
+
+        Each component's sign is aligned with last month's, so warm-started nets keep reading
+        the same direction; factor values are scaled to unit spread.
+        """
+        first = np.r_[0, np.flatnonzero(np.diff(month)) + 1]
+        rows = market[first]
+        mean = np.nanmean(rows, axis=0)
+        sd = np.nanstd(rows, axis=0)
+        sd = np.where(np.isfinite(sd) & (sd > 0), sd, 1.0)
+        z = np.nan_to_num((rows - np.nan_to_num(mean)) / sd)
+        if self.factors < 0:  # every input as it is, scaled: no compression
+            self.pca = (np.nan_to_num(mean), sd, np.eye(rows.shape[1]), np.ones(rows.shape[1]))
+            return
+        _, _, vt = np.linalg.svd(z, full_matrices=False)
+        v = vt[: self.factors].T
+        if self.pca is not None:
+            v = v * np.where(np.sum(v * self.pca[2], axis=0) < 0, -1.0, 1.0)
+        spread = (z @ v).std(axis=0)
+        self.pca = (np.nan_to_num(mean), sd, v, np.where(spread > 0, spread, 1.0))
+
+    def _market(self, market: np.ndarray) -> np.ndarray:
+        """The market inputs as the nets read them (factors, or the columns as they are)."""
+        if not self.factors:
+            return market
+        mean, sd, v, spread = self.pca
+        z = np.nan_to_num((np.asarray(market, dtype=np.float64) - mean) / sd)
+        return (z @ v) / spread
 
     def release(self) -> None:
         """Hand this month's scratch GPU memory back; the nets carry over."""
@@ -233,5 +269,28 @@ def pick(forecasts: list[pl.DataFrame]) -> pl.DataFrame:
     errs = pl.concat([f.group_by("date").agg(pl.col("held_err").first()).with_columns(pl.lit(i).alias("run"))
                       for i, f in enumerate(forecasts)])  # fmt: skip
     best = errs.sort("held_err").group_by("date").agg(pl.col("run").first().alias("picked"))
+    out = [f.join(best.filter(pl.col("picked") == i), on="date") for i, f in enumerate(forecasts)]
+    return pl.concat(out).sort("date", "symbol")
+
+
+def pick_by_past(forecasts: list[pl.DataFrame]) -> pl.DataFrame:
+    """Per month, the run whose earlier forecasts had the lowest squared error.
+
+    Errors use each month's forecasts centered within the month against ``actual``, summed
+    over all earlier months (the same rule ``walk.combine`` uses for the trees' strength).
+    Adds ``picked`` (the index of the chosen run); the first month picks run 0.
+    """
+    errs = []
+    for i, f in enumerate(forecasts):
+        c = f.drop_nulls("actual").with_columns(
+            (pl.col("correction") - pl.col("correction").mean().over("date")).alias("_f")
+        )
+        e = c.group_by("date").agg(((pl.col("actual") - pl.col("_f")) ** 2).sum().alias("e"))
+        errs.append(e.sort("date").with_columns(pl.col("e").cum_sum().shift(1).fill_null(0.0)
+                                                .alias("past"), pl.lit(i).alias("run")))  # fmt: skip
+    table = pl.concat(errs)
+    best = table.sort(["past", "run"]).group_by("date").agg(pl.col("run").first().alias("picked"))
+    months = forecasts[0].select("date").unique()
+    best = months.join(best, on="date", how="left").with_columns(pl.col("picked").fill_null(0))
     out = [f.join(best.filter(pl.col("picked") == i), on="date") for i, f in enumerate(forecasts)]
     return pl.concat(out).sort("date", "symbol")

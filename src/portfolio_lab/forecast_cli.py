@@ -18,7 +18,7 @@ from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
 from portfolio_lab.research.characteristics import build as characteristics
 from portfolio_lab.research.forecaster import dataset, grade, walk
-from portfolio_lab.research.forecaster.conditioned import CondNetsPart, pick
+from portfolio_lab.research.forecaster.conditioned import CondNetsPart, pick, pick_by_past
 from portfolio_lab.research.forecaster.nets import NetsPart
 from portfolio_lab.research.forecaster.trees import TreesPart
 from portfolio_lab.research.panel import Panel
@@ -75,6 +75,9 @@ def run_cmd(  # noqa: PLR0913, PLR0917 - one option per CLI flag
     arch: Annotated[str, typer.Option(help="Cond nets: stock, bilinear or film.")] = "bilinear",
     exposures: Annotated[int, typer.Option(help="Cond nets: exposures per stock.")] = 4,
     market_penalty: Annotated[float, typer.Option(help="Cond nets: market-side L2.")] = 1e-3,
+    factors: Annotated[
+        int, typer.Option(help="Cond nets: market inputs as N factors (-1 = all, scaled).")
+    ] = 0,
     stock_only: Annotated[bool, typer.Option(help="Nets or trees: stock inputs only.")] = False,
     yearly_fresh: Annotated[bool, typer.Option(help="Nets: fresh weights once a year.")] = False,
     dispersion: Annotated[
@@ -89,7 +92,8 @@ def run_cmd(  # noqa: PLR0913, PLR0917 - one option per CLI flag
     year, month = (int(p) for p in start.split("-"))
     if model == "cond":
         part2 = CondNetsPart(device, arch=arch, exposures=exposures,
-                             market_penalty=market_penalty, seed=seed)  # fmt: skip
+                             market_penalty=market_penalty, seed=seed,
+                             factors=factors or None)  # fmt: skip
     elif model == "nets":
         part2 = NetsPart(device, seed=seed, dispersion=dispersion, market=not stock_only,
                          yearly_fresh=yearly_fresh)  # fmt: skip
@@ -114,11 +118,14 @@ def run_cmd(  # noqa: PLR0913, PLR0917 - one option per CLI flag
 def pick_cmd(
     tags: Annotated[list[str], typer.Argument(help="Runs to choose between, month by month.")],
     out: Annotated[str, typer.Option(help="Tag for the picked forecasts.")] = "picked",
+    by: Annotated[
+        str, typer.Option(help="held (held-out rows) or past (earlier forecasts).")
+    ] = "held",
 ) -> None:
-    """Choose each month's run by the nets' held-out error at that month's fit."""
+    """Choose each month's run: by held-out error at its fit, or by earlier forecast error."""
     folder = DataPaths(get_settings().data_dir).forecaster
     runs = [pl.read_parquet(folder / _name("forecasts", t, "parquet")) for t in tags]
-    picked = pick(runs)
+    picked = pick_by_past(runs) if by == "past" else pick(runs)
     write_parquet_atomic(picked.drop("picked"), folder / _name("forecasts", out, "parquet"))
     share = picked.group_by("date").agg(pl.col("picked").first())["picked"].value_counts()
     typer.echo(f"months picked per run ({', '.join(tags)}): {share.sort('picked').rows()}")
