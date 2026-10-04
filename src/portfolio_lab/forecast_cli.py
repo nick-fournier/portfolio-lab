@@ -18,6 +18,8 @@ from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
 from portfolio_lab.research.characteristics import build as characteristics
 from portfolio_lab.research.forecaster import dataset, grade, walk
+from portfolio_lab.research.forecaster.nets import NetsPart
+from portfolio_lab.research.forecaster.trees import TreesPart
 from portfolio_lab.research.panel import Panel
 
 forecast_app = typer.Typer(help="Next-month stock forecaster (research).")
@@ -54,7 +56,7 @@ def dataset_cmd() -> None:
 
 
 @forecast_app.command("run")
-def run_cmd(
+def run_cmd(  # noqa: PLR0913, PLR0917 - one option per CLI flag
     start: Annotated[str, typer.Option(help="First month to forecast (YYYY-MM).")] = (
         f"{walk.FIRST_FORECAST:%Y-%m}"
     ),
@@ -62,10 +64,15 @@ def run_cmd(
     threads: Annotated[int, typer.Option(help="CPU threads for the trees.")] = 6,
     fresh: Annotated[bool, typer.Option(help="Discard earlier forecasts and start over.")] = False,
     components: Annotated[
-        int | None, typer.Option(help="Fix part 1's component count (default: k-fold).")
+        int | None,
+        typer.Option(help="Fix part 1's component count (default: k-fold; 0 = trees alone)."),
     ] = None,
     sample: Annotated[float, typer.Option(help="Share of rows and columns each tree draws.")] = 1.0,
     seed: Annotated[int, typer.Option(help="Random seed for the trees.")] = 0,
+    model: Annotated[str, typer.Option(help="Part 2: trees or nets.")] = "trees",
+    dispersion: Annotated[
+        bool, typer.Option(help="Add last month's return dispersion to the trees' inputs.")
+    ] = False,
     tag: Annotated[str, typer.Option(help="Variant name, saved as forecasts-<tag>.")] = "",
 ) -> None:
     """Walk forward: refit every month on all earlier months and forecast it."""
@@ -73,6 +80,10 @@ def run_cmd(
     path = folder / _name("forecasts", tag, "parquet")
     done = pl.read_parquet(path) if path.exists() and not fresh else None
     year, month = (int(p) for p in start.split("-"))
+    if model == "nets":
+        part2 = NetsPart(device, seed=seed, dispersion=dispersion)
+    else:
+        part2 = TreesPart(device, threads, sample, seed, dispersion=dispersion)
 
     def save(frame: pl.DataFrame) -> None:
         nonlocal done
@@ -81,8 +92,7 @@ def run_cmd(
 
     walk.run(
         pl.read_parquet(folder / "stocks.parquet"), pl.read_parquet(folder / "market.parquet"),
-        start=date(year, month, 1), device=device, components=components,
-        trees={"threads": threads, "sample": sample, "seed": seed},
+        start=date(year, month, 1), components=components, part2=part2,
         skip=set(done["date"].unique().to_list()) if done is not None else None, save=save,
     )  # fmt: skip
     typer.echo(f"forecasts: {path}")

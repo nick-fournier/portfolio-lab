@@ -6,6 +6,7 @@ import pytest
 
 from portfolio_lab.research.forecaster import grade, linear, walk
 from portfolio_lab.research.forecaster.dataset import INPUTS, _expanding_pct
+from portfolio_lab.research.forecaster.trees import TreesPart
 
 
 def _month_end(k: int) -> date:
@@ -67,7 +68,7 @@ def test_walk_forward_uses_only_earlier_months():
     stocks, market = _stocks(), _market()
     saved = []
     start = _month_end(30)
-    out = walk.run(stocks, market, start=start, trees={"threads": 1}, skip={_month_end(31)},
+    out = walk.run(stocks, market, start=start, part2=TreesPart(threads=1), skip={_month_end(31)},
                    save=saved.append)  # fmt: skip
     assert sorted(out["date"].unique().to_list()) == [_month_end(m) for m in (30, *range(32, 36))]
     assert len(saved) == 5
@@ -76,7 +77,7 @@ def test_walk_forward_uses_only_earlier_months():
         pl.when(pl.col("date") > start).then(pl.col("y") * -3).otherwise(pl.col("y")).alias("y")
     )
     later = {_month_end(m) for m in range(31, 36)}
-    again = walk.run(future, market, start=start, trees={"threads": 1}, skip=later)
+    again = walk.run(future, market, start=start, part2=TreesPart(threads=1), skip=later)
     first = out.filter(pl.col("date") == start)
     assert np.allclose(first["linear"].to_numpy(), again["linear"].to_numpy())
     assert np.allclose(first["correction"].to_numpy(), again["correction"].to_numpy())
@@ -84,12 +85,20 @@ def test_walk_forward_uses_only_earlier_months():
     assert graded["ic"].mean() > 0.2
 
 
+def test_trees_alone_forecast_the_target_directly():
+    stocks, market = _stocks(noise=0.2), _market()
+    out = walk.run(stocks, market, start=_month_end(34), components=0, part2=TreesPart(threads=1))
+    assert (out["linear"] == 0).all() and (out["components"] == 0).all()
+    combined = walk.combine(out)
+    assert (combined["forecast"] == combined["correction"]).all()
+
+
 def test_latest_month_without_a_target_is_forecast():
     stocks = _stocks().with_columns(
         pl.when(pl.col("date") == _month_end(35)).then(None).otherwise(pl.col(c)).alias(c)
         for c in ("actual", "y")
     )
-    out = walk.run(stocks, _market(), start=_month_end(35), trees={"threads": 1})
+    out = walk.run(stocks, _market(), start=_month_end(35), part2=TreesPart(threads=1))
     assert out.height == 300 and out["linear"].is_not_null().all()
 
 
@@ -133,3 +142,15 @@ def test_nearly_perfect_forecasts_grade_nearly_perfectly():
 
 def test_expanding_percentile_sees_only_the_past():
     assert _expanding_pct([3.0, 1.0, 2.0, 5.0]) == [1.0, 0.5, 2 / 3, 1.0]
+
+
+def test_nets_learn_a_planted_signal_and_warm_start():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.forecaster.nets import NetsPart  # noqa: PLC0415 - optional
+
+    stocks, market = _stocks(noise=0.2), _market()
+    part2 = NetsPart(seed=0)
+    out = walk.run(stocks, market, start=_month_end(33), components=0, part2=part2)
+    assert len(part2.nets) == 5  # carried over from month to month
+    graded = grade.grade_months(walk.combine(out))
+    assert graded["ic"].mean() > 0.3

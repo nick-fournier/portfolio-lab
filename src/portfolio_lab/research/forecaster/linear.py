@@ -77,12 +77,15 @@ def fit(months: list, sums: dict, components: int | None = None) -> tuple[np.nda
     Args:
         months: The training month ends.
         sums: :func:`month_sums` per month end.
-        components: A fixed count from :data:`COMPONENTS` instead of the k-fold choice.
+        components: A fixed count from :data:`COMPONENTS` instead of the k-fold choice, or
+            0 for no linear part (all coefficients 0).
 
     Returns:
         The coefficients (intercept first) and the number of components used.
     """
     everything = total([sums[d] for d in months])
+    if components == 0:
+        return np.zeros(len(everything[1])), 0
     if components is not None:
         return paths(everything)[:, COMPONENTS.index(components)], components
     err = np.zeros(len(COMPONENTS))
