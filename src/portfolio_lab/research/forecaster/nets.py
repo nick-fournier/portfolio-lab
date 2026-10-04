@@ -155,7 +155,12 @@ class NetsPart:
         return np.mean(outs, axis=0).astype(np.float64)
 
     def release(self) -> None:
-        """Nothing to free: the nets carry over to next month."""
+        """Hand this month's scratch GPU memory back so other jobs can share the GPU.
+
+        The nets themselves carry over to next month.
+        """
+        if self.device == "cuda":
+            self.torch.cuda.empty_cache()
 
 
 def _copy(net) -> dict:
