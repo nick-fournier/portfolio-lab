@@ -38,12 +38,17 @@ class NetsPart:
         device: ``cpu`` or ``cuda``.
         seed: Seed for the nets' weights, batches and the held-out years.
         dispersion: Add last month's return dispersion to the market inputs.
+        market: False leaves the market inputs out (stock inputs only).
+        yearly_fresh: Start from fresh weights once a year (when a new calendar year
+            enters the training data) instead of warm-starting throughout.
     """
 
-    def __init__(self, device: str = "cpu", seed: int = 0, dispersion: bool = False):
+    def __init__(self, device: str = "cpu", seed: int = 0, dispersion: bool = False,
+                 market: bool = True, yearly_fresh: bool = False):  # fmt: skip
         import torch  # noqa: PLC0415 - research only; not a dependency of production
 
         self.torch, self.device, self.seed, self.dispersion = torch, device, seed, dispersion
+        self.market, self.yearly_fresh, self.last_year = market, yearly_fresh, None
         self.nets: list = []
         self.scale: tuple | None = None
         self.passes: list[int] = []
@@ -58,6 +63,8 @@ class NetsPart:
         z = np.array(x, dtype=np.float32)
         n = len(INPUTS)
         z[:, n:] = (z[:, n:] - mean) / sd
+        if not self.market:
+            z = z[:, :n]
         return self.torch.as_tensor(np.nan_to_num(z), device=self.device)
 
     def _new_net(self, width: int, k: int):
@@ -90,6 +97,10 @@ class NetsPart:
         target = torch.as_tensor(np.asarray(residual, dtype=np.float32), device=self.device)
         fit_rows = torch.as_tensor(np.flatnonzero(~held), device=self.device)
         held_rows = torch.as_tensor(np.flatnonzero(held), device=self.device)
+        latest = int(years.max())
+        if self.yearly_fresh and latest != self.last_year:
+            self.nets = []
+        self.last_year = latest
         first = not self.nets
         if first:
             self.nets = [self._new_net(z.shape[1], k) for k in range(NETS)]
