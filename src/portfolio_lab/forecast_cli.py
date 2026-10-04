@@ -18,8 +18,6 @@ from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
 from portfolio_lab.research.characteristics import build as characteristics
 from portfolio_lab.research.forecaster import dataset, grade, walk
-from portfolio_lab.research.forecaster.nets import NetsPart
-from portfolio_lab.research.forecaster.trees import TreesPart
 from portfolio_lab.research.panel import Panel
 
 forecast_app = typer.Typer(help="Next-month stock forecaster (research).")
@@ -56,34 +54,19 @@ def dataset_cmd() -> None:
 
 
 @forecast_app.command("run")
-def run_cmd(  # noqa: PLR0913, PLR0917 - one option per CLI flag
+def run_cmd(
     start: Annotated[str, typer.Option(help="First month to forecast (YYYY-MM).")] = (
         f"{walk.FIRST_FORECAST:%Y-%m}"
     ),
     device: Annotated[str, typer.Option(help="Where the trees are fitted: cpu or cuda.")] = "cpu",
     threads: Annotated[int, typer.Option(help="CPU threads for the trees.")] = 6,
     fresh: Annotated[bool, typer.Option(help="Discard earlier forecasts and start over.")] = False,
-    components: Annotated[
-        int | None,
-        typer.Option(help="Fix part 1's component count (default: k-fold; 0 = trees alone)."),
-    ] = None,
-    sample: Annotated[float, typer.Option(help="Share of rows and columns each tree draws.")] = 1.0,
-    seed: Annotated[int, typer.Option(help="Random seed for the trees.")] = 0,
-    model: Annotated[str, typer.Option(help="Part 2: trees or nets.")] = "trees",
-    dispersion: Annotated[
-        bool, typer.Option(help="Add last month's return dispersion to the trees' inputs.")
-    ] = False,
-    tag: Annotated[str, typer.Option(help="Variant name, saved as forecasts-<tag>.")] = "",
 ) -> None:
     """Walk forward: refit every month on all earlier months and forecast it."""
     folder = DataPaths(get_settings().data_dir).forecaster
-    path = folder / _name("forecasts", tag, "parquet")
+    path = folder / "forecasts.parquet"
     done = pl.read_parquet(path) if path.exists() and not fresh else None
     year, month = (int(p) for p in start.split("-"))
-    if model == "nets":
-        part2 = NetsPart(device, seed=seed, dispersion=dispersion)
-    else:
-        part2 = TreesPart(device, threads, sample, seed, dispersion=dispersion)
 
     def save(frame: pl.DataFrame) -> None:
         nonlocal done
@@ -92,7 +75,7 @@ def run_cmd(  # noqa: PLR0913, PLR0917 - one option per CLI flag
 
     walk.run(
         pl.read_parquet(folder / "stocks.parquet"), pl.read_parquet(folder / "market.parquet"),
-        start=date(year, month, 1), components=components, part2=part2,
+        start=date(year, month, 1), device=device, threads=threads,
         skip=set(done["date"].unique().to_list()) if done is not None else None, save=save,
     )  # fmt: skip
     typer.echo(f"forecasts: {path}")
@@ -101,11 +84,10 @@ def run_cmd(  # noqa: PLR0913, PLR0917 - one option per CLI flag
 @forecast_app.command("grade")
 def grade_cmd(
     since: Annotated[int, typer.Option(help="First year graded.")] = walk.FIRST_GRADED,
-    tag: Annotated[str, typer.Option(help="Variant to grade (see run --tag).")] = "",
 ) -> None:
     """Grade the forecasts on unseen months (research.forecaster.grade)."""
     folder = DataPaths(get_settings().data_dir).forecaster
-    combined = walk.combine(pl.read_parquet(folder / _name("forecasts", tag, "parquet")))
+    combined = walk.combine(pl.read_parquet(folder / "forecasts.parquet"))
     graded = combined.filter(pl.col("date").dt.year() >= since)
     out = grade.report(graded)
     out["strength_by_year"] = (
@@ -114,7 +96,7 @@ def grade_cmd(
         .sort("year")
         .to_dicts()
     )
-    (folder / _name("grades", tag, "json")).write_text(json.dumps(out, indent=1, default=str))
+    (folder / "grades.json").write_text(json.dumps(out, indent=1, default=str))
     sizes = " / ".join(f"{v:.3f}" for v in out["ic_by_size"].values())
     typer.echo(
         f"{out['first']} to {out['last']} ({out['months']} months)\n"
@@ -124,8 +106,3 @@ def grade_cmd(
         f"{out['slope_winners']:.2f}), R² {out['r2']:+.3%}\n"
         f"best-worst tenth {out['tenth_yr']:.1%}/yr, IC small/mid/large {sizes}"
     )
-
-
-def _name(stem: str, tag: str, suffix: str) -> str:
-    """``stem.suffix``, or ``stem-tag.suffix`` for a named variant."""
-    return f"{stem}-{tag}.{suffix}" if tag else f"{stem}.{suffix}"

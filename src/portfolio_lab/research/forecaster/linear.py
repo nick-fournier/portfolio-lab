@@ -71,23 +71,17 @@ def errors(coef: np.ndarray, sums: Sums) -> np.ndarray:
     return s - 2 * c @ coef + np.einsum("ik,ij,jk->k", coef, g, coef)
 
 
-def fit(months: list, sums: dict, components: int | None = None) -> tuple[np.ndarray, int]:
+def fit(months: list, sums: dict) -> tuple[np.ndarray, int]:
     """Coefficients fitted on all ``months``, with the component count chosen by k-fold.
 
     Args:
         months: The training month ends.
         sums: :func:`month_sums` per month end.
-        components: A fixed count from :data:`COMPONENTS` instead of the k-fold choice, or
-            0 for no linear part (all coefficients 0).
 
     Returns:
-        The coefficients (intercept first) and the number of components used.
+        The coefficients (intercept first) and the number of components chosen.
     """
     everything = total([sums[d] for d in months])
-    if components == 0:
-        return np.zeros(len(everything[1])), 0
-    if components is not None:
-        return paths(everything)[:, COMPONENTS.index(components)], components
     err = np.zeros(len(COMPONENTS))
     for year in sorted({d.year for d in months}):
         held_months = [d for d in months if d.year == year]

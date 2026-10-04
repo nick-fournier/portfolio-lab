@@ -1,7 +1,7 @@
 """Next-month stock forecaster: each stock's return from this month end to the next.
 
-The reference model (locked 2026-10-03), for all stocks, refit every month on all earlier
-months:
+The front-runner model (still being tested; docs/forecaster-log.md has what else was tried),
+for all stocks, refit every month on all earlier months:
 
 1. ``dataset``: 103 stock inputs as within-month percentiles; the target is the return
    minus the month's average across stocks, capped at the month's 0.1%/99.9% for fitting.

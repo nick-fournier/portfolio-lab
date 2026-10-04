@@ -1,0 +1,82 @@
+# Forecaster log
+
+What was tried for the next-month stock forecaster (`research.forecaster`), and why each
+variant is or is not the front runner. Newest decisions first within each section.
+
+## How variants are judged
+
+- **Target:** each stock's return from one month end to the next, minus that month's
+  average across stocks. All stocks. Capped at the month's 0.1%/99.9% for fitting.
+- **Graded:** unseen months only, 2009-01 to 2026-08 (212 months), every model refit each
+  month on all earlier months. Unless noted.
+- **Measures:** IC (rank correlation of forecast and outcome, averaged over months) and
+  its t-statistic; years with a positive IC (of 18); slope of outcome on forecast across
+  20 forecast groups (1 = right-sized forecasts); R² against forecasting the average;
+  best-minus-worst forecast tenth, per year.
+- **Noise:** the same model rerun with 5 different tree seeds moves IC by ±0.0022 (sd),
+  slope ±0.04, best−worst tenth ±0.9%/yr. A difference under about **0.004 in IC** or
+  **2%/yr in the tenth gap** is not evidence of a better model.
+
+## Front runner
+
+PLS (1 component, chosen by k-fold over past years) on the 103 inputs and each input ×
+VIX and × last month's return dispersion, plus XGBoost trees on its residual (103 stock +
+115 market inputs; 31 leaves, ≥2,000 stock-months per leaf, learning rate 0.05, 400
+rounds), forecast = linear + k × trees with k chosen walk-forward (0.25 every month).
+
+| Run | IC | t | Years | Slope | R² | Tenth /yr |
+|---|---|---|---|---|---|---|
+| GPU-binned trees (current code) | 0.030 | 3.3 | 15 | 0.57 | +0.06% | 10.5% |
+| CPU-binned trees | 0.031 | 3.5 | 16 | 0.56 | +0.04% | 10.8% |
+
+## Tried and not adopted
+
+### 2026-10-03: run list T1–T4 (code on branch `forecast-experiments`)
+
+| Variant | IC | t | Years | Slope | R² | Tenth /yr | Why not |
+|---|---|---|---|---|---|---|---|
+| T1: 5 seeds, trees draw 80% rows + 80% columns, each run | 0.029–0.035 | 3.2–3.7 | 15–16 | 0.57–0.67 | +0.05–0.08% | 10.3–12.3% | Measures noise (see above) |
+| T1: average of the 5 seeds' trees | 0.033 | 3.5 | 16 | 0.65 | +0.07% | 11.3% | Gain within noise; 5× the research runtime. Revisit for production, where it is cheap |
+| T2: PLS components fixed at 3 | 0.023 | 2.9 | 13 | 0.31 | −0.24% | 11.1% | Lower IC, forecasts ~2× too big |
+| T2: PLS components fixed at 5 | 0.026 | 3.9 | 16 | 0.26 | −0.38% | 11.3% | Same; a richer linear base does not help under the trees |
+| T3: trees alone, no linear part (+ dispersion input) | 0.021 | 2.4 | 15 | 0.24 | −0.66% | 10.9% | IC 0.009 lower (beyond noise); large-stock IC 0.008. The linear base does real work |
+| T4: neural nets alone (NN3 32-16-8, 5 nets, warm start monthly), first attempt | 0.008 | 0.8 | 12 | 0.01 | −1.24% | −1.5% | Invalid: nets never trained (early stopping on 2 noisy held-out years stopped at pass 0–1; untrained nets output noise) |
+| T4, training fixed (output layer starts at 0; held-out = random 20% of rows) | 0.015 | 1.6 | 13 | 0.07 | −2.50% | 1.5% | Overfits: ranks a little, forecasts ~14× too big. Untested suspects: warm start piling passes onto old months; month-constant market inputs |
+
+Linear part alone with 1–10 components (no trees): more components give a steadier but
+lower IC (0.029 → 0.023; t 3.1 → 4.0) and a wider tenth gap (5% → 9%), but forecasts too
+big (slope 0.49 → 0.18). The k-fold picks 1 component in every month because it scores
+squared error.
+
+### 2026-10-02/03: building the front runner (2009–2026 unless noted)
+
+| Variant | IC | t | Years | Slope | R² | Tenth /yr | Why not |
+|---|---|---|---|---|---|---|---|
+| PLS only (103 inputs, no interactions) | 0.031 | 3.7 | 14 | 0.27 | −0.11% | 3.0% | Forecasts ~4× too big; the old baseline |
+| + interactions with VIX and dispersion (model B) | 0.029 | 3.0 | 15 | 0.49 | −0.06% | 5.2% | Became the front runner's linear part |
+| B with the interactions scaled instead of PLS'd | 0.024 | 2.8 | 14 | 0.48 | −0.04% | 0.5% | Lower IC and spread |
+| Interactions with 6 market inputs | 0.008 | 0.8 | 11 | 0.08 | −0.56% | 0.9% | Overfits |
+| 6 market inputs, scaled | 0.012 | 1.4 | 11 | 0.32 | −0.04% | 2.7% | Overfits |
+| Recency weighting, half-life 36 months | 0.010 | 1.2 | 13 | −0.04 | −0.23% | −3.9% | Discards history the model needs |
+| Recency weighting, half-life 60 months | 0.018 | 2.2 | 15 | 0.06 | −0.15% | −2.1% | Same |
+| Recency weighting, half-life 120 months | 0.026 | 3.1 | 14 | 0.19 | −0.12% | 0.2% | Same |
+| Trees (scikit-learn) refit each January on B, strength 0.25 | 0.038 | 4.0 | 16 | 0.58 | +0.03% | 11.6% | Not adopted only because the model must refit monthly; beats the monthly front runner by more than the noise. Open question: yearly refit or the scikit-learn trees? |
+| Same, strength 0.5 / 1.0 | 0.036 / 0.030 | 4.1 / 3.4 | 15 / 15 | 0.42 / 0.22 | −0.05% / −0.72% | 13.0% / 12.1% | Strengths above 0.25 make forecasts too big |
+| Trees (scikit-learn) refit each January on PLS only, strength 0.25 | 0.037 | 4.5 | 15 | 0.41 | −0.01% | 7.9% | Superseded by trees on B |
+| B + trees refit monthly, strength 0.5 / 1.0 | 0.028 / 0.022 | 3.3 / 2.7 | 16 / 15 | 0.40 / 0.22 | −0.04% / −0.79% | 11.2% / 11.7% | Same; 0.25 is chosen walk-forward |
+| Forecaster inside production's 100-stock health pool | 0.013 | | | | | | Below trailing returns (AR(1), 0.018) in that pool: the forecaster is for picking from the whole market |
+
+### 2026-10-02: linear methods and tuning (graded 2004–2026, 23 years)
+
+| Variant | IC | t | Years | Slope | Tenth /yr | Why not |
+|---|---|---|---|---|---|---|
+| 103 inputs, least squares | 0.024 | 4.5 | 18/23 | 0.23 | 8.6% | Forecasts far too big (R² −0.40%) |
+| 103 inputs, true Huber | 0.026 | 4.6 | 18/23 | 0.23 | 8.6% | Same as capping the target; capping kept |
+| 103 inputs, shrink each weight by its certainty | 0.026 | 4.6 | 18/23 | 0.25 | 6.5% | Below PLS |
+| 103 inputs, LASSO | 0.016 | 2.7 | 15/23 | 0.41 | 3.7% | Drops inputs that matter |
+| 103 inputs, PCA regression | 0.028 | 3.6 | 18/23 | 0.28 | 1.2% | Below PLS on the tenth gap |
+| 103 inputs, PLS | 0.029 | 4.2 | 19/23 | 0.27 | 4.7% | Adopted |
+
+Tuning the component count: choosing on the latest 12 months was too noisy; forward
+windows (last 60/120 months) picked sparse models; k-fold over all past calendar years
+was kept. Training on all past months beat the latest 60 months.

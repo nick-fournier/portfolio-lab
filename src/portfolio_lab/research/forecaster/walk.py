@@ -10,6 +10,7 @@ month as the one with the lowest squared error (each part demeaned within the mo
 against ``actual``) summed over all earlier forecast months.
 """
 
+import gc
 import logging
 import time
 from collections.abc import Callable
@@ -20,7 +21,7 @@ import polars as pl
 
 from portfolio_lab.research.forecaster import linear
 from portfolio_lab.research.forecaster.dataset import INPUTS
-from portfolio_lab.research.forecaster.trees import TreesPart
+from portfolio_lab.research.forecaster.trees import Trees
 
 log = logging.getLogger(__name__)
 
@@ -34,10 +35,9 @@ STRENGTHS = (0.0, 0.25, 0.5, 1.0)
 def run(
     stocks: pl.DataFrame,
     market: pl.DataFrame,
-    *,
     start: date = FIRST_FORECAST,
-    components: int | None = None,
-    part2=None,
+    device: str = "cpu",
+    threads: int = 6,
     skip: set[date] | None = None,
     save: Callable[[pl.DataFrame], None] | None = None,
 ) -> pl.DataFrame:
@@ -47,11 +47,8 @@ def run(
         stocks: From ``dataset.stocks`` (sorted by date).
         market: From ``dataset.market``.
         start: First month end to forecast.
-        components: Part 1's component count fixed instead of chosen by k-fold; 0 = no
-            part 1 (trees alone, on the target itself).
-        part2: What fits part 1's residual each month: ``trees.TreesPart`` (default, on
-            the CPU) or ``nets.NetsPart``; anything with ``dispersion``, ``arrays``,
-            ``fit``, ``predict`` and ``release``.
+        device: Where the trees are fitted: ``cpu`` or ``cuda``.
+        threads: CPU threads for the trees.
         skip: Month ends already forecast (left out).
         save: Called with each month's forecasts as soon as it is done.
 
@@ -73,14 +70,17 @@ def run(
                       np.nan_to_num(conditions["dispersion"].to_numpy()))  # fmt: skip
     y = stocks["y"].to_numpy()
     sums = {d: linear.month_sums(x[span[d]], y[span[d]]) for d in months if d in labeled}
-    part2 = part2 or TreesPart()
     market_cols = [c for c in market.columns if c.startswith(("env_", "mkt_"))]
-    if part2.dispersion:
-        market_cols.append("dispersion")
     xt = np.hstack([raw, conditions.select(market_cols).to_numpy()]).astype(np.float32)
     del raw
-    years = stocks["date"].dt.year().to_numpy()
-    fit_x, to_device = part2.arrays(xt)
+    fit_x, to_device, release = xt, np.asarray, None
+    if device == "cuda":  # keep the tree inputs on the GPU once; bin there each month
+        import cupy  # noqa: PLC0415 - GPU only; not installed on orange
+
+        fit_x, to_device = cupy.asarray(xt), cupy.asarray
+        # CuPy keeps freed blocks in its own pool, out of XGBoost's reach: hand them back
+        # after every month or the GPU fills up within a few years
+        release = cupy.get_default_memory_pool().free_all_blocks
     out = []
     for t in months:
         if t < start or t in (skip or set()):
@@ -88,22 +88,24 @@ def run(
         train = [d for d in months if d < t and d in labeled]
         rows = slice(0, span[t].start)  # every earlier month (sorted by date)
         tic = time.monotonic()
-        coef, k = linear.fit(train, sums, components)
-        residual = to_device(y[rows] - x[rows] @ coef)
-        part2.fit(fit_x[rows], residual, years[rows])
+        coef, k = linear.fit(train, sums)
+        trees = Trees(fit_x[rows], to_device(y[rows] - x[rows] @ coef), device, threads)
         here = span[t]
         month = (
             stocks[here]
             .select("date", "symbol", "actual", "size")
             .with_columns(
                 pl.Series("linear", x[here] @ coef),
-                pl.Series("correction", part2.predict(fit_x[here])),
+                pl.Series("correction", trees.predict(fit_x[here])),
                 pl.lit(k).alias("components"),
             )
         )
         log.info("forecast %s: %d stocks, %d components, %.0fs", t, month.height, k,
                  time.monotonic() - tic)  # fmt: skip
-        part2.release()
+        del trees
+        if release is not None:
+            gc.collect()
+            release()
         out.append(month)
         if save is not None:
             save(month)
@@ -111,14 +113,7 @@ def run(
 
 
 def combine(forecasts: pl.DataFrame) -> pl.DataFrame:
-    """``forecasts`` with ``strength`` and ``forecast`` (module docs).
-
-    With no part 1 (``components`` 0 throughout), the trees are the forecast as they are.
-    """
-    if "components" in forecasts.columns and (forecasts["components"] == 0).all():
-        return forecasts.drop_nulls("correction").with_columns(
-            pl.lit(1.0).alias("strength"), pl.col("correction").alias("forecast")
-        )
+    """``forecasts`` with ``strength`` and ``forecast`` (module docs)."""
     f = forecasts.drop_nulls(["linear", "correction"]).with_columns(
         (pl.col("linear") - pl.col("linear").mean().over("date")).alias("_b"),
         (pl.col("correction") - pl.col("correction").mean().over("date")).alias("_c"),
