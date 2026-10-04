@@ -75,7 +75,7 @@ def run_cmd(  # noqa: PLR0913, PLR0917 - one option per CLI flag
     arch: Annotated[str, typer.Option(help="Cond nets: stock, bilinear or film.")] = "bilinear",
     exposures: Annotated[int, typer.Option(help="Cond nets: exposures per stock.")] = 4,
     market_penalty: Annotated[float, typer.Option(help="Cond nets: market-side L2.")] = 1e-3,
-    stock_only: Annotated[bool, typer.Option(help="Nets: stock inputs only.")] = False,
+    stock_only: Annotated[bool, typer.Option(help="Nets or trees: stock inputs only.")] = False,
     yearly_fresh: Annotated[bool, typer.Option(help="Nets: fresh weights once a year.")] = False,
     dispersion: Annotated[
         bool, typer.Option(help="Add last month's return dispersion to the trees' inputs.")
@@ -95,7 +95,7 @@ def run_cmd(  # noqa: PLR0913, PLR0917 - one option per CLI flag
                          yearly_fresh=yearly_fresh)  # fmt: skip
     else:
         part2 = TreesPart(device, threads, sample, seed, dispersion=dispersion,
-                          yearly=yearly_trees)  # fmt: skip
+                          yearly=yearly_trees, stock_only=stock_only)  # fmt: skip
 
     def save(frame: pl.DataFrame) -> None:
         nonlocal done

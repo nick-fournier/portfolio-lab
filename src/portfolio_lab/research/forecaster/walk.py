@@ -77,7 +77,8 @@ def run(
     market_cols = [c for c in market.columns if c.startswith(("env_", "mkt_"))]
     if part2.dispersion:
         market_cols.append("dispersion")
-    market_cols = getattr(part2, "columns", None) or market_cols
+    if getattr(part2, "columns", None) is not None:  # the part chooses its market inputs
+        market_cols = part2.columns
     xt = np.hstack([raw, conditions.select(market_cols).to_numpy()]).astype(np.float32)
     del raw
     years = stocks["date"].dt.year().to_numpy()

@@ -67,8 +67,9 @@ class TreesPart:
     """
 
     def __init__(self, device: str = "cpu", threads: int = 6, sample: float = 1.0, seed: int = 0,
-                 dispersion: bool = False, yearly: bool = False):  # fmt: skip
+                 dispersion: bool = False, yearly: bool = False, stock_only: bool = False):  # fmt: skip
         self.device, self.dispersion, self.yearly, self.now = device, dispersion, yearly, None
+        self.columns = [] if stock_only else None  # [] = no market inputs
         self.settings = {"threads": threads, "sample": sample, "seed": seed}
         self.trees: Trees | None = None
         self._pool = None
