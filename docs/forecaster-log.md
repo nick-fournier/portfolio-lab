@@ -31,7 +31,7 @@ rounds), forecast = linear + k × trees with k chosen walk-forward (0.25 every m
 
 ## Tried and not adopted
 
-### 2026-10-03: run list T1–T4 (code on branch `forecast-experiments`)
+### 2026-10-03/04: run list T1–T4, T12 (code on branch `forecast-experiments`; plots: https://claude.ai/artifact/RUdTseT9iZrpnpD12TeTfC)
 
 | Variant | IC | t | Years | Slope | R² | Tenth /yr | Why not |
 |---|---|---|---|---|---|---|---|
@@ -42,6 +42,9 @@ rounds), forecast = linear + k × trees with k chosen walk-forward (0.25 every m
 | T3: trees alone, no linear part (+ dispersion input) | 0.021 | 2.4 | 15 | 0.24 | −0.66% | 10.9% | IC 0.009 lower (beyond noise); large-stock IC 0.008. The linear base does real work |
 | T4: neural nets alone (NN3 32-16-8, 5 nets, warm start monthly), first attempt | 0.008 | 0.8 | 12 | 0.01 | −1.24% | −1.5% | Invalid: nets never trained (early stopping on 2 noisy held-out years stopped at pass 0–1; untrained nets output noise) |
 | T4, training fixed (output layer starts at 0; held-out = random 20% of rows) | 0.015 | 1.6 | 13 | 0.07 | −2.50% | 1.5% | Overfits: ranks a little, forecasts ~14× too big. Untested suspects: warm start piling passes onto old months; month-constant market inputs |
+| T4 diagnostic: nets on stock inputs only (no market inputs), warm start | 0.024 | 4.8 | 15 | 0.25 | −0.30% | 7.6% | The month-constant market inputs drove the overfitting; still below the front runner on IC, size and spread |
+| T4 diagnostic: stock + market inputs, fresh nets once a year | 0.020 | 2.0 | 11 | 0.16 | −1.69% | 9.1% | Worse than warm start: warm start was not the problem |
+| T12: XGBoost trees refit each January (linear part monthly) | 0.028 | 2.9 | 15 | 0.36 | −0.09% | 3.9% | Worse than monthly refits; the walk-forward strength often dropped the trees (0–0.25). The yearly scikit-learn run's 0.033 is within noise, so neither the library nor yearly refits is worth adopting |
 
 Linear part alone with 1–10 components (no trees): more components give a steadier but
 lower IC (0.029 → 0.023; t 3.1 → 4.0) and a wider tenth gap (5% → 9%), but forecasts too
@@ -60,7 +63,7 @@ squared error.
 | Recency weighting, half-life 36 months | 0.010 | 1.2 | 13 | −0.04 | −0.23% | −3.9% | Discards history the model needs |
 | Recency weighting, half-life 60 months | 0.018 | 2.2 | 15 | 0.06 | −0.15% | −2.1% | Same |
 | Recency weighting, half-life 120 months | 0.026 | 3.1 | 14 | 0.19 | −0.12% | 0.2% | Same |
-| Trees (scikit-learn) refit each January on B, strength 0.25 | 0.038 | 4.0 | 16 | 0.58 | +0.03% | 11.6% | Not adopted only because the model must refit monthly; beats the monthly front runner by more than the noise. Open question: yearly refit or the scikit-learn trees? |
+| Trees (scikit-learn) refit each January on B, strength chosen walk-forward | 0.033 | 3.4 | 15 | 0.50 | −0.03% | 8.2% | Within noise of the front runner, and the model must refit monthly. (At a fixed 0.25, picked with hindsight: IC 0.038, slope 0.58, tenth 11.6%.) |
 | Same, strength 0.5 / 1.0 | 0.036 / 0.030 | 4.1 / 3.4 | 15 / 15 | 0.42 / 0.22 | −0.05% / −0.72% | 13.0% / 12.1% | Strengths above 0.25 make forecasts too big |
 | Trees (scikit-learn) refit each January on PLS only, strength 0.25 | 0.037 | 4.5 | 15 | 0.41 | −0.01% | 7.9% | Superseded by trees on B |
 | B + trees refit monthly, strength 0.5 / 1.0 | 0.028 / 0.022 | 3.3 / 2.7 | 16 / 15 | 0.40 / 0.22 | −0.04% / −0.79% | 11.2% / 11.7% | Same; 0.25 is chosen walk-forward |
