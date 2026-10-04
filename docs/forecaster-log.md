@@ -52,6 +52,9 @@ rounds), forecast = linear + k × trees with k chosen walk-forward (0.25 every m
 | Conditioned nets, bilinear on market PCA factors (4/8/15 factors × penalty 0.1/1.0; best: 8 factors, 1.0) | 0.029 | 5.2 | 15 | 0.30 | −0.15% | 9.2% | Strong penalty wins at every size; picked monthly by earlier accuracy: IC 0.027 |
 | Conditioned nets, bilinear on all 116 market inputs uncompressed, penalty 1.0 | 0.030 | 5.0 | 17 | 0.43 | −0.05% | 9.8% | Ties the front runner on IC, steadier (17/18 years), but forecasts too big (slope 0.43) and a slightly smaller spread; best of 7 tries. Candidate to build on, not adopted |
 | Average: front runner + all-116 bilinear nets, each centered per month, 50/50 (weight chosen walk-forward from 0–1 picked 0.5 every month) | 0.036 | 4.5 | 16 | 0.63 | +0.09% | 10.7% | Best so far: +0.006 IC over either alone (beyond noise), best slope and R²; the two forecasts correlate 0.51. Caveat: the nets are the best of 7 tries |
+| Same average with the nets at penalty 3 / 10 / the average of the 3 nets | 0.035 / 0.038 / 0.037 | 4.6 / 4.9 / 4.7 | 17 / 17 / 17 | 0.59 / 0.54 / 0.60 | +0.06% / +0.08% / +0.08% | 10.4% / 11.3% / 10.5% | The average holds whichever nets setting is used: not a lucky pick |
+| All-116 bilinear nets alone, penalty 3 / 10 | 0.027 / 0.032 | 4.2 / 5.0 | 16 / 15 | 0.36 / 0.32 | −0.13% / −0.11% | 9.2% / 9.9% | Penalty above 1 makes no clear difference |
+| Linear part + all-116 nets on its residual (in place of the trees) | 0.029 | 3.4 | 17 | 0.54 | −0.02% | 7.2% | Narrower spread than linear + trees: the trees are the better partner |
 
 Linear part alone with 1–10 components (no trees): more components give a steadier but
 lower IC (0.029 → 0.023; t 3.1 → 4.0) and a wider tenth gap (5% → 9%), but forecasts too
