@@ -35,9 +35,11 @@ STRENGTHS = (0.0, 0.25, 0.5, 1.0)
 def run(
     stocks: pl.DataFrame,
     market: pl.DataFrame,
+    *,
     start: date = FIRST_FORECAST,
     device: str = "cpu",
-    threads: int = 6,
+    components: int | None = None,
+    trees: dict | None = None,
     skip: set[date] | None = None,
     save: Callable[[pl.DataFrame], None] | None = None,
 ) -> pl.DataFrame:
@@ -48,7 +50,8 @@ def run(
         market: From ``dataset.market``.
         start: First month end to forecast.
         device: Where the trees are fitted: ``cpu`` or ``cuda``.
-        threads: CPU threads for the trees.
+        components: Part 1's component count fixed instead of chosen by k-fold.
+        trees: Extra settings for part 2 (``Trees``' ``threads``, ``sample``, ``seed``).
         skip: Month ends already forecast (left out).
         save: Called with each month's forecasts as soon as it is done.
 
@@ -88,21 +91,22 @@ def run(
         train = [d for d in months if d < t and d in labeled]
         rows = slice(0, span[t].start)  # every earlier month (sorted by date)
         tic = time.monotonic()
-        coef, k = linear.fit(train, sums)
-        trees = Trees(fit_x[rows], to_device(y[rows] - x[rows] @ coef), device, threads)
+        coef, k = linear.fit(train, sums, components)
+        residual = to_device(y[rows] - x[rows] @ coef)
+        model = Trees(fit_x[rows], residual, device, **(trees or {}))
         here = span[t]
         month = (
             stocks[here]
             .select("date", "symbol", "actual", "size")
             .with_columns(
                 pl.Series("linear", x[here] @ coef),
-                pl.Series("correction", trees.predict(fit_x[here])),
+                pl.Series("correction", model.predict(fit_x[here])),
                 pl.lit(k).alias("components"),
             )
         )
         log.info("forecast %s: %d stocks, %d components, %.0fs", t, month.height, k,
                  time.monotonic() - tic)  # fmt: skip
-        del trees
+        del model
         if release is not None:
             gc.collect()
             release()

@@ -67,7 +67,7 @@ def test_walk_forward_uses_only_earlier_months():
     stocks, market = _stocks(), _market()
     saved = []
     start = _month_end(30)
-    out = walk.run(stocks, market, start=start, threads=1, skip={_month_end(31)},
+    out = walk.run(stocks, market, start=start, trees={"threads": 1}, skip={_month_end(31)},
                    save=saved.append)  # fmt: skip
     assert sorted(out["date"].unique().to_list()) == [_month_end(m) for m in (30, *range(32, 36))]
     assert len(saved) == 5
@@ -76,7 +76,7 @@ def test_walk_forward_uses_only_earlier_months():
         pl.when(pl.col("date") > start).then(pl.col("y") * -3).otherwise(pl.col("y")).alias("y")
     )
     later = {_month_end(m) for m in range(31, 36)}
-    again = walk.run(future, market, start=start, threads=1, skip=later)
+    again = walk.run(future, market, start=start, trees={"threads": 1}, skip=later)
     first = out.filter(pl.col("date") == start)
     assert np.allclose(first["linear"].to_numpy(), again["linear"].to_numpy())
     assert np.allclose(first["correction"].to_numpy(), again["correction"].to_numpy())
@@ -89,7 +89,7 @@ def test_latest_month_without_a_target_is_forecast():
         pl.when(pl.col("date") == _month_end(35)).then(None).otherwise(pl.col(c)).alias(c)
         for c in ("actual", "y")
     )
-    out = walk.run(stocks, _market(), start=_month_end(35), threads=1)
+    out = walk.run(stocks, _market(), start=_month_end(35), trees={"threads": 1})
     assert out.height == 300 and out["linear"].is_not_null().all()
 
 

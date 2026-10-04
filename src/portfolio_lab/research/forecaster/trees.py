@@ -22,7 +22,15 @@ PARAMS = {
 class Trees:
     """Fitted trees and the input columns they use (ones with any value in training)."""
 
-    def __init__(self, x: np.ndarray, residual: np.ndarray, device: str = "cpu", threads: int = 6):
+    def __init__(
+        self,
+        x: np.ndarray,
+        residual: np.ndarray,
+        device: str = "cpu",
+        threads: int = 6,
+        sample: float = 1.0,
+        seed: int = 0,
+    ):
         """Fit on ``x`` (one row per stock-month, NaN for missing) against ``residual``.
 
         Args:
@@ -30,9 +38,12 @@ class Trees:
             residual: Part 1's residual on the capped target.
             device: ``cpu`` or ``cuda``.
             threads: CPU threads.
+            sample: Share of rows and of columns each tree draws (1 = all).
+            seed: Random seed for that draw.
         """
         self.keep = np.flatnonzero(_host(np.isfinite(x).any(axis=0)))
-        self.model = xgboost.XGBRegressor(**PARAMS, device=device, n_jobs=threads)
+        params = PARAMS | {"subsample": sample, "colsample_bytree": sample, "random_state": seed}
+        self.model = xgboost.XGBRegressor(**params, device=device, n_jobs=threads)
         self.model.fit(x[:, self.keep], residual)
 
     def predict(self, x: np.ndarray) -> np.ndarray:

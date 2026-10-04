@@ -61,10 +61,16 @@ def run_cmd(
     device: Annotated[str, typer.Option(help="Where the trees are fitted: cpu or cuda.")] = "cpu",
     threads: Annotated[int, typer.Option(help="CPU threads for the trees.")] = 6,
     fresh: Annotated[bool, typer.Option(help="Discard earlier forecasts and start over.")] = False,
+    components: Annotated[
+        int | None, typer.Option(help="Fix part 1's component count (default: k-fold).")
+    ] = None,
+    sample: Annotated[float, typer.Option(help="Share of rows and columns each tree draws.")] = 1.0,
+    seed: Annotated[int, typer.Option(help="Random seed for the trees.")] = 0,
+    tag: Annotated[str, typer.Option(help="Variant name, saved as forecasts-<tag>.")] = "",
 ) -> None:
     """Walk forward: refit every month on all earlier months and forecast it."""
     folder = DataPaths(get_settings().data_dir).forecaster
-    path = folder / "forecasts.parquet"
+    path = folder / _name("forecasts", tag, "parquet")
     done = pl.read_parquet(path) if path.exists() and not fresh else None
     year, month = (int(p) for p in start.split("-"))
 
@@ -75,7 +81,8 @@ def run_cmd(
 
     walk.run(
         pl.read_parquet(folder / "stocks.parquet"), pl.read_parquet(folder / "market.parquet"),
-        start=date(year, month, 1), device=device, threads=threads,
+        start=date(year, month, 1), device=device, components=components,
+        trees={"threads": threads, "sample": sample, "seed": seed},
         skip=set(done["date"].unique().to_list()) if done is not None else None, save=save,
     )  # fmt: skip
     typer.echo(f"forecasts: {path}")
@@ -84,10 +91,11 @@ def run_cmd(
 @forecast_app.command("grade")
 def grade_cmd(
     since: Annotated[int, typer.Option(help="First year graded.")] = walk.FIRST_GRADED,
+    tag: Annotated[str, typer.Option(help="Variant to grade (see run --tag).")] = "",
 ) -> None:
     """Grade the forecasts on unseen months (research.forecaster.grade)."""
     folder = DataPaths(get_settings().data_dir).forecaster
-    combined = walk.combine(pl.read_parquet(folder / "forecasts.parquet"))
+    combined = walk.combine(pl.read_parquet(folder / _name("forecasts", tag, "parquet")))
     graded = combined.filter(pl.col("date").dt.year() >= since)
     out = grade.report(graded)
     out["strength_by_year"] = (
@@ -96,7 +104,7 @@ def grade_cmd(
         .sort("year")
         .to_dicts()
     )
-    (folder / "grades.json").write_text(json.dumps(out, indent=1, default=str))
+    (folder / _name("grades", tag, "json")).write_text(json.dumps(out, indent=1, default=str))
     sizes = " / ".join(f"{v:.3f}" for v in out["ic_by_size"].values())
     typer.echo(
         f"{out['first']} to {out['last']} ({out['months']} months)\n"
@@ -106,3 +114,8 @@ def grade_cmd(
         f"{out['slope_winners']:.2f}), R² {out['r2']:+.3%}\n"
         f"best-worst tenth {out['tenth_yr']:.1%}/yr, IC small/mid/large {sizes}"
     )
+
+
+def _name(stem: str, tag: str, suffix: str) -> str:
+    """``stem.suffix``, or ``stem-tag.suffix`` for a named variant."""
+    return f"{stem}-{tag}.{suffix}" if tag else f"{stem}.{suffix}"
