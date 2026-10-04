@@ -96,14 +96,21 @@ def run(
         coef, k = linear.fit(train, sums, components)
         residual = to_device(y[rows] - x[rows] @ coef)
         part2.now = t
-        part2.fit(fit_x[rows], residual, years[rows])
         here = span[t]
+        if hasattr(part2, "linear_rows"):  # stacked parts need part 1's fit and forecast
+            part2.linear_rows, part2.linear_here = x[rows] @ coef, x[here] @ coef
+        part2.fit(fit_x[rows], residual, years[rows])
         month = (
             stocks[here]
             .select("date", "symbol", "actual", "size")
             .with_columns(
-                pl.Series("linear", x[here] @ coef),
                 pl.Series("correction", part2.predict(fit_x[here])),
+                pl.Series(
+                    "linear",
+                    getattr(part2, "base_here", None)
+                    if getattr(part2, "base_here", None) is not None
+                    else x[here] @ coef,
+                ),
                 pl.lit(k).alias("components"),
                 pl.lit(getattr(part2, "held_err", None), dtype=pl.Float64).alias("held_err"),
             )

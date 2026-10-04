@@ -20,6 +20,7 @@ from portfolio_lab.research.characteristics import build as characteristics
 from portfolio_lab.research.forecaster import dataset, grade, walk
 from portfolio_lab.research.forecaster.conditioned import CondNetsPart, pick, pick_by_past
 from portfolio_lab.research.forecaster.nets import NetsPart
+from portfolio_lab.research.forecaster.stack import StackPart
 from portfolio_lab.research.forecaster.trees import TreesPart
 from portfolio_lab.research.panel import Panel
 
@@ -90,7 +91,9 @@ def run_cmd(  # noqa: PLR0913, PLR0917 - one option per CLI flag
     path = folder / _name("forecasts", tag, "parquet")
     done = pl.read_parquet(path) if path.exists() and not fresh else None
     year, month = (int(p) for p in start.split("-"))
-    if model == "cond":
+    if model == "stack":
+        part2 = StackPart(device, threads, market_penalty=market_penalty, seed=seed)
+    elif model == "cond":
         part2 = CondNetsPart(device, arch=arch, exposures=exposures,
                              market_penalty=market_penalty, seed=seed,
                              factors=factors or None)  # fmt: skip
