@@ -56,6 +56,8 @@ rounds), forecast = linear + k × trees with k chosen walk-forward (0.25 every m
 | Same average, nets at penalty 1 with seeds 1 / 2 / 3; and at penalty 30 / 100 | 0.038 / 0.035 / 0.037; 0.035 / 0.034 | 4.7 / 4.5 / 4.7; 4.7 / 4.8 | 17 / 15 / 17; 16 / 17 | 0.58 / 0.58 / 0.56; 0.56 / 0.58 | +0.06% / +0.05% / +0.06%; +0.06% / +0.07% | 10.7% / 11.0% / 10.1%; 10.9% / 11.1% | Seed noise of the average: ±0.0013 IC. Nets alone: ±0.0024 between seeds, as big as the differences between penalties 1–10, so the penalty is fixed at 1; 30–100 drift toward the stock-only nets |
 | All-116 bilinear nets alone, penalty 3 / 10 | 0.027 / 0.032 | 4.2 / 5.0 | 16 / 15 | 0.36 / 0.32 | −0.13% / −0.11% | 9.2% / 9.9% | Penalty above 1 makes no clear difference |
 | Linear part + all-116 nets on its residual (in place of the trees) | 0.029 | 3.4 | 17 | 0.54 | −0.02% | 7.2% | Narrower spread than linear + trees: the trees are the better partner |
+| Linear + all-116 nets (50/50, no trees) | 0.035 | 4.4 | 17 | 0.59 | +0.02% | 8.6% | Same ranking as with the trees, but 2%/yr less spread and lower R²: the trees add the extremes, not ranking (averaging more net runs matches their IC gain, not their spread). Their gain is not concentrated in stocks with missing inputs |
+| Stack: (linear + all-116 nets) as main model, trees on its residual, strength walk-forward | 0.030 | 3.5 | 16 | 0.50 | +0.06% | 8.7% | Worse than the main model alone (0.035): after the nets, the residual is mostly noise. The trees work as an independent model next to the nets, not as a correction on top |
 
 Linear part alone with 1–10 components (no trees): more components give a steadier but
 lower IC (0.029 → 0.023; t 3.1 → 4.0) and a wider tenth gap (5% → 9%), but forecasts too
