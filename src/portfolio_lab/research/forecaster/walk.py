@@ -79,7 +79,8 @@ def run(
         market_cols.append("dispersion")
     if getattr(part2, "columns", None) is not None:  # the part chooses its market inputs
         market_cols = part2.columns
-    xt = np.hstack([raw, conditions.select(market_cols).to_numpy()]).astype(np.float32)
+    blocks = [raw, conditions.select(market_cols).to_numpy()] if market_cols else [raw]
+    xt = np.hstack(blocks).astype(np.float32)
     del raw
     years = stocks["date"].dt.year().to_numpy()
     if hasattr(part2, "row_months"):  # month index of every row, for month-wise batches
