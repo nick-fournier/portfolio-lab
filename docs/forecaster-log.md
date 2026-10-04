@@ -51,6 +51,7 @@ rounds), forecast = linear + k × trees with k chosen walk-forward (0.25 every m
 | Conditioned nets, FiLM on VIX + dispersion (4 settings, picked monthly) | 0.026 | 5.2 | 15 | 0.31 | −0.17% | 8.4% | No better than stock-only |
 | Conditioned nets, bilinear on market PCA factors (4/8/15 factors × penalty 0.1/1.0; best: 8 factors, 1.0) | 0.029 | 5.2 | 15 | 0.30 | −0.15% | 9.2% | Strong penalty wins at every size; picked monthly by earlier accuracy: IC 0.027 |
 | Conditioned nets, bilinear on all 116 market inputs uncompressed, penalty 1.0 | 0.030 | 5.0 | 17 | 0.43 | −0.05% | 9.8% | Ties the front runner on IC, steadier (17/18 years), but forecasts too big (slope 0.43) and a slightly smaller spread; best of 7 tries. Candidate to build on, not adopted |
+| Average: front runner + all-116 bilinear nets, each centered per month, 50/50 (weight chosen walk-forward from 0–1 picked 0.5 every month) | 0.036 | 4.5 | 16 | 0.63 | +0.09% | 10.7% | Best so far: +0.006 IC over either alone (beyond noise), best slope and R²; the two forecasts correlate 0.51. Caveat: the nets are the best of 7 tries |
 
 Linear part alone with 1–10 components (no trees): more components give a steadier but
 lower IC (0.029 → 0.023; t 3.1 → 4.0) and a wider tenth gap (5% → 9%), but forecasts too
