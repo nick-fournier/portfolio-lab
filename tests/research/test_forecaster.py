@@ -4,8 +4,9 @@ import numpy as np
 import polars as pl
 import pytest
 
-from portfolio_lab.research.forecaster import grade, linear, walk
+from portfolio_lab.research.forecaster import baseline, grade, linear, walk
 from portfolio_lab.research.forecaster.dataset import INPUTS, _expanding_pct
+from portfolio_lab.strategies.meanvar.forecast import ForecastSpec, forecast_one
 
 
 def _month_end(k: int) -> date:
@@ -167,3 +168,15 @@ def test_grinold_rescales_by_earlier_months_only():
     assert scales[-1] == pytest.approx(0.5, abs=0.03)
     ranks = out.group_by("date").agg(pl.corr("forecast", "raw_forecast", method="spearman"))
     assert ranks["forecast"].min() == pytest.approx(1.0)
+
+
+def test_production_baseline_matches_meanvars_trailing_return(make_panel):
+    panel = make_panel(days=300)
+    day = panel.dates[-1]
+    monthly = baseline.trailing(panel, [day]).sort("symbol")
+    close = panel.field("close")
+    i = panel.date_index[day]
+    for symbol, value in zip(monthly["symbol"], monthly["production"], strict=True):
+        prices = close[i - baseline.LOOKBACK + 1 : i + 1, panel.symbols.index(symbol)]
+        annual = forecast_one(prices, ForecastSpec("historical_mean"))
+        assert (1 + value) ** (252 / baseline.HORIZON) == pytest.approx(1 + annual)

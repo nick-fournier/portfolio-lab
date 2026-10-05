@@ -23,14 +23,14 @@ class Forecast:
     """Expected return from one of mean-variance's forecast models.
 
     Args:
-        model: ``ar1_logret``, ``arima320_price`` or ``historical_mean``.
+        model: ``historical_mean`` or ``arima320_price``.
         horizon: Forecast horizon in sessions.
         lookback: Sessions of history fitted.
         cache_dir: Forecast cache root, set by the runner (not a parameter).
         workers: Processes used for model fits (not a parameter).
     """
 
-    model: str = "ar1_logret"
+    model: str = "historical_mean"
     horizon: int = 21
     lookback: int = 252
     name: str = "forecast"

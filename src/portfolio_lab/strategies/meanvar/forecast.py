@@ -8,11 +8,9 @@ forecasts with an annual risk-free rate):
   it extrapolates recent trend). It is an AR(3) on second differences with no constant, so
   it is fitted by least squares; this matches statsmodels' maximum-likelihood fit (checked
   to 3 decimals on the coefficients) without its occasional convergence failures.
-- ``ar1_logret``: AR(1) on daily log returns, fitted by least squares (closed form, so it
-  can't fail to converge and gives the same answer on every CPU), forecast analytically
-  over the horizon. It replaced ARIMA(1,0,1) fitted by maximum likelihood, whose optimizer
-  failed on ~5% of real windows and converged differently on x86 and arm64.
-- ``historical_mean``: trailing geometric mean return, the textbook input with no forecast.
+- ``historical_mean`` (default): trailing geometric mean return, the textbook input with no
+  forecast. An AR(1) on daily log returns used to be the default; daily returns have almost
+  no memory, so it ranked stocks like the trailing mean and held the same portfolios (#52).
 
 Fits run in a process pool and are cached per (symbol, decision date), so re-running a
 backtest or refreshing it weekly only fits new dates. Failed fits are cached as NaN so
@@ -38,7 +36,7 @@ from portfolio_lab.research.dataview import DataView
 
 log = logging.getLogger(__name__)
 
-MODELS = ("arima320_price", "ar1_logret", "historical_mean")
+MODELS = ("arima320_price", "historical_mean")
 #: Share of the lookback window a symbol needs data for to be forecast.
 MIN_COVERAGE = 0.95
 TRADING_DAYS = 252
@@ -62,7 +60,7 @@ class ForecastSpec:
         lookback: Sessions of history fitted.
     """
 
-    model: str = "ar1_logret"
+    model: str = "historical_mean"
     horizon: int = 21
     lookback: int = TRADING_DAYS
 
@@ -74,20 +72,6 @@ class ForecastSpec:
     def cache_id(self) -> str:
         """Identifier of this model configuration, used to partition the cache."""
         return f"{self.model}-h{self.horizon}-l{self.lookback}-v{MODEL_VERSION}"
-
-
-def ar1_forecast_sum(returns: np.ndarray, horizon: int) -> float:
-    """Sum of the next ``horizon`` returns forecast by an AR(1) fitted with least squares.
-
-    Fits ``r[t] = c + phi * r[t-1]``; with long-run mean ``mu = c / (1 - phi)`` the k-step
-    forecast is ``mu + phi**k * (r[-1] - mu)``, so the sum over ``k = 1..horizon`` is
-    ``horizon * mu + (r[-1] - mu) * phi * (1 - phi**horizon) / (1 - phi)``. ``phi`` is
-    clipped to keep the process stationary.
-    """
-    phi, c = np.polyfit(returns[:-1], returns[1:], 1)
-    phi = float(np.clip(phi, -0.99, 0.99))
-    mu = c / (1 - phi)
-    return float(horizon * mu + (returns[-1] - mu) * phi * (1 - phi**horizon) / (1 - phi))
 
 
 def ar_diff_forecast(prices: np.ndarray, horizon: int, order: int = 3, d: int = 2) -> float:
@@ -128,14 +112,11 @@ def forecast_one(prices: np.ndarray, spec: ForecastSpec) -> float:
         try:
             if spec.model == "historical_mean":
                 annual = (prices[-1] / prices[0]) ** (TRADING_DAYS / (len(prices) - 1)) - 1
-            elif spec.model == "arima320_price":
+            else:  # arima320_price
                 expected = ar_diff_forecast(prices, spec.horizon)
                 if expected <= 0:
                     return float(MU_BOUNDS[0])  # extrapolated through zero: maximally bearish
                 annual = (expected / prices[-1]) ** (TRADING_DAYS / spec.horizon) - 1
-            else:  # ar1_logret
-                log_return = ar1_forecast_sum(np.diff(np.log(prices)), spec.horizon)
-                annual = np.exp(log_return * TRADING_DAYS / spec.horizon) - 1
         except (ValueError, np.linalg.LinAlgError):
             return np.nan
     return float(np.clip(annual, *MU_BOUNDS)) if np.isfinite(annual) else np.nan

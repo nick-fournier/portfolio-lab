@@ -106,7 +106,7 @@ def evaluate(
     Args:
         signal: An object with ``score(view, symbols) -> {symbol: score}`` and optionally a
             ``horizon`` in sessions (default :data:`HORIZON`; one of :data:`FREQUENCY`).
-        label: Name stored in the ``signal`` column (e.g. ``forecast (model=ar1_logret)``).
+        label: Name stored in the ``signal`` column (e.g. ``forecast (model=historical_mean)``).
         panel: The data.
         start: First evaluation date.
         pools: Keys of :data:`POOLS` to evaluate.

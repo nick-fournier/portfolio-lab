@@ -27,28 +27,6 @@ def test_historical_mean_is_annualized_geometric_growth():
     assert mu == pytest.approx((1 + GROWTH) ** 252 - 1)
 
 
-def test_ar1_closed_form_matches_recursion_and_recovers_parameters():
-    rng = np.random.default_rng(0)
-    phi, c, n = 0.5, 0.001, 20_000
-    r = np.zeros(n)
-    for t in range(1, n):
-        r[t] = c + phi * r[t - 1] + rng.normal(0, 0.01)
-    fitted_phi, fitted_c = np.polyfit(r[:-1], r[1:], 1)
-    assert fitted_phi == pytest.approx(phi, abs=0.02)
-    # The closed-form sum equals iterating the fitted model forward.
-    expected, prev = 0.0, r[-1]
-    for _ in range(21):
-        prev = fitted_c + fitted_phi * prev
-        expected += prev
-    assert forecast_mod.ar1_forecast_sum(r, 21) == pytest.approx(expected)
-
-
-def test_ar1_forecast_is_deterministic_and_bounded():
-    mu = forecast_one(_walk(), ForecastSpec("ar1_logret"))
-    assert np.isfinite(mu) and -0.99 <= mu <= 5.0
-    assert mu == forecast_one(_walk(), ForecastSpec("ar1_logret"))
-
-
 def test_legacy_arima_recovers_simulated_coefficients():
     # ARIMA(3,2,0) == AR(3) on second differences; least squares recovers the coefficients
     # and its forecast equals iterating them forward and integrating twice.
@@ -105,7 +83,7 @@ def test_forecaster_caches_in_memory_and_on_disk(tmp_path, monkeypatch):
     assert len(calls) == 3
     again = Forecaster(spec, tmp_path).forecast(asof, windows)  # new instance: loads the cache
     assert again == first and len(calls) == 3  # ...and cached, so it isn't refit
-    other_model = Forecaster(ForecastSpec("ar1_logret"), tmp_path)
+    other_model = Forecaster(ForecastSpec("arima320_price"), tmp_path)
     other_model.forecast(asof, {"AAA": windows["AAA"]})
     assert len(calls) == 4  # different model configuration, different cache
 
@@ -203,8 +181,8 @@ def test_solver_tolerance_is_cleaned_up():
 
 def test_label_shows_only_non_default_params():
     assert label(create("meanvar")) == "meanvar"
-    assert label(create("meanvar", model="historical_mean", top_n=50)) == (
-        "meanvar (model=historical_mean, top_n=50)"
+    assert label(create("meanvar", model="arima320_price", top_n=50)) == (
+        "meanvar (model=arima320_price, top_n=50)"
     )
 
 
