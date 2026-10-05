@@ -213,3 +213,22 @@ def test_learned_forecasts_use_the_latest_recent_month(tmp_path, monkeypatch):
     monkeypatch.setattr(lf, "_load", lambda: by_date)
     assert lf.at(date(2020, 3, 2)) == {"A": 2.0}
     assert lf.at(date(2020, 3, 20)) == {}  # too stale
+
+
+def test_black_litterman_moves_from_market_to_views_with_confidence():
+    import numpy as np  # noqa: PLC0415
+    import pandas as pd  # noqa: PLC0415
+
+    from portfolio_lab.strategies.meanvar.learned import black_litterman  # noqa: PLC0415
+
+    names = ["A", "B", "C"]
+    cov = pd.DataFrame(np.diag([0.04, 0.09, 0.16]), index=names, columns=names)
+    mv = pd.Series({"A": 3.0, "B": 2.0, "C": 1.0})
+    views = pd.Series({"A": 0.30, "B": -0.10, "C": 0.05})
+    prior = black_litterman(views, cov, mv, 2.0, 0.02, 0.0)
+    full = black_litterman(views, cov, mv, 2.0, 0.02, 1.0)
+    half = black_litterman(views, cov, mv, 2.0, 0.02, 0.5)
+    assert full.to_dict() == pytest.approx(views.to_dict(), abs=0.01)
+    for s in names:
+        lo, hi = sorted((prior[s], full[s]))
+        assert lo <= half[s] <= hi

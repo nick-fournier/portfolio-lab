@@ -15,7 +15,11 @@ from pypfopt.risk_models import CovarianceShrinkage
 
 log = logging.getLogger(__name__)
 
-OBJECTIVES = ("max_sharpe", "min_volatility", "max_quadratic_utility")
+#: ``kelly``: maximize expected return minus half the variance (risk aversion 1), the
+#: long-run growth-optimal point; ``target_volatility``: the best expected return at a given
+#: risk (``target_volatility`` argument).
+OBJECTIVES = ("max_sharpe", "min_volatility", "max_quadratic_utility", "kelly",
+              "target_volatility")  # fmt: skip
 TRADING_DAYS = 252
 #: Weights below this are dropped; the dropped sliver is held as cash.
 WEIGHT_CUTOFF = 1e-4
@@ -33,9 +37,16 @@ def _within_bounds(weights: dict[str, float], cap: float | dict[str, float]) -> 
     return {s: w / total for s, w in clipped.items()} if total > 1 else clipped
 
 
-def _solve(ef: EfficientFrontier, objective: str, risk_free: float, risk_aversion: float) -> None:
+def _solve(
+    ef: EfficientFrontier, objective: str, risk_free: float, risk_aversion: float,
+    target_volatility: float | None = None,
+) -> None:  # fmt: skip
     """Run the requested objective on ``ef`` (raises if infeasible)."""
-    if objective == "max_sharpe":
+    if objective == "kelly":
+        ef.max_quadratic_utility(risk_aversion=1.0)
+    elif objective == "target_volatility":
+        ef.efficient_risk(target_volatility)
+    elif objective == "max_sharpe":
         ef.max_sharpe(risk_free_rate=risk_free)
     elif objective == "max_quadratic_utility":
         ef.add_objective(objective_functions.L2_reg, gamma=0.1)
@@ -52,6 +63,7 @@ def optimize(
     max_weight: float = 0.10,
     risk_aversion: float = 1.0,
     caps: dict[str, float] | None = None,
+    target_volatility: float | None = None,
 ) -> dict[str, float]:
     """Long-only mean-variance weights for the symbols in ``mu``.
 
@@ -64,6 +76,7 @@ def optimize(
         risk_aversion: Risk aversion for ``max_quadratic_utility``.
         caps: Per-symbol caps instead of ``max_weight`` (scaled up together if they sum
             to less than 1, so a fully invested portfolio stays feasible).
+        target_volatility: Annual volatility for ``target_volatility``.
 
     Returns:
         Weights summing to 1 (less sub-cutoff slivers left in cash), or an empty dict (all
@@ -87,7 +100,7 @@ def optimize(
         bounds = [(0.0, cap[s]) for s in symbols]
         ef = EfficientFrontier(mu[symbols], cov, weight_bounds=bounds)
         try:
-            _solve(ef, attempt, risk_free, risk_aversion)
+            _solve(ef, attempt, risk_free, risk_aversion, target_volatility)
         except (OptimizationError, ValueError) as exc:
             log.debug("%s failed (%s); falling back", attempt, exc)
             continue

@@ -9,6 +9,9 @@ end and turns them into the annual expected returns the optimizer needs:
   each stock's monthly forecast.
 - ``forecaster_excess``: the forecast is a return over the T-bill (``--excess``), so the
   expected return is the T-bill rate plus 12 times the forecast, with no level added.
+- ``black_litterman``: :func:`black_litterman`: start from the returns that make the
+  candidates' market-value weights optimal, and move toward the ``forecaster_excess``
+  expected returns as far as the forecasts' measured skill allows (``confidence``).
 """
 
 from datetime import date, timedelta
@@ -17,7 +20,7 @@ from pathlib import Path
 import pandas as pd
 import polars as pl
 
-EXPECTED = ("model", "forecaster", "forecaster_excess")
+EXPECTED = ("model", "forecaster", "forecaster_excess", "black_litterman")
 #: How stale a forecast may be (a rebalance date a few days after the forecast's month end).
 MAX_AGE = timedelta(days=7)
 
@@ -34,11 +37,15 @@ class LearnedForecasts:
         self.path = folder / ("forecasts_excess.parquet" if excess else "forecasts.parquet")
         self.excess = excess
         self._by_date: dict[date, dict[str, float]] | None = None
+        self._skill: dict[date, float] = {}
 
     def _load(self) -> dict[date, dict[str, float]]:
         from portfolio_lab.research.forecaster import walk  # noqa: PLC0415 - only when used
 
         combined = walk.combine(pl.read_parquet(self.path), center=not self.excess)
+        # skill: slope of outcome on forecast over earlier months (Grinold's scale)
+        scale = walk.calibrate(combined).group_by("date").agg(pl.col("scale").first())
+        self._skill = dict(scale.iter_rows())
         out: dict[date, dict[str, float]] = {}
         for (day,), month in combined.group_by("date"):
             out[day] = dict(
@@ -53,11 +60,53 @@ class LearnedForecasts:
         made = [d for d in self._by_date if d <= asof and asof - d <= MAX_AGE]
         return self._by_date[max(made)] if made else {}
 
+    def confidence(self, asof: date) -> float:
+        """The forecasts' measured skill at ``asof``, between 0 and 1 (module docs)."""
+        if self._by_date is None:
+            self._by_date = self._load()
+        made = [d for d in self._skill if d <= asof and asof - d <= MAX_AGE]
+        return float(min(max(self._skill[max(made)], 0.0), 1.0)) if made else 0.0
+
 
 def expected_returns(forecast: dict[str, float], model_mu: pd.Series, risk_free: float,
-                     excess: bool) -> pd.Series:  # fmt: skip
-    """Annual expected returns for the candidates that have a forecast (module docs)."""
+                     excess: bool, match_spread: bool = False) -> pd.Series:  # fmt: skip
+    """Annual expected returns for the candidates that have a forecast (module docs).
+
+    ``match_spread`` stretches the forecasts (keeping their order) so they vary across the
+    candidates as much as ``model_mu`` does: a check on whether the forecasts' small size,
+    rather than their ranking, decides the portfolio.
+    """
     names = [s for s in model_mu.index if s in forecast]
-    f = pd.Series({s: forecast[s] for s in names}, dtype=float)
+    f = 12 * pd.Series({s: forecast[s] for s in names}, dtype=float)
+    if match_spread and f.std() > 0:
+        f = (f - f.mean()) * model_mu.reindex(names).std() / f.std() + f.mean()
     level = risk_free if excess else float(model_mu.reindex(names).mean())
-    return level + 12 * f
+    return level + f
+
+
+def black_litterman(
+    views: pd.Series, cov: pd.DataFrame, market_value: pd.Series, delta: float, risk_free: float,
+    confidence: float,
+) -> pd.Series:  # fmt: skip
+    """Expected returns blending the market's implied returns with ``views`` (module docs).
+
+    Args:
+        views: Annual expected return per stock from the forecasts.
+        cov: Annual covariance of the candidates.
+        market_value: Each candidate's market value (the neutral weights).
+        delta: The market's risk aversion (expected excess return over variance).
+        risk_free: Annual T-bill rate.
+        confidence: How far to move toward each view, 0 to 1 (Idzorek's method).
+    """
+    from pypfopt import black_litterman as bl  # noqa: PLC0415
+
+    names = [s for s in views.index if s in cov.index and market_value.get(s, 0) > 0]
+    sub = cov.loc[names, names]
+    prior = bl.market_implied_prior_returns(market_value[names], delta, sub, risk_free)
+    if confidence <= 0:
+        return prior
+    model = bl.BlackLittermanModel(
+        sub, pi=prior, absolute_views=views[names].to_dict(), omega="idzorek",
+        view_confidences=[confidence] * len(names),
+    )  # fmt: skip
+    return model.bl_returns()
