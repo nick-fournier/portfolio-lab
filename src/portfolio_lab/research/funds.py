@@ -72,7 +72,7 @@ PAIRS = {
     "piotroski (pool=100)": "QUAL",
     "meanvar (min_fscore=7)": "QUAL",
     "meanvar (healthy_share=0.27)": "QUAL",
-    "meanvar (health_rank_pool=400, bear_defense=True, rebound=equal)": "QUAL",
+    "meanvar (health_rank_pool=400, soften=taper, bear_defense=True, rebound=equal)": "QUAL",
 }
 
 METRICS = ("cagr", "volatility", "sharpe", "max_drawdown", "beta", "alpha")
