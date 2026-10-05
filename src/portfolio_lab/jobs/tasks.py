@@ -53,6 +53,9 @@ PRODUCTION: tuple[str, dict[str, Any]] = (
     "meanvar",
     {"health_rank_pool": 400, "soften": "taper", "bear_defense": True, "rebound": "equal"},
 )
+#: The production models, drawn on the Overview and Compare charts against SPY and the best
+#: funds (every other strategy is listed in their tables but starts hidden on the chart).
+PRODUCTION_MODELS: tuple[tuple[str, dict[str, Any]], ...] = (PRODUCTION,)
 #: Backtests the scheduler refreshes weekly so the dashboard always shows current baselines.
 SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("buy_hold", {}),  # SPY

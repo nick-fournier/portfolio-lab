@@ -17,9 +17,12 @@ from typing import Any
 import numpy as np
 import polars as pl
 
+from portfolio_lab.backtest.engine import label as strategy_label
 from portfolio_lab.backtest.results import list_runs, load_run, runs_dir
 from portfolio_lab.core.paths import DataPaths
+from portfolio_lab.jobs.tasks import PRODUCTION_MODELS
 from portfolio_lab.research.funds import CATEGORIES
+from portfolio_lab.strategies.base import create
 
 HORIZONS = {"1Y": 1, "5Y": 5, "10Y": 10, "20Y": 20}
 YEAR = 252
@@ -81,6 +84,11 @@ def _live_runs(data_dir: Path) -> dict[str, Series]:
         label = meta.get("label") or meta["strategy"]
         out[f"ours: {label}"] = Series(f"ours: {label}", label, "ours", daily, meta["run_id"])
     return out
+
+
+def production_keys() -> set[str]:
+    """Series keys of the production models (``jobs.tasks.PRODUCTION_MODELS``)."""
+    return {f"ours: {strategy_label(create(name, **params))}" for name, params in PRODUCTION_MODELS}
 
 
 def load(data_dir: Path) -> dict[str, Series]:

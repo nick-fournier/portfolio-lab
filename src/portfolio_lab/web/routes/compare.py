@@ -11,17 +11,15 @@ from portfolio_lab.web.charts import series_figure
 
 router = APIRouter()
 
-#: Funds always drawn on the chart (besides our best strategies and the best other fund).
+#: Funds always drawn on the chart (besides the production models and the best other fund).
 ALWAYS_SHOWN = ("SPY", "QQQ")
-OURS_SHOWN = 3
 
 
 def _visible(rows: list[dict]) -> set[str]:
-    """SPY, QQQ, our best three by Sharpe and the best other fund by 10-year return."""
-    ours = sorted((r for r in rows if r["category"] == "ours"), key=lambda r: -(r["sharpe"] or -9))
+    """SPY, QQQ, the production models and the best other fund by 10-year return."""
     funds = [r for r in rows if r["category"] != "ours" and r["key"] not in ALWAYS_SHOWN]
     best = sorted(funds, key=lambda r: -(r["10Y"] if r["10Y"] is not None else -9))[:1]
-    return {*ALWAYS_SHOWN, *(r["key"] for r in ours[:OURS_SHOWN]), *(r["key"] for r in best)}
+    return {*ALWAYS_SHOWN, *series.production_keys(), *(r["key"] for r in best)}
 
 
 def page_context(data_dir: Path) -> dict:
