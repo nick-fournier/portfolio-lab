@@ -44,13 +44,17 @@ MARKET_STATE = ("drawdown", "below_ma200", "vol3m", "breadth", "absorption", "vo
 CAP = (0.001, 0.999)
 
 
-def stocks(panel: Panel, features: pl.DataFrame, extra: pl.DataFrame) -> pl.DataFrame:
+def stocks(
+    panel: Panel, features: pl.DataFrame, extra: pl.DataFrame, excess: bool = False
+) -> pl.DataFrame:
     """Stock-months with inputs and target (module docs).
 
     Args:
         panel: Prices, for the returns between month ends.
         features: The monthly feature panel (``DataPaths.features``).
         extra: The extra inputs (``DataPaths.characteristics``).
+        excess: Target the return minus the T-bill over the same month (the market's own
+            move included) instead of the return minus the month's average.
 
     Returns:
         date, symbol, actual, y, size (market value's percentile, centered on 0) and
@@ -64,16 +68,19 @@ def stocks(panel: Panel, features: pl.DataFrame, extra: pl.DataFrame) -> pl.Data
     frames = []
     for start, end in pairwise(ends):
         i, j = panel.date_index[start], panel.date_index[end]
+        tbill = float(np.prod(1 + panel.rf_daily[i + 1 : j + 1]) - 1)
         frames.append(pl.DataFrame({"date": [start] * len(panel.symbols),
                                     "symbol": panel.symbols,
-                                    "R": forward_returns(panel, i, j - i)}))  # fmt: skip
+                                    "R": forward_returns(panel, i, j - i),
+                                    "_tbill": tbill}))  # fmt: skip
     target = pl.concat(frames).with_columns(pl.col("R").fill_nan(None))
     labeled = data.join(target, on=["date", "symbol"], how="inner").drop_nulls("R")
     latest = data.filter(pl.col("date") == ends[-1]).with_columns(
         pl.lit(None, dtype=pl.Float64).alias("R")
     )
+    latest = latest.with_columns(pl.lit(None, dtype=pl.Float64).alias("_tbill"))
     data = pl.concat([labeled, latest.select(labeled.columns)])
-    r = pl.col("R") - pl.col("R").mean().over("date")
+    r = pl.col("R") - (pl.col("_tbill") if excess else pl.col("R").mean().over("date"))
     lo, hi = (r.quantile(q).over("date") for q in CAP)
     size = pl.col("market_value").rank().over("date") / pl.len().over("date") - 0.5
     return data.select(

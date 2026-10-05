@@ -51,12 +51,16 @@ class Nets:
         state: File to keep the nets in between runs, so a later run (e.g. next month's
             refit) continues from them; ``None`` keeps them in memory only.
         seed: Seed for weights, batches and the held-out rows.
+        center: Center forecasts within each month (for a target relative to the month's
+            average); ``False`` lets them carry a monthly level (for a target over cash).
     """
 
-    def __init__(self, device: str = "cpu", state: Path | None = None, seed: int = 0):
+    def __init__(self, device: str = "cpu", state: Path | None = None, seed: int = 0,
+                 center: bool = True):  # fmt: skip
         import torch  # noqa: PLC0415 - optional dependency (the ``nets`` extra)
 
         self.torch, self.device, self.state, self.seed = torch, device, state, seed
+        self.center = center
         self.nets: list = []
         self.scale: tuple | None = None
         if state is not None and state.exists():
@@ -112,7 +116,7 @@ class Nets:
         def held_error() -> float:
             net.eval()
             with torch.no_grad():
-                sq = sum(((_centered(net(s[r], m[r])) - target[r]) ** 2).sum() for r in held_groups)
+                sq = sum(((self._c(net(s[r], m[r])) - target[r]) ** 2).sum() for r in held_groups)
                 return float(sq / sum(len(r) for r in held_groups))
 
         best, best_state, stale = held_error(), _copy(net), 0
@@ -125,7 +129,7 @@ class Nets:
                     continue
                 rows = torch.cat(batch)
                 parts = torch.split(net(s[rows], m[rows]), [len(r) for r in batch])
-                f = torch.cat([_centered(p) for p in parts])
+                f = torch.cat([self._c(p) for p in parts])
                 loss = ((f - target[rows]) ** 2).mean() + net.penalty()
                 opt.zero_grad()
                 loss.backward()
@@ -146,8 +150,11 @@ class Nets:
             outs = []
             for net in self.nets:
                 net.eval()
-                outs.append(_centered(net(s, m)).cpu().numpy())
+                outs.append(self._c(net(s, m)).cpu().numpy())
         return np.mean(outs, axis=0).astype(np.float64)
+
+    def _c(self, f):
+        return _centered(f) if self.center else f
 
     def release(self) -> None:
         """Hand this month's scratch GPU memory back (the nets themselves stay)."""

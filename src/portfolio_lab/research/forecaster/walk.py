@@ -131,14 +131,19 @@ def run(
     return pl.concat(out) if out else pl.DataFrame()
 
 
-def combine(forecasts: pl.DataFrame) -> pl.DataFrame:
+def combine(forecasts: pl.DataFrame, center: bool = True) -> pl.DataFrame:
     """``forecasts`` with ``strength``, ``linear_trees`` and ``forecast`` (module docs).
 
-    Without nets (``nets`` missing or null) the forecast is linear + trees alone.
+    Without nets (``nets`` missing or null) the forecast is linear + trees alone. With
+    ``center=False`` (a target over cash) nothing is centered, so the forecast keeps its
+    monthly level.
     """
+
+    def level(col: str) -> pl.Expr:
+        return pl.col(col) - pl.col(col).mean().over("date") if center else pl.col(col)
+
     f = forecasts.drop_nulls(["linear", "correction"]).with_columns(
-        (pl.col("linear") - pl.col("linear").mean().over("date")).alias("_b"),
-        (pl.col("correction") - pl.col("correction").mean().over("date")).alias("_c"),
+        level("linear").alias("_b"), level("correction").alias("_c")
     )
     err = (
         f.drop_nulls("actual")
@@ -171,7 +176,7 @@ def combine(forecasts: pl.DataFrame) -> pl.DataFrame:
     )
     if "nets" not in out.columns or out["nets"].null_count() == out.height:
         return out.with_columns(pl.col("linear_trees").alias("forecast"))
-    centered = [(pl.col(c) - pl.col(c).mean().over("date")) for c in ("linear_trees", "nets")]
+    centered = [level(c) for c in ("linear_trees", "nets")]
     return out.drop_nulls("nets").with_columns(
         (0.5 * centered[0] + 0.5 * centered[1]).alias("forecast")
     )
