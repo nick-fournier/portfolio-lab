@@ -41,7 +41,8 @@ def grade_months(forecasts: pl.DataFrame, min_stocks: int = 50) -> pl.DataFrame:
 def fit_bins(forecasts: pl.DataFrame) -> pl.DataFrame:
     """Average forecast and outcome per forecast group (:data:`BINS` per month).
 
-    With a 90% margin on the outcome's average, from how much it varied between months.
+    With a 90% margin on the outcome's average, from how much it varied between months,
+    and the middle half of single stocks' outcomes (``q25``, ``q75``).
     """
     f = forecasts.drop_nulls(["forecast", "actual"]).with_columns(
         (pl.col("forecast").rank("ordinal").over("date") * BINS
@@ -52,7 +53,12 @@ def fit_bins(forecasts: pl.DataFrame) -> pl.DataFrame:
     )
     return (
         f.group_by("bin")
-        .agg(pl.col("forecast").mean(), pl.col("actual").mean())
+        .agg(
+            pl.col("forecast").mean(),
+            pl.col("actual").mean(),
+            pl.col("actual").quantile(0.25).alias("q25"),
+            pl.col("actual").quantile(0.75).alias("q75"),
+        )
         .join(margin, on="bin")
         .sort("bin")
     )

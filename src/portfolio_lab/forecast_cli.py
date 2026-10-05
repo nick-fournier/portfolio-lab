@@ -17,7 +17,8 @@ from portfolio_lab.core.config import get_settings
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
 from portfolio_lab.research.characteristics import build as characteristics
-from portfolio_lab.research.forecaster import dataset, grade, walk
+from portfolio_lab.research.forecaster import dataset, grade, report, walk
+from portfolio_lab.research.forecaster.nets import Nets
 from portfolio_lab.research.panel import Panel
 
 forecast_app = typer.Typer(help="Next-month stock forecaster (research).")
@@ -61,10 +62,19 @@ def run_cmd(
     device: Annotated[str, typer.Option(help="Where the trees are fitted: cpu or cuda.")] = "cpu",
     threads: Annotated[int, typer.Option(help="CPU threads for the trees.")] = 6,
     fresh: Annotated[bool, typer.Option(help="Discard earlier forecasts and start over.")] = False,
+    nets: Annotated[
+        bool, typer.Option(help="Fit the nets too (needs PyTorch, the 'nets' extra).")
+    ] = True,
 ) -> None:
-    """Walk forward: refit every month on all earlier months and forecast it."""
+    """Walk forward: refit every month on all earlier months and forecast it.
+
+    The nets are kept in ``nets.pt`` next to the forecasts, so a later run (next month's
+    refit, or a resumed run) continues from them.
+    """
     folder = DataPaths(get_settings().data_dir).forecaster
-    path = folder / "forecasts.parquet"
+    path, state = folder / "forecasts.parquet", folder / "nets.pt"
+    if fresh:
+        state.unlink(missing_ok=True)
     done = pl.read_parquet(path) if path.exists() and not fresh else None
     year, month = (int(p) for p in start.split("-"))
 
@@ -76,6 +86,7 @@ def run_cmd(
     walk.run(
         pl.read_parquet(folder / "stocks.parquet"), pl.read_parquet(folder / "market.parquet"),
         start=date(year, month, 1), device=device, threads=threads,
+        nets=Nets(device, state) if nets else None,
         skip=set(done["date"].unique().to_list()) if done is not None else None, save=save,
     )  # fmt: skip
     typer.echo(f"forecasts: {path}")
@@ -85,11 +96,19 @@ def run_cmd(
 def grade_cmd(
     since: Annotated[int, typer.Option(help="First year graded.")] = walk.FIRST_GRADED,
 ) -> None:
-    """Grade the forecasts on unseen months (research.forecaster.grade)."""
+    """Grade the forecasts on unseen months, after Grinold's rule (research.forecaster)."""
     folder = DataPaths(get_settings().data_dir).forecaster
-    combined = walk.combine(pl.read_parquet(folder / "forecasts.parquet"))
+    combined = walk.calibrate(walk.combine(pl.read_parquet(folder / "forecasts.parquet")))
     graded = combined.filter(pl.col("date").dt.year() >= since)
     out = grade.report(graded)
+    raw = grade.report(graded.with_columns(pl.col("raw_forecast").alias("forecast")))
+    out["before_grinold"] = {k: raw[k] for k in ("slope", "r2", "tenth_yr")}
+    out["scale_by_year"] = (
+        graded.group_by(pl.col("date").dt.year().alias("year"))
+        .agg(pl.col("scale").mean())
+        .sort("year")
+        .to_dicts()
+    )
     out["strength_by_year"] = (
         graded.group_by(pl.col("date").dt.year().alias("year"))
         .agg(pl.col("strength").mean())
@@ -104,5 +123,16 @@ def grade_cmd(
         f"{out['years']} years\n"
         f"slope {out['slope']:.2f} (losers {out['slope_losers']:.2f}, winners "
         f"{out['slope_winners']:.2f}), R² {out['r2']:+.3%}\n"
-        f"best-worst tenth {out['tenth_yr']:.1%}/yr, IC small/mid/large {sizes}"
+        f"best-worst tenth {out['tenth_yr']:.1%}/yr, IC small/mid/large {sizes}\n"
+        f"before Grinold's rule: slope {raw['slope']:.2f}, R² {raw['r2']:+.3%}"
     )
+
+
+@forecast_app.command("publish")
+def publish_cmd(
+    dest: Annotated[Path, typer.Option(help="Data directory the website reads (e.g. free/).")],
+) -> None:
+    """Write the Forecasts page's summary into ``dest`` (research.forecaster.report)."""
+    data_dir = get_settings().data_dir
+    panel = Panel.load(data_dir)
+    typer.echo(report.publish(DataPaths(data_dir).forecaster, DataPaths(dest).forecaster, panel))

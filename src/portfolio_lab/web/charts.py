@@ -251,3 +251,94 @@ def tax_layout() -> str:
     """Layout for the Taxes page, whose script draws the lines: dollars on a log scale."""
     yaxis = {"type": "log", "tickprefix": "$", "tickformat": "~s", "dtick": 1}  # $100k, $1M, ...
     return json.dumps({**_LAYOUT, "yaxis": yaxis, "template": _white_template()})
+
+
+def forecast_years_figure(yearly: list[dict]) -> str:
+    """Each year's average monthly IC: the forecast (bars, 90% margins) and production's."""
+    years = [r["year"] for r in yearly]
+    traces = [
+        {"type": "bar", "name": "Forecast", "x": years, "y": [round(r["ic"], 4) for r in yearly],
+         "marker": {"color": "#1f77b4"},
+         "error_y": {"type": "data", "array": [round(r["margin"] or 0, 4) for r in yearly],
+                     "color": "#57606a", "thickness": 1}},
+        {"type": "scatter", "mode": "lines+markers", "name": "Production today (trailing returns)",
+         "x": years, "y": [None if r["old"] is None else round(r["old"], 4) for r in yearly],
+         "line": _REFERENCE},
+    ]  # fmt: skip
+    yaxis = {
+        "tickformat": ".2f",
+        "zeroline": True,
+        "title": {"text": "Ranking (IC), higher = better"},
+    }
+    layout = {**_LAYOUT, "hovermode": "x", "yaxis": yaxis, "template": _white_template(),
+              "margin": {**_LAYOUT["margin"], "l": 55}}  # fmt: skip
+    return json.dumps({"data": traces, "layout": layout})
+
+
+def forecast_trailing_figure(trailing: list[dict]) -> str:
+    """12-month trailing IC of the forecast and of production's forecast."""
+    dates = [r["date"] for r in trailing]
+    traces = [
+        {"type": "scatter", "mode": "lines", "name": "Forecast", "x": dates,
+         "y": [round(r["ic"], 4) for r in trailing], "line": {"color": "#1f77b4", "width": 2}},
+        {"type": "scatter", "mode": "lines", "name": "Production today (trailing returns)",
+         "x": dates, "y": [round(r["old"], 4) for r in trailing], "line": _REFERENCE},
+    ]  # fmt: skip
+    yaxis = {
+        "tickformat": ".2f",
+        "zeroline": True,
+        "title": {"text": "IC, 12-month avg (higher = better)"},
+    }
+    layout = {**_LAYOUT, "hovermode": "x unified", "yaxis": yaxis, "template": _white_template(),
+              "margin": {**_LAYOUT["margin"], "l": 55}}  # fmt: skip
+    return json.dumps({"data": traces, "layout": layout})
+
+
+def forecast_fit_figure(bins: list[dict]) -> str:
+    """Forecast vs outcome by forecast group, in % per month.
+
+    Group averages with 90% margins, and the line where forecast and outcome would be equal.
+    """
+    x = [round(b["forecast"] * 100, 3) for b in bins]
+    pct = lambda k: [round(b[k] * 100, 3) for b in bins]  # noqa: E731
+    # One scale on both axes, square and centered on 0, wide enough for every dot and its margin
+    reach = max(*(abs(v) for v in x), *((abs(b["actual"]) + b["margin"]) * 100 for b in bins))
+    lim = round(reach * 1.15, 1)
+    traces = [
+        {"type": "scatter", "mode": "markers", "x": x, "y": pct("actual"),
+         "marker": {"color": "#1f77b4", "size": 7}, "name": "Group average",
+         "error_y": {"type": "data", "array": pct("margin"), "thickness": 1},
+         "hovertemplate": "forecast %{x:.2f}%<br>outcome %{y:.2f}%<extra></extra>"},
+        {"type": "scatter", "mode": "lines", "x": [-lim, lim], "y": [-lim, lim],
+         "line": {"color": "#6e7781", "dash": "dot", "width": 1.2}, "name": "Forecast = outcome"},
+    ]  # fmt: skip
+    axis = {"range": [-lim, lim], "dtick": 0.5, "zeroline": True, "constrain": "domain"}
+    layout = {**_LAYOUT, "hovermode": "closest", "template": _white_template(),
+              "margin": {**_LAYOUT["margin"], "l": 55, "b": 45},
+              "xaxis": {**axis, "title": {"text": "Forecast, % next month (vs average stock)"}},
+              "yaxis": {**axis, "title": {"text": "Outcome, % next month"},
+                        "scaleanchor": "x", "scaleratio": 1}}  # fmt: skip
+    return json.dumps({"data": traces, "layout": layout})
+
+
+def forecast_tenths_figure(tenths: list[dict]) -> str:
+    """Growth of $1 relative to the average stock: top and bottom forecast tenths, log scale.
+
+    Solid: the forecast; dotted: production's forecast.
+    """
+    dates = [r["date"] for r in tenths]
+    line = lambda key, name, color, dash: {  # noqa: E731
+        "type": "scatter", "mode": "lines", "name": name, "x": dates,
+        "y": [round(r[key], 4) for r in tenths],
+        "line": {"color": color, "dash": dash, "width": 1.6},
+    }  # fmt: skip
+    traces = [
+        line("top", "Forecast: top tenth", "#1a7f37", "solid"),
+        line("bottom", "Forecast: bottom tenth", "#cf222e", "solid"),
+        line("p_top", "Production: top tenth", "#1a7f37", "dot"),
+        line("p_bottom", "Production: bottom tenth", "#cf222e", "dot"),
+    ]
+    yaxis = {"type": "log", "title": {"text": "$1 vs the average stock"}, "tickprefix": "$"}
+    layout = {**_LAYOUT, "hovermode": "x unified", "yaxis": yaxis, "template": _white_template(),
+              "margin": {**_LAYOUT["margin"], "l": 55}}  # fmt: skip
+    return json.dumps({"data": traces, "layout": layout})

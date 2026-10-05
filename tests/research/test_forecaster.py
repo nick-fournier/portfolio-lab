@@ -133,3 +133,37 @@ def test_nearly_perfect_forecasts_grade_nearly_perfectly():
 
 def test_expanding_percentile_sees_only_the_past():
     assert _expanding_pct([3.0, 1.0, 2.0, 5.0]) == [1.0, 0.5, 2 / 3, 1.0]
+
+
+def test_nets_join_the_forecast_and_carry_over_between_runs(tmp_path):
+    pytest.importorskip("torch")
+    from portfolio_lab.research.forecaster.nets import NETS, Nets  # noqa: PLC0415 - optional
+
+    stocks, market = _stocks(noise=0.2), _market()
+    state = tmp_path / "nets.pt"
+    first = walk.run(stocks, market, start=_month_end(33), threads=1, nets=Nets(state=state),
+                     skip={_month_end(m) for m in (34, 35)})  # fmt: skip
+    assert state.exists() and first["nets"].is_not_null().all()
+    resumed = Nets(state=state)
+    assert len(resumed.nets) == NETS  # picks up where the first run stopped
+    later = walk.run(stocks, market, start=_month_end(34), threads=1, nets=resumed)
+    combined = walk.combine(pl.concat([first, later]))
+    assert {"linear_trees", "nets", "forecast"} <= set(combined.columns)
+    assert grade.grade_months(combined)["ic"].mean() > 0.3
+
+
+def test_grinold_rescales_by_earlier_months_only():
+    rng = np.random.default_rng(0)
+    frames = []
+    for m in range(36):
+        f = rng.normal(0, 0.02, 300)
+        actual = 0.5 * f + rng.normal(0, 0.01, 300)  # forecasts twice too big
+        frames.append(
+            pl.DataFrame({"date": [_month_end(m)] * 300, "forecast": f, "actual": actual})
+        )
+    out = walk.calibrate(pl.concat(frames))
+    scales = out.group_by("date").agg(pl.col("scale").first()).sort("date")["scale"]
+    assert scales[0] == 1.0  # nothing earlier
+    assert scales[-1] == pytest.approx(0.5, abs=0.03)
+    ranks = out.group_by("date").agg(pl.corr("forecast", "raw_forecast", method="spearman"))
+    assert ranks["forecast"].min() == pytest.approx(1.0)

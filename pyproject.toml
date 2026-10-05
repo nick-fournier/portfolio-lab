@@ -25,6 +25,11 @@ dependencies = [
 [project.scripts]
 plab = "portfolio_lab.cli:app"
 
+[project.optional-dependencies]
+nets = [
+    "torch>=2.4",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
