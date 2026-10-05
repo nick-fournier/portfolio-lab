@@ -252,6 +252,8 @@ class MeanVar:
             "against the T-bill rate)",
             "min_volatility": "the lowest risk (minimum volatility), ignoring the forecasts",
             "max_quadratic_utility": "the best trade-off of expected return against risk",
+            "kelly": "the highest long-run growth (expected return minus half the variance)",
+            "market_volatility": "the best expected return at the market's current risk",
         }[self.objective]
         signal = (
             "the legacy ARIMA price trend"
