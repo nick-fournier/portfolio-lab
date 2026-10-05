@@ -39,7 +39,17 @@ def build(forecasts: pl.DataFrame, production: pl.DataFrame) -> dict[str, Any]:
         .filter(pl.col("date").dt.year() >= walk.FIRST_GRADED)
         .join(production, on=["date", "symbol"])
     )
-    keys = ("ic", "ic_t", "years_right", "years", "slope", "r2", "tenth_yr", "ic_by_size")
+    keys = (
+        "ic",
+        "ic_t",
+        "months_right",
+        "years_right",
+        "years",
+        "slope",
+        "r2",
+        "tenth_yr",
+        "ic_by_size",
+    )
     pieces = {}
     for col, label in PIECES.items():
         r = grade.report(combined.with_columns(pl.col(col).alias("forecast")))

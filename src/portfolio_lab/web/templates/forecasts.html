@@ -10,7 +10,7 @@
   ({{ s.start[:7] }} to {{ s.end[:7] }}).</p>
 <div class="cards">
   <div class="card"><div class="label">Ranking (IC)</div><div class="value">{{ "%.3f" | format(f.ic) }}</div></div>
-  <div class="card"><div class="label">Years right</div><div class="value">{{ f.years_right }} of {{ f.years }}</div></div>
+  <div class="card"><div class="label">Months right</div><div class="value">{{ "%.0f" | format(100 * f.months_right / s.months) }}%</div></div>
   <div class="card"><div class="label">Best vs worst tenth</div><div class="value">{{ f.tenth_yr | pct(0) }}/yr</div></div>
   <div class="card"><div class="label">Size (slope, 1 = right)</div><div class="value">{{ "%.2f" | format(f.slope) }}</div></div>
 </div>
@@ -47,14 +47,15 @@
 
 <h2>Results</h2>
 <div class="table-wrap labelled"><table>
-  <tr><th>Model</th><th>IC</th><th>t</th><th>Years right</th><th>Slope</th><th>R²</th><th>Best−worst tenth /yr</th><th>IC small / mid / large</th></tr>
+  <tr><th>Model</th><th>IC</th><th>t</th><th>Months right</th><th>Years right</th><th>Slope</th><th>R²</th><th>Best−worst tenth /yr</th><th>IC small / mid / large</th></tr>
   {% for key, p in s.pieces.items() %}
   <tr{% if key == "forecast" %} class="ours"{% endif %}><td>{{ p.label }}</td><td>{{ "%.3f" | format(p.ic) }}</td><td>{{ "%.1f" | format(p.ic_t) }}</td>
-    <td>{{ p.years_right }} of {{ p.years }}</td><td>{{ "%.2f" | format(p.slope) }}</td><td>{{ "%+.2f" | format(p.r2 * 100) }}%</td>
+    <td>{{ "%.0f" | format(100 * p.months_right / s.months) }}%</td><td>{{ p.years_right }} of {{ p.years }}</td><td>{{ "%.2f" | format(p.slope) }}</td><td>{{ "%+.2f" | format(p.r2 * 100) }}%</td>
     <td>{{ p.tenth_yr | pct(1) }}</td><td>{% for v in p.ic_by_size.values() %}{{ "%.3f" | format(v) }}{% if not loop.last %} / {% endif %}{% endfor %}</td></tr>
   {% endfor %}
 </table></div>
-<p class="muted">All rows graded on the same stock-months: stocks with about a year of prices,
+<p class="muted">Months right: share of the {{ s.months }} months whose ranking was better than
+  chance (IC above 0). All rows graded on the same stock-months: stocks with about a year of prices,
   which production's trailing-return forecast needs. IC: rank correlation of forecast and
   outcome each month, averaged. Slope: how much
   of a forecast shows up on average (1 = right-sized). R²: against forecasting the average for

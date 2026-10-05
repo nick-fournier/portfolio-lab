@@ -92,6 +92,7 @@ def report(forecasts: pl.DataFrame) -> dict[str, Any]:
         "first": months["date"].min(), "last": months["date"].max(), "months": months.height,
         "ic": float(ic.mean()), "ic_t": float(ic.mean() / ic.std() * months.height**0.5),
         "years_right": int((yearly["ic"] > 0).sum()), "years": yearly.height,
+        "months_right": int((ic > 0).sum()),
         "slope": float(np.polyfit(x, a, 1)[0]),
         "slope_losers": float(np.polyfit(x[x < 0], a[x < 0], 1)[0]),
         "slope_winners": float(np.polyfit(x[x >= 0], a[x >= 0], 1)[0]),
