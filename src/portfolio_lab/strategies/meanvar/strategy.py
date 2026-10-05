@@ -6,8 +6,6 @@ from pathlib import Path
 from typing import ClassVar
 
 import pandas as pd
-from pypfopt.black_litterman import market_implied_risk_aversion
-from pypfopt.risk_models import CovarianceShrinkage
 
 from portfolio_lab.core.calendar import Frequency
 from portfolio_lab.core.paths import DataPaths
@@ -26,7 +24,7 @@ from portfolio_lab.strategies.meanvar.forecast import (
 from portfolio_lab.strategies.meanvar.learned import (
     EXPECTED,
     LearnedForecasts,
-    black_litterman,
+    black_litterman_at,
     expected_returns,
 )
 from portfolio_lab.strategies.meanvar.optimize import optimize
@@ -88,7 +86,8 @@ class MeanVar:
             model) or ``historical_mean`` (no forecast).
         objective: ``max_sharpe``, ``min_volatility``, ``max_quadratic_utility``, ``kelly``
             (risk aversion 1: long-run growth) or ``market_volatility`` (the best expected
-            return at SPY's current volatility).
+            return at SPY's current volatility) or ``top_equal`` (no optimizer: equal weights
+            on the ``hold`` candidates with the highest expected return).
         top_n: Candidates: the most liquid eligible stocks.
         lookback: Sessions of history for forecasts and covariance.
         horizon: Forecast horizon in sessions.
@@ -158,6 +157,7 @@ class MeanVar:
     expected: str = "model"
     forecast_pool: int | None = None
     match_spread: bool = False
+    hold: int = 30
     cache_dir: Path | None = field(default=None, repr=False, metadata={"param": False})
     workers: int = field(default=1, metadata={"param": False})
 
@@ -254,6 +254,7 @@ class MeanVar:
             "max_quadratic_utility": "the best trade-off of expected return against risk",
             "kelly": "the highest long-run growth (expected return minus half the variance)",
             "market_volatility": "the best expected return at the market's current risk",
+            "top_equal": f"equal weights on the {self.hold} highest expected returns",
         }[self.objective]
         signal = (
             "the legacy ARIMA price trend"
@@ -331,15 +332,7 @@ class MeanVar:
     def _black_litterman(self, view: DataView, mu: pd.Series, prices: pd.DataFrame) -> pd.Series:
         """Black-Litterman expected returns from the forecaster (``strategies.meanvar.learned``)."""
         views = expected_returns(self._learned_at(view), mu, view.risk_free(), excess=True)
-        names = [s for s in views.index if s in prices.columns]
-        cov = CovarianceShrinkage(prices[names], frequency=TRADING_DAYS).ledoit_wolf()
-        mv = view.features(names, ["market_value"])
-        caps = pd.Series(dict(zip(mv["symbol"], mv["market_value"], strict=True)), dtype=float)
-        spy = view.prices(view.index + 1, ["SPY"]).dropna()  # all history up to now
-        delta = market_implied_risk_aversion(spy["SPY"], TRADING_DAYS, view.risk_free())
-        confidence = self._learned.confidence(view.asof)
-        return black_litterman(views[names], cov, caps.fillna(0.0), max(float(delta), 0.5),
-                               view.risk_free(), confidence)  # fmt: skip
+        return black_litterman_at(view, views, prices, self._learned.confidence(view.asof))
 
     def _healthy_set(self, view: DataView, among: list[str] | None) -> list[str]:
         """The healthiest ``healthy_share`` of candidates, refreshed per ``health_schedule``."""
@@ -478,7 +471,10 @@ class MeanVar:
             prices = prices[[s for s in prices.columns if s in mu.index]]
             if prices.shape[1] < 2:
                 return {}, pd.Series(dtype=float), pd.Series(dtype=float)
-        if self.objective == "market_volatility":
+        if self.objective == "top_equal":  # no optimizer: equal weights on the best expected
+            top = mu.reindex(prices.columns).dropna().nlargest(self.hold).index
+            weights = {s: 1.0 / len(top) for s in top}
+        elif self.objective == "market_volatility":
             target = self._market_volatility(view)
             weights = self._optimize(mu, prices, view.risk_free(), "target_volatility", target)
         else:

@@ -110,3 +110,24 @@ def black_litterman(
         view_confidences=[confidence] * len(names),
     )  # fmt: skip
     return model.bl_returns()
+
+
+def black_litterman_at(
+    view, views: pd.Series, prices: pd.DataFrame, confidence: float
+) -> pd.Series:
+    """:func:`black_litterman` at a rebalance.
+
+    Covariance from ``prices``, market values from the features, and the market's risk
+    aversion from SPY's history up to the rebalance.
+    """
+    from pypfopt.black_litterman import market_implied_risk_aversion  # noqa: PLC0415
+    from pypfopt.risk_models import CovarianceShrinkage  # noqa: PLC0415
+
+    names = [s for s in views.index if s in prices.columns]
+    cov = CovarianceShrinkage(prices[names], frequency=252).ledoit_wolf()
+    mv = view.features(names, ["market_value"])
+    caps = pd.Series(dict(zip(mv["symbol"], mv["market_value"], strict=True)), dtype=float)
+    spy = view.prices(view.index + 1, ["SPY"]).dropna()  # all history up to now
+    delta = market_implied_risk_aversion(spy["SPY"], 252, view.risk_free())
+    return black_litterman(views[names], cov, caps.fillna(0.0), max(float(delta), 0.5),
+                           view.risk_free(), confidence)  # fmt: skip
