@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, date, datetime, timedelta
 
 import polars as pl
@@ -210,34 +211,6 @@ def test_context_page(client, tmp_path):
         assert expected in page, expected
 
 
-def test_models_page(client, tmp_path):
-    assert "No model results yet" in client.get("/forecasts").text
-    folder = tmp_path / "results" / "models"
-    folder.mkdir(parents=True)
-    row = {"horizon": 21, "months": 60, "auc": 0.52, "ic": 0.04, "ic_t": 3.0, "brier": 0.25,
-           "ece": 0.02, "up_share": 0.1, "up_hit": 0.52, "down_share": 0.1, "down_hit": 0.55,
-           "up_months_ok": 0.6, "top10_hit": 0.53, "bottom10_hit": 0.56, "top10_months_ok": 0.6,
-           "worst_year_auc": 0.505}  # fmt: skip
-    rows = [
-        row | {"model": "gbm", "pool": "all"},
-        row | {"model": "gbm+cal", "pool": "all", "ece": 0.01},
-        row | {"model": "gbm", "pool": "top500"},
-    ]
-    pl.DataFrame(rows).write_parquet(folder / "summary.parquet")
-    pl.DataFrame(
-        {"model": ["gbm", "gbm"], "horizon": [21, 21], "bin": [0, 1], "predicted": [0.45, 0.55],
-         "realized": [0.47, 0.53], "n": [100, 100]}
-    ).write_parquet(folder / "calibration.parquet")  # fmt: skip
-    pl.DataFrame(
-        {"feature": ["cfo_to_assets"], "auc_drop": [0.004], "model": ["gbm"], "horizon": [21]}
-    ).write_parquet(folder / "importance.parquet")
-    page = client.get("/forecasts").text
-    for expected in ("Next month", "All eligible stocks", "500 most liquid stocks", "0.520",
-                     "53.0%", "→ 0.010", "Does a stated probability come true?",
-                     "What the tree model relies on"):  # fmt: skip
-        assert expected in page, expected
-
-
 def test_compare_page(client, tmp_path):
     assert "No comparison yet" in client.get("/compare").text
     folder = tmp_path / "results" / "make_vs_buy"
@@ -319,3 +292,30 @@ def test_paper_page_reads_a_separate_trading_dir(tmp_path):
                                  "cash": [1_000.0], "positions": [0]})  # fmt: skip
     page = TestClient(create_app(tmp_path / "data", trading)).get("/paper")
     assert page.status_code == 200 and "$100,000" in page.text
+
+
+def test_forecasts_page(client, tmp_path):
+    assert "No forecasts published yet" in client.get("/forecasts").text
+    sizes = {"small": 0.044, "mid": 0.035, "large": 0.026}
+    piece = {"ic": 0.037, "ic_t": 4.5, "years_right": 16, "years": 18, "slope": 0.63,
+             "r2": 0.001, "tenth_yr": 0.105, "ic_by_size": sizes}  # fmt: skip
+    summary = {
+        "start": "2009-01-30", "end": "2026-08-31", "months": 212, "corr": 0.51,
+        "yearly_noise": 0.035,
+        "pieces": {k: {"label": f"{k} label", **piece}
+                   for k in ("forecast", "linear_trees", "nets", "linear")},
+        "yearly": [{"year": 2009 + k, "ic": 0.03, "margin": 0.02, "old": 0.02} for k in range(18)],
+        "bins": [{"bin": k, "forecast": k / 1000, "actual": k / 1600, "margin": 0.002,
+                  "q25": -0.05, "q75": 0.05} for k in range(-10, 10)],
+        "trailing": [{"date": f"20{10 + k}-01-31", "ic": 0.03, "old": 0.02} for k in range(10)],
+        "tenths": [{"date": f"20{10 + k}-01-31", "top": 1 + k / 10, "bottom": 1 - k / 20,
+                    "p_top": 1.0, "p_bottom": 1.0} for k in range(10)],
+    }  # fmt: skip
+    folder = tmp_path / "results" / "forecaster"
+    folder.mkdir(parents=True)
+    (folder / "summary.json").write_text(json.dumps(summary))
+    page = client.get("/forecasts").text
+    for expected in ("0.037", "16 of 18", "forecast label", "0.044 / 0.035 / 0.026",
+                     "correlate 0.51", "±0.035", 'id="fit"', 'id="trailing"',
+                     'id="tenths"'):  # fmt: skip
+        assert expected in page, expected

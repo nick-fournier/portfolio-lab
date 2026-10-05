@@ -1,4 +1,7 @@
-"""Event studies of market-state signals: fragile, bear, rebound (measurement only).
+"""Market-state signals at each month end: fragile, bear, rebound.
+
+``market_state`` is production's bear/rebound switch; :func:`signals` builds every
+indicator per month end (the forecaster uses them as inputs).
 
 Three different situations, each with its own candidate signals, read at every month end
 from data known then:
@@ -18,7 +21,6 @@ from data known then:
 Outcomes after each month end: SPY's worst drawdown over the next six months, SPY's return
 over the next one, three and six months, and how the strongest and weakest tenths of the
 500 most liquid stocks by 12-month return did over the next three months.
-:func:`summarize` compares each signal's months with all months.
 """
 
 import numpy as np
@@ -34,10 +36,7 @@ NEAR_HIGH = 0.05
 BEAR_DRAWDOWN = 0.15
 REBOUND_DRAWDOWN = 0.20
 VIX_EASING = 0.20
-CRASH = -0.15
 POOL = 500
-SIGNALS = ("absorption_rising", "credit_divergence", "breadth_divergence", "curve_inverted",
-           "complacent", "bear", "rebound")  # fmt: skip
 
 
 def market_state(
@@ -63,22 +62,6 @@ def market_state(
         return "rebound"
     below = all(level[-1 - k] < level[-200 - k : len(level) - k].mean() for k in (0, 21, 42))
     return "bear" if below and drawdown >= bear_drawdown else "normal"
-
-
-def crash_ahead(panel: Panel, months: int, crash: float = CRASH) -> list[str]:
-    """Month ends after which SPY fell by ``crash`` or more within ``months`` (hindsight).
-
-    Only for the oracle test, which gives a strategy perfect foresight to measure the most
-    any crash warning could be worth.
-    """
-    level = np.cumprod(1 + np.nan_to_num(panel.field("ret_cc")[:, panel.symbol_index["SPY"]]))
-    out = []
-    for day in rebalance_dates(list(panel.dates), "M"):
-        i = panel.date_index[day]
-        path = level[i : i + 21 * months + 1] / level[i]
-        if (path / np.maximum.accumulate(path) - 1).min() <= crash:
-            out.append(day.isoformat())
-    return out
 
 
 def _expanding_pct(values: list[float | None]) -> list[float | None]:
@@ -152,22 +135,3 @@ def signals(panel: Panel, env: pl.DataFrame) -> pl.DataFrame:
          & (pl.col("vix") <= (1 - VIX_EASING) * pl.col("vix").rolling_max(3)))
         .alias("rebound"),
     )  # fmt: skip
-
-
-def summarize(frame: pl.DataFrame) -> pl.DataFrame:
-    """Per signal: months flagged, crash rate after, forward returns, winners vs losers."""
-    rows = []
-    for name in ("all months", *SIGNALS):
-        part = frame if name == "all months" else frame.filter(pl.col(name).fill_null(False))
-        known = part.drop_nulls("fwd_max_dd_6m")
-        crash = float((known["fwd_max_dd_6m"] <= CRASH).mean()) if known.height else None
-        flagged = name != "all months"
-        rows.append({
-            "signal": name, "months": part.height, "crash_next_6m": crash,
-            "avg_max_dd_6m": known["fwd_max_dd_6m"].mean(),
-            "fwd_1m": part["fwd_1m"].mean(), "fwd_3m": part["fwd_3m"].mean(),
-            "fwd_6m": part["fwd_6m"].mean(),
-            "winners_minus_losers_3m": (part["winners_3m"] - part["losers_3m"]).mean(),
-            "dates": ", ".join(d.strftime("%Y-%m") for d in part["date"]) if flagged else "",
-        })  # fmt: skip
-    return pl.DataFrame(rows)

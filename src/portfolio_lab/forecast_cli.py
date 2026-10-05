@@ -1,0 +1,138 @@
+"""``plab forecast ...``: the next-month forecaster (``research.forecaster``).
+
+Run in order on a Sharadar data directory: ``inputs`` builds the extra stock inputs,
+``dataset`` assembles the stock and market tables, ``run`` walks forward (resuming where
+an earlier run stopped) and ``grade`` prints the grades.
+"""
+
+import json
+from datetime import date
+from pathlib import Path
+from typing import Annotated
+
+import polars as pl
+import typer
+
+from portfolio_lab.core.config import get_settings
+from portfolio_lab.core.paths import DataPaths
+from portfolio_lab.core.store import write_parquet_atomic
+from portfolio_lab.research.characteristics import build as characteristics
+from portfolio_lab.research.forecaster import dataset, grade, report, walk
+from portfolio_lab.research.forecaster.nets import Nets
+from portfolio_lab.research.panel import Panel
+
+forecast_app = typer.Typer(help="Next-month stock forecaster (research).")
+
+
+@forecast_app.command("inputs")
+def inputs_cmd(
+    raw: Annotated[
+        Path | None, typer.Option(help="Sharadar bulk zips (default: <data dir>/raw).")
+    ] = None,
+) -> None:
+    """Build the extra stock inputs (research.characteristics) into the features folder."""
+    data_dir = get_settings().data_dir
+    frame = characteristics.build(data_dir, raw or data_dir / "raw")
+    write_parquet_atomic(frame, DataPaths(data_dir).characteristics)
+    typer.echo(f"{frame.height:,} stock-months, {len(characteristics.COLUMNS)} inputs")
+
+
+@forecast_app.command("dataset")
+def dataset_cmd() -> None:
+    """Assemble the forecaster's stock and market tables (research.forecaster.dataset)."""
+    data_dir = get_settings().data_dir
+    paths = DataPaths(data_dir)
+    panel = Panel.load(data_dir)
+    features = pl.read_parquet(paths.features)
+    env = pl.read_parquet(paths.environment)
+    stocks = dataset.stocks(panel, features, pl.read_parquet(paths.characteristics))
+    market = dataset.market(panel, env, features)
+    paths.forecaster.mkdir(parents=True, exist_ok=True)
+    write_parquet_atomic(stocks, paths.forecaster / "stocks.parquet")
+    write_parquet_atomic(market, paths.forecaster / "market.parquet")
+    typer.echo(f"{stocks.height:,} stock-months, {stocks['date'].n_unique()} months "
+               f"({stocks['date'].min()} to {stocks['date'].max()})")  # fmt: skip
+
+
+@forecast_app.command("run")
+def run_cmd(
+    start: Annotated[str, typer.Option(help="First month to forecast (YYYY-MM).")] = (
+        f"{walk.FIRST_FORECAST:%Y-%m}"
+    ),
+    device: Annotated[str, typer.Option(help="Where the trees are fitted: cpu or cuda.")] = "cpu",
+    threads: Annotated[int, typer.Option(help="CPU threads for the trees.")] = 6,
+    fresh: Annotated[bool, typer.Option(help="Discard earlier forecasts and start over.")] = False,
+    nets: Annotated[
+        bool, typer.Option(help="Fit the nets too (needs PyTorch, the 'nets' extra).")
+    ] = True,
+) -> None:
+    """Walk forward: refit every month on all earlier months and forecast it.
+
+    The nets are kept in ``nets.pt`` next to the forecasts, so a later run (next month's
+    refit, or a resumed run) continues from them.
+    """
+    folder = DataPaths(get_settings().data_dir).forecaster
+    path, state = folder / "forecasts.parquet", folder / "nets.pt"
+    if fresh:
+        state.unlink(missing_ok=True)
+    done = pl.read_parquet(path) if path.exists() and not fresh else None
+    year, month = (int(p) for p in start.split("-"))
+
+    def save(frame: pl.DataFrame) -> None:
+        nonlocal done
+        done = frame if done is None else pl.concat([done, frame], how="vertical_relaxed")
+        write_parquet_atomic(done, path)
+
+    walk.run(
+        pl.read_parquet(folder / "stocks.parquet"), pl.read_parquet(folder / "market.parquet"),
+        start=date(year, month, 1), device=device, threads=threads,
+        nets=Nets(device, state) if nets else None,
+        skip=set(done["date"].unique().to_list()) if done is not None else None, save=save,
+    )  # fmt: skip
+    typer.echo(f"forecasts: {path}")
+
+
+@forecast_app.command("grade")
+def grade_cmd(
+    since: Annotated[int, typer.Option(help="First year graded.")] = walk.FIRST_GRADED,
+) -> None:
+    """Grade the forecasts on unseen months, after Grinold's rule (research.forecaster)."""
+    folder = DataPaths(get_settings().data_dir).forecaster
+    combined = walk.calibrate(walk.combine(pl.read_parquet(folder / "forecasts.parquet")))
+    graded = combined.filter(pl.col("date").dt.year() >= since)
+    out = grade.report(graded)
+    raw = grade.report(graded.with_columns(pl.col("raw_forecast").alias("forecast")))
+    out["before_grinold"] = {k: raw[k] for k in ("slope", "r2", "tenth_yr")}
+    out["scale_by_year"] = (
+        graded.group_by(pl.col("date").dt.year().alias("year"))
+        .agg(pl.col("scale").mean())
+        .sort("year")
+        .to_dicts()
+    )
+    out["strength_by_year"] = (
+        graded.group_by(pl.col("date").dt.year().alias("year"))
+        .agg(pl.col("strength").mean())
+        .sort("year")
+        .to_dicts()
+    )
+    (folder / "grades.json").write_text(json.dumps(out, indent=1, default=str))
+    sizes = " / ".join(f"{v:.3f}" for v in out["ic_by_size"].values())
+    typer.echo(
+        f"{out['first']} to {out['last']} ({out['months']} months)\n"
+        f"IC {out['ic']:.3f} (t {out['ic_t']:.1f}), right in {out['years_right']} of "
+        f"{out['years']} years\n"
+        f"slope {out['slope']:.2f} (losers {out['slope_losers']:.2f}, winners "
+        f"{out['slope_winners']:.2f}), R² {out['r2']:+.3%}\n"
+        f"best-worst tenth {out['tenth_yr']:.1%}/yr, IC small/mid/large {sizes}\n"
+        f"before Grinold's rule: slope {raw['slope']:.2f}, R² {raw['r2']:+.3%}"
+    )
+
+
+@forecast_app.command("publish")
+def publish_cmd(
+    dest: Annotated[Path, typer.Option(help="Data directory the website reads (e.g. free/).")],
+) -> None:
+    """Write the Forecasts page's summary into ``dest`` (research.forecaster.report)."""
+    data_dir = get_settings().data_dir
+    panel = Panel.load(data_dir)
+    typer.echo(report.publish(DataPaths(data_dir).forecaster, DataPaths(dest).forecaster, panel))

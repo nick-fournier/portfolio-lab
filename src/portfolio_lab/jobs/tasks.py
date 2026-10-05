@@ -32,12 +32,9 @@ from portfolio_lab.data.sources.edgar import annual
 from portfolio_lab.data.sources.tiingo import fetch_fund_history
 from portfolio_lab.research.conditions import caution_dial, conditional_ic
 from portfolio_lab.research.context import STOCK_FEATURES, environment, sensitivities, tailwinds
-from portfolio_lab.research.dataset import build_dataset
-from portfolio_lab.research.evaluation import scoreboard_rows
 from portfolio_lab.research.features import FEATURES, build_features
 from portfolio_lab.research.fundamentals import filing_states
 from portfolio_lab.research.funds import FUNDS, compare
-from portfolio_lab.research.models import prepare, run_all
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.piotroski import build_fscores, fscores_by_symbol
 from portfolio_lab.research.scoreboard import HORIZON, evaluate, summarize
@@ -319,6 +316,7 @@ def scoreboard_task(
     if paths.scoreboard.exists():
         kept = pl.read_parquet(paths.scoreboard).filter(
             ~pl.col("signal").is_in(scores["signal"].unique().to_list())
+            & ~pl.col("signal").str.starts_with("model: ")  # the retired beat-the-median models
         )
         if "horizon" not in kept.columns:  # stored before horizons existed: all monthly
             kept = kept.with_columns(pl.lit(HORIZON, pl.Int64).alias("horizon"))
@@ -343,30 +341,6 @@ def context_task(settings: Settings) -> dict:
     status = {"conditions_rows": by_condition.height, "dial_rows": dial.height,
               "latest": env["date"].max()}  # fmt: skip
     write_status(settings.data_dir, "context", status)
-    return status
-
-
-def models_task(settings: Settings) -> dict:
-    """Train and evaluate the relaxed models walk-forward; save results and scoreboard rows."""
-    paths = DataPaths(settings.data_dir)
-    env = pl.read_parquet(paths.environment) if paths.environment.exists() else None
-    panel = Panel.load(settings.data_dir)
-    data = prepare(build_dataset(panel, pl.read_parquet(paths.features), env))
-    results = run_all(data)
-    for name, table in results.items():
-        write_parquet_atomic(table, paths.models / f"{name}.parquet")
-    rows = scoreboard_rows(results["predictions"])
-    if paths.scoreboard.exists():
-        kept = pl.read_parquet(paths.scoreboard).filter(
-            ~pl.col("signal").str.starts_with("model: ")
-        )
-        rows = pl.concat([kept, rows.select(kept.columns)])
-    write_parquet_atomic(rows.sort("signal", "pool", "date"), paths.scoreboard)
-    best = results["summary"].filter(pl.col("pool") == "all").sort("auc", descending=True)
-    status = {"predictions": results["predictions"].height,
-              "best": {int(h): best.filter(pl.col("horizon") == h)["model"][0]
-                       for h in best["horizon"].unique()}}  # fmt: skip
-    write_status(settings.data_dir, "models", status)
     return status
 
 
