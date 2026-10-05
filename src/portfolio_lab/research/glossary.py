@@ -201,12 +201,6 @@ GLOSSARY: dict[str, Entry] = {
         "Pure extrapolation: assumes last year's return continues. Close to momentum, but "
         "including the latest month.",
     ),
-    "forecast (model=ar1_logret)": Entry(
-        "An AR(1) model on each stock's past year of daily returns: the next return predicted "
-        "from the latest one. Daily returns have almost no memory, so it collapses to "
-        "roughly the trailing average.",
-        "Extrapolation, like the trailing average.",
-    ),
     "forecast (model=arima320_price)": Entry(
         "The original optimizer's ARIMA(3,2,0) on price levels: extrapolates the recent price "
         "trend and its curvature.",

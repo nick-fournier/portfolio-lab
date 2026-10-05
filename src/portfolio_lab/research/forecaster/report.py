@@ -22,7 +22,7 @@ PIECES = {
     "linear_trees": "Linear + trees alone (half of the forecast)",
     "nets": "Nets alone (the other half)",
     "linear": "Linear part alone",
-    "production": "Production today: trailing returns (AR(1))",
+    "production": "Production today: trailing one-year return",
 }
 TRAILING = 12
 
@@ -32,7 +32,7 @@ def build(forecasts: pl.DataFrame, production: pl.DataFrame) -> dict[str, Any]:
 
     Args:
         forecasts: The saved forecasts (``walk.run``'s output).
-        production: Production's forecast (``baseline.ar1``).
+        production: Production's expected return (``baseline.trailing``).
     """
     combined = (
         walk.combine(forecasts)
@@ -108,7 +108,7 @@ def publish(source: Path, dest: Path, panel: Panel) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
     path = dest / SUMMARY
     forecasts = pl.read_parquet(source / "forecasts.parquet")
-    production = baseline.ar1(panel, sorted(forecasts["date"].unique().to_list()))
+    production = baseline.trailing(panel, sorted(forecasts["date"].unique().to_list()))
     summary = build(forecasts, production)
     path.write_text(json.dumps(summary, indent=1, default=str))
     return path

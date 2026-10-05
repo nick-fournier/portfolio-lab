@@ -28,13 +28,6 @@ _MODEL_TEXT = {
         "Each stock's average annual return over the past {span}. This is extrapolation, not "
         "a prediction: it assumes last year's return continues."
     ),
-    "ar1_logret": (
-        "An AR(1) model fitted to each stock's past {span} of daily returns. AR(1) means "
-        "autoregressive with one lag: the next return is predicted from the latest return "
-        "times a fitted coefficient, plus an average. Daily returns have almost no "
-        "day-to-day memory, so the coefficient is near zero and the forecast collapses to "
-        "roughly the trailing {adj} average: extrapolation, not a prediction."
-    ),
     "arima320_price": (
         "The original optimizer's ARIMA(3,2,0) on price levels. ARIMA(p, d, q) reads: p = 3, "
         "it looks back at the 3 most recent values; d = 2, it first takes differences twice, "
@@ -74,8 +67,8 @@ class MeanVar:
     flattered by survivorship bias in free data, so treat its results as an upper bound.
 
     Args:
-        model: Return model: ``ar1_logret`` (default), ``arima320_price`` (the legacy
-            model) or ``historical_mean`` (no forecast).
+        model: Return model: ``historical_mean`` (default: the trailing return, no
+            forecast) or ``arima320_price`` (the legacy model).
         objective: ``max_sharpe``, ``min_volatility`` or ``max_quadratic_utility``.
         top_n: Candidates: the most liquid eligible stocks.
         lookback: Sessions of history for forecasts and covariance.
@@ -116,7 +109,7 @@ class MeanVar:
         workers: Processes used for model fits (not a strategy parameter).
     """
 
-    model: str = "ar1_logret"
+    model: str = "historical_mean"
     objective: str = "max_sharpe"
     top_n: int = 100
     lookback: int = 252
@@ -260,8 +253,7 @@ class MeanVar:
                 "Same candidates as momentum (pool=100): momentum ranks by the 12-month return "
                 "excluding the last month and equal-weights the top 20; meanvar uses the full "
                 f"trailing {span} and weights by expected return, volatility and co-movement "
-                f"({self.max_weight:.0%} cap). The AR(1) and trailing-average runs hold almost "
-                "identical portfolios."
+                f"({self.max_weight:.0%} cap)."
             ),
         }
 

@@ -59,7 +59,7 @@ SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
     # Control for meanvar: the same candidates (100 most liquid), equally weighted.
     ("equal_weight", {"top_n": 100}),
     ("momentum", {}),  # the 20 strongest of the 100 most liquid
-    ("meanvar", {"model": "ar1_logret"}),
+    ("meanvar", {}),
     # The original design: a Piotroski quality filter, alone and in front of meanvar.
     ("piotroski", {"pool": 100}),
     ("meanvar", {"min_fscore": 7}),
@@ -69,7 +69,6 @@ SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
 )
 #: Signals the weekly scoreboard evaluates: mean-variance's forecasts and classic anomalies.
 SCOREBOARD_SIGNALS: tuple[tuple[str, dict[str, Any]], ...] = (
-    ("forecast", {"model": "ar1_logret"}),
     ("forecast", {"model": "arima320_price"}),
     ("forecast", {"model": "historical_mean"}),
     ("momentum", {}),
@@ -276,7 +275,7 @@ def scheduled_backtests_task(settings: Settings) -> dict:
 
 
 def signal_label(name: str, params: dict[str, Any]) -> str:
-    """Display name for a signal configuration, e.g. ``forecast (model=ar1_logret)``.
+    """Display name for a signal configuration, e.g. ``forecast (model=historical_mean)``.
 
     Features are named by their column (the horizon shows in the scoreboard's sections).
     """

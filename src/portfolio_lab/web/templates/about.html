@@ -45,8 +45,8 @@
 <ul>
   <li><b>Baselines:</b> buy-and-hold SPY, and equal weight (all eligible stocks, or the most
     liquid ones).</li>
-  <li><b>Mean-variance:</b> the original optimizer's idea done properly. Return forecasts
-    (the legacy ARIMA on prices, an AR(1) model on returns, or a plain trailing average) feed the
+  <li><b>Mean-variance:</b> the original optimizer's idea done properly. Expected returns
+    (each stock's trailing one-year return, or the legacy ARIMA on prices) feed the
     efficient frontier over the 100 most liquid stocks.</li>
   <li><b>Momentum:</b> equal-weight the 20 biggest winners of the past year (skipping the last
     month), on the same 100 stocks or on every eligible stock.</li>
