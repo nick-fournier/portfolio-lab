@@ -769,10 +769,12 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "typer" },
     { name = "uvicorn" },
-    { name = "xgboost" },
 ]
 
 [package.optional-dependencies]
+forecaster = [
+    { name = "xgboost" },
+]
 nets = [
     { name = "torch" },
 ]
@@ -801,9 +803,9 @@ requires-dist = [
     { name = "torch", marker = "extra == 'nets'", specifier = ">=2.4" },
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", specifier = ">=0.30" },
-    { name = "xgboost", specifier = ">=3.0" },
+    { name = "xgboost", marker = "extra == 'forecaster'", specifier = ">=3.0" },
 ]
-provides-extras = ["nets"]
+provides-extras = ["forecaster", "nets"]
 
 [package.metadata.requires-dev]
 dev = [

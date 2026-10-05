@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --extra forecaster
       - name: Lint, format, docstrings, file length
         run: uv run pre-commit run --all-files --show-diff-on-failure
       - name: Tests

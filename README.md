@@ -67,9 +67,11 @@ uv run plab schedule                              # long-running: jobs when due
 ```
 
 The next-month stock forecaster (research, on the Sharadar data directory; the trees can
-be fitted on a GPU with `--device cuda`):
+be fitted on a GPU with `--device cuda`). Its model libraries are optional extras, kept out
+of the production image: `forecaster` (XGBoost) and `nets` (PyTorch):
 
 ```bash
+uv sync --extra forecaster --extra nets
 export PORTFOLIO_DATA_DIR=/home/nick/portfolio-data/sharadar
 uv run plab forecast inputs                       # extra stock inputs from the bulk zips
 uv run plab forecast dataset                      # stock and market tables

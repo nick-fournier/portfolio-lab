@@ -10,7 +10,6 @@ month's bin edges still come from that month's training rows only.
 """
 
 import numpy as np
-import xgboost
 
 PARAMS = {
     "learning_rate": 0.05, "n_estimators": 400, "grow_policy": "lossguide", "max_leaves": 31,
@@ -31,6 +30,8 @@ class Trees:
             device: ``cpu`` or ``cuda``.
             threads: CPU threads.
         """
+        import xgboost  # noqa: PLC0415 - optional dependency (the ``forecaster`` extra)
+
         self.keep = np.flatnonzero(_host(np.isfinite(x).any(axis=0)))
         self.model = xgboost.XGBRegressor(**PARAMS, device=device, n_jobs=threads)
         self.model.fit(x[:, self.keep], residual)
