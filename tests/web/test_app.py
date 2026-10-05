@@ -297,7 +297,8 @@ def test_paper_page_reads_a_separate_trading_dir(tmp_path):
 def test_forecasts_page(client, tmp_path):
     assert "No forecasts published yet" in client.get("/forecasts").text
     sizes = {"small": 0.044, "mid": 0.035, "large": 0.026}
-    piece = {"ic": 0.037, "ic_t": 4.5, "years_right": 16, "years": 18, "slope": 0.63,
+    piece = {"ic": 0.037, "ic_t": 4.5, "months_right": 127, "years_right": 16, "years": 18,
+             "slope": 0.63,
              "r2": 0.001, "tenth_yr": 0.105, "ic_by_size": sizes}  # fmt: skip
     summary = {
         "start": "2009-01-30", "end": "2026-08-31", "months": 212, "corr": 0.51,
@@ -315,7 +316,7 @@ def test_forecasts_page(client, tmp_path):
     folder.mkdir(parents=True)
     (folder / "summary.json").write_text(json.dumps(summary))
     page = client.get("/forecasts").text
-    for expected in ("0.037", "16 of 18", "forecast label", "0.044 / 0.035 / 0.026",
+    for expected in ("0.037", "16 of 18", "60%", "forecast label", "0.044 / 0.035 / 0.026",
                      "correlate 0.51", "±0.035", 'id="fit"', 'id="trailing"',
                      'id="tenths"'):  # fmt: skip
         assert expected in page, expected
