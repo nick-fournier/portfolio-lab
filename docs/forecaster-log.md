@@ -19,15 +19,34 @@ variant is or is not the front runner. Newest decisions first within each sectio
 
 ## Front runner
 
-PLS (1 component, chosen by k-fold over past years) on the 103 inputs and each input ×
-VIX and × last month's return dispersion, plus XGBoost trees on its residual (103 stock +
-115 market inputs; 31 leaves, ≥2,000 stock-months per leaf, learning rate 0.05, 400
-rounds), forecast = linear + k × trees with k chosen walk-forward (0.25 every month).
+Two models, each centered within the month, averaged 50/50:
 
-| Run | IC | t | Years | Slope | R² | Tenth /yr |
+1. **Linear + trees:** PLS (1 component, chosen by k-fold over past years) on the 103 inputs
+   and each input × VIX and × last month's return dispersion, plus XGBoost trees on its
+   residual (103 stock + 115 market inputs; 31 leaves, ≥2,000 stock-months per leaf, learning
+   rate 0.05, 400 rounds) at a strength chosen walk-forward (0.25 every month).
+2. **Bilinear nets:** a network turns each stock's 103 inputs into 8 numbers; all 116 market
+   inputs (scaled by past months) tilt the weights on those numbers each month, with a ridge
+   penalty of 1 on the 8 × 116 market weights; output centered within the month; 5 nets,
+   warm-started monthly.
+
+| Model | IC | t | Years | Slope | R² | Tenth /yr |
 |---|---|---|---|---|---|---|
-| GPU-binned trees (current code) | 0.030 | 3.3 | 15 | 0.57 | +0.06% | 10.5% |
-| CPU-binned trees | 0.031 | 3.5 | 16 | 0.56 | +0.04% | 10.8% |
+| **Forecast (average)** | 0.037 | 4.5 | 16 | 0.63 | +0.10% | 10.5% |
+| Linear + trees alone | 0.030 | 3.3 | 15 | 0.57 | +0.06% | 10.5% |
+| Nets alone | 0.033 | 4.9 | 17 | 0.43 | −0.03% | 10.0% |
+| Production today: AR(1) on trailing returns | 0.004 | 0.4 | 13 | 0.02 | −8.09% | −0.5% |
+
+The average's gain over linear + trees held across 4 net seeds (±0.0013 IC) and penalties
+1–100. A year's IC moves by about ±0.035 by chance at this level of skill (monthly IC sd
+0.12), which matches the actual spread of yearly ICs: good and bad years are mostly luck.
+
+Grinold's rule (rescale by the outcome-on-forecast slope of earlier months) was tested and not
+applied: every walk-forward version lowered R² (all earlier months +0.094%, last 120 months
++0.096%, last 60 +0.056%, last 36 +0.040%, vs +0.099% unscaled); scales anchored to the badly
+sized early years (~0.4). Forecasts are too big in weak years and about right in strong ones
+(slope 0.25–0.46 in 2009–2020, about 1.1 in 2021–2026), and their size does not widen with
+market conditions.
 
 ## Tried and not adopted
 
