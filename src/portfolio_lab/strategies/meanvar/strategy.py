@@ -8,17 +8,20 @@ from typing import ClassVar
 import pandas as pd
 
 from portfolio_lab.core.calendar import Frequency
+from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.research import regimes, stress
 from portfolio_lab.research.dataview import DataView
 from portfolio_lab.research.piotroski import PIOTROSKI, health_scores
 from portfolio_lab.strategies import explain
 from portfolio_lab.strategies.base import Weights, register
 from portfolio_lab.strategies.meanvar.forecast import (
+    MU_BOUNDS,
     TRADING_DAYS,
     Forecaster,
     ForecastSpec,
     price_windows,
 )
+from portfolio_lab.strategies.meanvar.learned import EXPECTED, LearnedForecasts, expected_returns
 from portfolio_lab.strategies.meanvar.optimize import optimize
 from portfolio_lab.strategies.meanvar.soft import SoftSelector
 
@@ -112,6 +115,11 @@ class MeanVar:
         gauge_band: Stress levels (0 to 1) where the tilt starts and where it is complete
             (all minimum variance).
         schedule: Rebalance frequency.
+        expected: Where expected returns come from: ``model`` (``model``'s forecast) or the
+            next-month forecaster (``strategies.meanvar.learned``): ``forecaster`` or
+            ``forecaster_excess``.
+        forecast_pool: If set, candidates are the ``top_n`` stocks with the highest
+            forecaster forecast among the ``forecast_pool`` most liquid.
         cache_dir: Forecast cache root, set by the runner (not a strategy parameter).
         workers: Processes used for model fits (not a strategy parameter).
     """
@@ -136,6 +144,8 @@ class MeanVar:
     gauge_band: tuple[float, float] = (0.5, 0.9)
     schedule: Frequency = "M"
     name: str = "meanvar"
+    expected: str = "model"
+    forecast_pool: int | None = None
     cache_dir: Path | None = field(default=None, repr=False, metadata={"param": False})
     workers: int = field(default=1, metadata={"param": False})
 
@@ -159,6 +169,10 @@ class MeanVar:
         self._caps: dict[str, float] | None = None  # per-stock caps of the set being weighed
         self._state: tuple[date, str] | None = None  # market state, once per rebalance
         self._held: dict[str, float] = {}
+        if self.expected not in EXPECTED:
+            raise ValueError(f"unknown expected {self.expected!r}; choose from {EXPECTED}")
+        self.forecast_pool = int(self.forecast_pool) if self.forecast_pool else None
+        self._learned: LearnedForecasts | None = None
 
     example_columns: ClassVar[dict[str, str]] = {
         "Expected return (annual)": "pct",
@@ -272,6 +286,14 @@ class MeanVar:
             self._forecaster = Forecaster(spec, self.cache_dir, self.workers)
         return self._forecaster
 
+    def _learned_at(self, view: DataView) -> dict[str, float]:
+        """The forecaster's forecasts for this rebalance (data dir is the cache's grandparent)."""
+        if self._learned is None:
+            data_dir = self.cache_dir.parent.parent  # <data>/cache/forecasts
+            excess = self.expected == "forecaster_excess"
+            self._learned = LearnedForecasts(DataPaths(data_dir).forecaster, excess)
+        return self._learned.at(view.asof)
+
     def _health(self, view: DataView, pool: list[str]) -> dict[str, float]:
         """Continuous health score (the nine Piotroski metrics) of ``pool``."""
         return health_scores(view.features(pool, list(PIOTROSKI)))
@@ -371,7 +393,12 @@ class MeanVar:
             among = [s for s, f in view.fscores(view.eligible()).items() if f >= self.min_fscore]
         if self.healthy_share is not None:
             among = self._healthy_set(view, among)
-        if self.health_rank_pool and self._soft is not None:
+        if self.forecast_pool:
+            pool = view.top_liquid(self.forecast_pool, among=among)
+            forecast = self._learned_at(view)
+            ranked = sorted((s for s in pool if s in forecast), key=lambda s: -forecast[s])
+            sets = [(ranked[: self.top_n], None)]
+        elif self.health_rank_pool and self._soft is not None:
             sets = self._soft.sets(view, among)
         elif self.health_rank_pool:
             health = self._health(view, view.top_liquid(self.health_rank_pool, among=among))
@@ -402,6 +429,13 @@ class MeanVar:
         self._caps = caps
         windows = {s: prices[s].to_numpy() for s in prices.columns}
         mu = pd.Series(self._get_forecaster().forecast(view.asof, windows), dtype=float)
+        if self.expected != "model":
+            excess = self.expected == "forecaster_excess"
+            mu = expected_returns(self._learned_at(view), mu, view.risk_free(), excess)
+            mu = mu.clip(*MU_BOUNDS)
+            prices = prices[[s for s in prices.columns if s in mu.index]]
+            if prices.shape[1] < 2:
+                return {}, pd.Series(dtype=float), pd.Series(dtype=float)
         weights = self._optimize(mu, prices, view.risk_free(), self.objective)
         if self.risk_gauge and weights:
             weights = self._tilt(view, mu, prices, weights)

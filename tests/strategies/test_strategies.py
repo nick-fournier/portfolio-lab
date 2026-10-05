@@ -177,3 +177,39 @@ def test_every_strategy_explains_itself(name, make_panel):
         weights = strategy.target_weights(DataView(panel, ASOF))
         assert set(strategy.last_signals) == {s for s, w in weights.items() if w > 0}
         assert all(set(v) == set(columns) for v in strategy.last_signals.values())
+
+
+def test_meanvar_forecast_pool_takes_the_best_forecasts(make_panel, monkeypatch):
+    panel = make_panel(symbols=[f"S{i:02d}" for i in range(12)], days=400)
+    view = DataView(panel, ASOF)
+    strategy = create("meanvar", model="historical_mean", forecast_pool=12, top_n=4,
+                      expected="forecaster", max_weight=0.5)  # fmt: skip
+    forecast = {f"S{i:02d}": i / 100 for i in range(12)}  # S11 best
+    monkeypatch.setattr(strategy, "_learned_at", lambda v: forecast)
+    weights = strategy.target_weights(view)
+    assert weights and set(weights) <= {"S08", "S09", "S10", "S11"}
+
+
+def test_learned_expected_returns_add_the_level():
+    import pandas as pd  # noqa: PLC0415
+
+    from portfolio_lab.strategies.meanvar.learned import expected_returns  # noqa: PLC0415
+
+    model_mu = pd.Series({"A": 0.10, "B": 0.20, "C": 0.30})
+    forecast = {"A": 0.01, "B": -0.01}  # C has no forecast: left out
+    rel = expected_returns(forecast, model_mu, 0.04, excess=False)
+    assert rel.to_dict() == pytest.approx({"A": 0.15 + 0.12, "B": 0.15 - 0.12})
+    exc = expected_returns(forecast, model_mu, 0.04, excess=True)
+    assert exc.to_dict() == pytest.approx({"A": 0.04 + 0.12, "B": 0.04 - 0.12})
+
+
+def test_learned_forecasts_use_the_latest_recent_month(tmp_path, monkeypatch):
+    from datetime import date  # noqa: PLC0415
+
+    from portfolio_lab.strategies.meanvar import learned  # noqa: PLC0415
+
+    lf = learned.LearnedForecasts(tmp_path)
+    by_date = {date(2020, 1, 31): {"A": 1.0}, date(2020, 2, 28): {"A": 2.0}}
+    monkeypatch.setattr(lf, "_load", lambda: by_date)
+    assert lf.at(date(2020, 3, 2)) == {"A": 2.0}
+    assert lf.at(date(2020, 3, 20)) == {}  # too stale
