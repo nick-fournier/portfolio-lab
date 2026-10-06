@@ -47,12 +47,17 @@ log = logging.getLogger(__name__)
 
 #: The production strategy: meanvar on the healthiest (continuous F-score) of the most liquid
 #: stocks, monthly, with weight limits tapering near the edges of both lists instead of hard
-#: cutoffs (``strategies.meanvar.soft``), holding the minimum-variance mix in bear markets and
-#: equal weights in rebounds (see ``strategies.meanvar`` and ``research.regimes``).
+#: cutoffs (``strategies.meanvar.soft``), weighted for the highest expected long-run growth
+#: (the Kelly objective, ``strategies.meanvar.optimize``), holding the minimum-variance mix in
+#: bear markets and equal weights in rebounds (see ``strategies.meanvar`` and
+#: ``research.regimes``). Kelly replaced max-Sharpe on 2026-10-06: on the same candidates and
+#: switches it compounded at 26.0%/yr against 20.0% over 2004-2026, with about 18 holdings
+#: instead of 25, volatility 32% instead of 21% and a 41% worst drawdown instead of 32%.
 PRODUCTION: tuple[str, dict[str, Any]] = (
     "meanvar",
-    {"health_rank_pool": 400, "soften": "taper", "bear_defense": True, "rebound": "equal"},
-)
+    {"health_rank_pool": 400, "soften": "taper", "bear_defense": True, "rebound": "equal",
+     "objective": "kelly"},
+)  # fmt: skip
 #: The production models, drawn on the Overview and Compare charts against SPY and the best
 #: funds (every other strategy is listed in their tables but starts hidden on the chart).
 PRODUCTION_MODELS: tuple[tuple[str, dict[str, Any]], ...] = (PRODUCTION,)

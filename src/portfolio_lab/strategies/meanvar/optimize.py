@@ -15,7 +15,10 @@ from pypfopt.risk_models import CovarianceShrinkage
 
 log = logging.getLogger(__name__)
 
-OBJECTIVES = ("max_sharpe", "min_volatility", "max_quadratic_utility")
+#: ``kelly``: the highest expected long-run growth, expected return minus half the variance
+#: (quadratic utility at risk aversion 1, without the L2 regularizer). It concentrates and
+#: takes more risk than ``max_sharpe``, and compounds faster.
+OBJECTIVES = ("max_sharpe", "min_volatility", "max_quadratic_utility", "kelly")
 TRADING_DAYS = 252
 #: Weights below this are dropped; the dropped sliver is held as cash.
 WEIGHT_CUTOFF = 1e-4
@@ -37,6 +40,8 @@ def _solve(ef: EfficientFrontier, objective: str, risk_free: float, risk_aversio
     """Run the requested objective on ``ef`` (raises if infeasible)."""
     if objective == "max_sharpe":
         ef.max_sharpe(risk_free_rate=risk_free)
+    elif objective == "kelly":
+        ef.max_quadratic_utility(risk_aversion=1.0)
     elif objective == "max_quadratic_utility":
         ef.add_objective(objective_functions.L2_reg, gamma=0.1)
         ef.max_quadratic_utility(risk_aversion=risk_aversion)

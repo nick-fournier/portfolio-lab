@@ -69,7 +69,8 @@ class MeanVar:
     Args:
         model: Return model: ``historical_mean`` (default: the trailing return, no
             forecast) or ``arima320_price`` (the legacy model).
-        objective: ``max_sharpe``, ``min_volatility`` or ``max_quadratic_utility``.
+        objective: ``max_sharpe``, ``min_volatility``, ``max_quadratic_utility`` or
+            ``kelly`` (the highest expected long-run growth; see ``optimize.OBJECTIVES``).
         top_n: Candidates: the most liquid eligible stocks.
         lookback: Sessions of history for forecasts and covariance.
         horizon: Forecast horizon in sessions.
@@ -219,6 +220,9 @@ class MeanVar:
             "against the T-bill rate)",
             "min_volatility": "the lowest risk (minimum volatility), ignoring the forecasts",
             "max_quadratic_utility": "the best trade-off of expected return against risk",
+            "kelly": "the highest expected long-run growth (expected return minus half the "
+            "variance, the Kelly criterion), which concentrates more and takes more risk than "
+            "the maximum-Sharpe mix",
         }[self.objective]
         signal = (
             "the legacy ARIMA price trend"
