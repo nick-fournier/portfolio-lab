@@ -109,6 +109,18 @@ def test_optimize_falls_back_when_max_sharpe_is_infeasible():
     assert sum(weights.values()) == pytest.approx(1.0, abs=1e-3)
 
 
+def test_optimize_kelly_concentrates_more_than_max_sharpe():
+    prices = _prices()
+    mu = pd.Series({s: 0.05 + 0.02 * i for i, s in enumerate(prices.columns)})
+    kelly = optimize(mu, prices, risk_free=0.03, objective="kelly", max_weight=0.2)
+    sharpe = optimize(mu, prices, risk_free=0.03, objective="max_sharpe", max_weight=0.2)
+    assert sum(kelly.values()) == pytest.approx(1.0, abs=1e-3)
+    assert max(kelly.values()) <= 0.2 + 1e-6
+    # Kelly weighs expected return against variance directly, so it leans harder on the
+    # highest-return names than the ratio objective does.
+    assert sum(sorted(kelly.values())[-3:]) >= sum(sorted(sharpe.values())[-3:]) - 1e-6
+
+
 def test_optimize_edge_cases():
     prices = _prices(n_symbols=3)
     mu = pd.Series({"S00": 0.1, "S01": 0.2, "S02": 0.3})

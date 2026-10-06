@@ -171,11 +171,14 @@ def growth_figure(
     visible: set[str],
     groups: dict[str, str] | None = None,
     reference: str = "SPY",
+    skip_weekends: bool = False,
 ) -> str:
     """Growth of $1 per series (key); ``visible`` ones are drawn, the rest start hidden.
 
     The legend lists the drawn series first, then the others under their group title
     (``groups`` maps key -> group title, in the order the groups should appear).
+    ``skip_weekends`` leaves Saturdays and Sundays out of the date axis, so a short
+    daily series is not stretched across blank days.
     """
     groups = groups or {}
     order = list(dict.fromkeys(groups.values()))
@@ -196,10 +199,13 @@ def growth_figure(
             legendgroup="shown" if shown else groups.get(key, "other"),
             legendgrouptitle_text="Drawn" if shown else groups.get(key, "Other"),
         )  # fmt: skip
+    xaxis: dict = {"rangeselector": RANGE_BUTTONS}
+    if skip_weekends:
+        xaxis["rangebreaks"] = [{"bounds": ["sat", "mon"]}]
     fig.update_layout(
         yaxis_type="log",
         legend={**_LAYOUT["legend"], "groupclick": "toggleitem"},
-        xaxis={"rangeselector": RANGE_BUTTONS},
+        xaxis=xaxis,
     )
     return fig.to_json()
 

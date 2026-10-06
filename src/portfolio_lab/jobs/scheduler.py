@@ -53,6 +53,9 @@ JOBS: tuple[Job, ...] = (
     Job("daily_ingest", tasks.daily_ingest_task, "session"),
     # After the day's prices: record the paper account, rebalance at month ends.
     Job("paper", tasks.paper_task, "session"),
+    # Keep the Paper page's backtest line current with the account (the weekly baselines
+    # would leave it up to a week behind).
+    Job("paper_backtest", tasks.paper_backtest_task, "session"),
     Job("verify_prices", tasks.verify_task, "weekly"),
     Job("fundamentals", tasks.fundamentals_task, "weekly"),
     Job("macro", tasks.macro_task, "weekly"),
