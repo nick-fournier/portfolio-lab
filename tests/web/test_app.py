@@ -281,9 +281,9 @@ def test_paper_page_empty_then_with_records(client, tmp_path):
     }, qty=pl.Float64)  # fmt: skip
     page = client.get("/paper")
     assert page.status_code == 200
-    for expected in ("$101,000", "1.0%", "CCC", "5940.00", "Paper vs SPY"):
+    for expected in ("$101,000", "1.0%", "CCC", "Paper vs SPY", "Last rebalance: 2024-01-02"):
         assert expected in page.text
-    assert "<th>Status</th>" not in page.text  # orders show amount and fill, not status
+    assert "5940.00" not in page.text  # the orders table is gone; the orders live on Alpaca
 
 
 def test_paper_page_reads_a_separate_trading_dir(tmp_path):
