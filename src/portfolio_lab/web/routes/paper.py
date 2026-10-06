@@ -109,10 +109,13 @@ def paper_page(request: Request) -> HTMLResponse:
             "start": start, "date": latest["date"], "equity": latest["equity"],
             "cash": latest["cash"], "ret": latest["equity"] / snapshots["equity"][0] - 1,
         }  # fmt: skip
-        growth = _growth(snapshots, {"SPY": _spy(paths, start), "backtest": _backtest(data_dir)})
-        names = {"paper": "Paper account", "SPY": "SPY", "backtest": "Backtest, same strategy"}
+        backtest = _backtest(data_dir)
+        growth = _growth(snapshots, {"SPY": _spy(paths, start), "backtest": backtest})
+        through = f" (through {backtest['date'].max()})" if backtest.height else ""
+        names = {"paper": "Paper account", "SPY": "SPY",
+                 "backtest": f"Backtest, same strategy{through}"}  # fmt: skip
         if growth["date"].n_unique() > 1:
-            context["chart"] = growth_figure(growth, names, set(names))
+            context["chart"] = growth_figure(growth, names, set(names), skip_weekends=True)
         context["holdings"] = _holdings(paths.paper, latest["equity"])
         context["last_rebalance"], context["orders"] = _last_orders(paths.paper)
     return request.app.state.templates.TemplateResponse(request, "paper.html", context)

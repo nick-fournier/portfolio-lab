@@ -271,6 +271,18 @@ def backtest_task(
     return run_id, result.metrics
 
 
+def paper_backtest_task(settings: Settings) -> dict:
+    """Re-run the paper strategy's backtest through the latest session, then prune old runs.
+
+    The Paper page draws this run beside the paper account, so it has to be as current as
+    the account: the weekly baselines would leave it up to a week behind.
+    """
+    name, params = PAPER_STRATEGY
+    run_id, metrics = backtest_task(settings, name, SCHEDULED_START, params=params)
+    pruned = prune_runs(settings.data_dir, keep=RUNS_KEPT_PER_CONFIG)
+    return {"run": run_id, "cagr": metrics.get("cagr"), "pruned": len(pruned)}
+
+
 def scheduled_backtests_task(settings: Settings) -> dict:
     """Re-run the baseline backtests through the latest data, then prune old runs."""
     runs = {

@@ -38,11 +38,10 @@
 {% if orders %}
 <h2>Orders of the {{ last_rebalance }} rebalance</h2>
 <div class="table-wrap"><table>
-  <thead><tr><th>Stock</th><th>Side</th><th class="num">Amount</th><th>Status</th>
+  <thead><tr><th>Stock</th><th>Side</th><th class="num">Amount</th>
     <th class="num">Fill price</th></tr></thead>
   <tbody>{% for o in orders %}<tr><td>{{ o.symbol }}</td><td>{{ o.side }}</td>
     <td class="num">{% if o.notional is not none %}${{ "{:,.0f}".format(o.notional) }}{% elif o.qty is not none %}{{ "%g" | format(o.qty) }} sh{% else %}–{% endif %}</td>
-    <td>{{ o.status }}</td>
     <td class="num">{{ "%.2f" | format(o.filled_avg_price) if o.filled_avg_price is not none else "–" }}</td></tr>{% endfor %}</tbody>
 </table></div>
 {% endif %}
