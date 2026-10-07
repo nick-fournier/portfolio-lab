@@ -67,6 +67,9 @@ class Panel:
         traded: Boolean array, same shape: the bar had volume. Halted and dead stocks
             often keep printing zero-volume bars at a frozen price, which are not trades.
             Defaults to "has a close".
+        market: Column of the market index (SPY); defaults to the symbol ``SPY``.
+        names: Display name (ticker) per symbol, for results and orders; defaults to the
+            symbols themselves. In the hive, symbols are sids and names are tickers.
     """
 
     def __init__(  # noqa: PLR0913 - optional extras are keyword-only
@@ -81,6 +84,8 @@ class Panel:
         fundamentals: pl.DataFrame | None = None,
         fell_to_otc: Iterable[str] = (),
         traded: np.ndarray | None = None,
+        market: int | None = None,
+        names: dict[str, str] | None = None,
     ):
         self.dates = list(dates)
         self.universe = frozenset(universe)
@@ -91,6 +96,9 @@ class Panel:
         self.symbols = list(symbols)
         self.date_index = {d: i for i, d in enumerate(self.dates)}
         self.symbol_index = {s: j for j, s in enumerate(self.symbols)}
+        self.market = self.symbol_index.get("SPY") if market is None else market
+        self.names = dict(names) if names else {s: s for s in self.symbols}
+        self._by_name = {n: s for s, n in self.names.items()}
         self.fields = dict(fields)
         self.eligible = eligible
         self.rf_daily = rf_daily
@@ -116,6 +124,10 @@ class Panel:
     def __repr__(self) -> str:
         span = f"{self.dates[0]}..{self.dates[-1]}" if self.dates else "empty"
         return f"Panel({len(self.dates)} sessions {span}, {len(self.symbols)} symbols)"
+
+    def resolve(self, name: str) -> str | None:
+        """The symbol displayed as ``name`` (a ticker), if any."""
+        return self._by_name.get(name)
 
     def field(self, name: str) -> np.ndarray:
         """Return the read-only array for ``name`` (one of :data:`FLOAT_FIELDS`)."""
@@ -194,9 +206,10 @@ class Panel:
     ) -> "Panel":
         """Load stocks, benchmarks and rates from the data directory into a panel.
 
-        The universe is the set of symbols currently marked ``included`` plus the stocks
-        delisted since 2016 (``universe/delisted.parquet``), so backtests are not limited to
-        today's survivors.
+        A data hive (``data_dir/ids`` exists) loads through ``data.derived.daily``. In the
+        old layout the universe is the set of symbols currently marked ``included`` plus
+        the stocks delisted since 2016 (``universe/delisted.parquet``), so backtests are
+        not limited to today's survivors.
 
         Args:
             data_dir: The data directory (``Settings.data_dir``).
@@ -205,6 +218,10 @@ class Panel:
             rules: Eligibility rules.
         """
         paths = DataPaths(data_dir)
+        if paths.ids.exists():
+            from portfolio_lab.data.derived import daily  # noqa: PLC0415 - avoids a cycle
+
+            return daily.panel(data_dir, start, end, rules)
         columns = ["symbol", "date", "close", "volume", "ret_cc", "ret_co"]
         frames = [
             pl.scan_parquet(dataset / "year=*" / "data.parquet").select(columns)

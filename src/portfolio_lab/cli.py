@@ -16,7 +16,11 @@ import typer
 from portfolio_lab.backtest.results import load_run
 from portfolio_lab.core.config import get_settings
 from portfolio_lab.core.log import setup_logging
-from portfolio_lab.data.ingest import sharadar
+from portfolio_lab.data.conform import alpaca as conform_alpaca
+from portfolio_lab.data.conform import edgar as conform_edgar
+from portfolio_lab.data.conform import fred, nasdaq, tiingo
+from portfolio_lab.data.conform import sharadar as conform_sharadar
+from portfolio_lab.data.derived import daily, fundamentals, monthly
 from portfolio_lab.forecast_cli import forecast_app
 from portfolio_lab.jobs import tasks, taxes
 from portfolio_lab.research.scorecard import scorecard
@@ -25,6 +29,8 @@ app = typer.Typer(help="Portfolio lab: ingest data, run backtests, serve the das
 ingest_app = typer.Typer(help="Fetch and store market data.")
 app.add_typer(ingest_app, name="ingest")
 app.add_typer(forecast_app, name="forecast")
+hive_app = typer.Typer(help="The data hive: conform each source into the shared tables.")
+app.add_typer(hive_app, name="hive")
 
 Full = Annotated[bool, typer.Option("--full", help="Re-fetch full history instead of updating.")]
 Day = Annotated[datetime, typer.Option(formats=["%Y-%m-%d"], help="Date (YYYY-MM-DD).")]
@@ -124,27 +130,80 @@ def _parse_params(pairs: list[str]) -> dict[str, Any]:
     return params
 
 
-@app.command("ingest-sharadar")
-def ingest_sharadar_cmd(
-    out: Annotated[Path, typer.Option(help="New data directory to write.")],
+@hive_app.command("sharadar")
+def hive_sharadar_cmd(
     raw: Annotated[
-        Path | None, typer.Option(help="Folder with the bulk zips (default: OUT/raw).")
+        Path | None, typer.Option(help="Folder with the bulk zips (default: <data>/sharadar/raw).")
     ] = None,
 ) -> None:
-    """Build a separate data directory from Sharadar's full-history bulk files.
+    """Seed the security ids and conform Sharadar's bulk files."""
+    typer.echo(conform_sharadar.build(get_settings().data_dir, raw))
 
-    The bulk zips live inside the Sharadar directory (``OUT/raw``) so everything under
-    the license sits in one folder.
-    """
-    settings = get_settings()
-    raw = raw or out / "raw"
-    typer.echo(sharadar.build(raw, out, settings.data_dir))
+
+@hive_app.command("alpaca")
+def hive_alpaca_cmd(
+    store: Annotated[Path, typer.Option(help="Old-layout data directory with Alpaca's bars.")],
+) -> None:
+    """Conform Alpaca's stored daily bars (ids must exist: run `hive sharadar` first)."""
+    typer.echo(conform_alpaca.build(get_settings().data_dir, store))
+
+
+@hive_app.command("edgar")
+def hive_edgar_cmd(
+    zip_path: Annotated[
+        Path | None, typer.Option("--zip", help="companyfacts.zip (default: <data>/edgar/raw).")
+    ] = None,
+) -> None:
+    """Conform SEC EDGAR's company facts into filings (ids must exist)."""
+    typer.echo(conform_edgar.build(get_settings().data_dir, zip_path))
+
+
+@hive_app.command("store")
+def hive_store_cmd(
+    store: Annotated[Path, typer.Option(help="Old-layout data directory.")],
+) -> None:
+    """Conform the NASDAQ directory, Tiingo's dead list and FRED's series from an old store."""
+    for module in (nasdaq, tiingo, fred):
+        typer.echo(f"{module.SOURCE}: {module.build(get_settings().data_dir, store)}")
+
+
+@hive_app.command("conform")
+def hive_conform_cmd() -> None:
+    """Rewrite every fetched source (the ingest store) into the hive's conformed tables."""
+    typer.echo(tasks.conform_task(get_settings()))
+
+
+@hive_app.command("derive")
+def hive_derive_cmd() -> None:
+    """Rebuild every derived table (daily, fundamentals, monthly, environment)."""
+    typer.echo(tasks.derive_task(get_settings()))
+
+
+@hive_app.command("daily")
+def hive_daily_cmd() -> None:
+    """Rebuild the derived daily table (liquidity, history, listing flags)."""
+    typer.echo(daily.build(get_settings().data_dir))
+
+
+@hive_app.command("fundamentals")
+def hive_fundamentals_cmd() -> None:
+    """Rebuild the derived fundamentals table (prior year, F-scores)."""
+    typer.echo(fundamentals.build(get_settings().data_dir))
+
+
+@hive_app.command("monthly")
+def hive_monthly_cmd() -> None:
+    """Rebuild the derived monthly (stock inputs) and environment tables."""
+    typer.echo(monthly.build(get_settings().data_dir))
 
 
 @app.command("backtest")
 def backtest_cmd(
     strategy: Annotated[str, typer.Argument(help="Registered strategy name.")],
-    start: Day,
+    start: Annotated[
+        datetime | None,
+        typer.Option(formats=["%Y-%m-%d"], help="First date (default: a year into the data)."),
+    ] = None,
     end: Annotated[
         datetime | None, typer.Option(formats=["%Y-%m-%d"], help="Last date (default: latest).")
     ] = None,
@@ -163,7 +222,7 @@ def backtest_cmd(
     run_id, metrics = tasks.backtest_task(
         get_settings(),
         strategy,
-        start.date(),
+        start.date() if start else None,
         end.date() if end else None,
         _parse_params(param or []),
         notional,
@@ -173,12 +232,6 @@ def backtest_cmd(
     typer.echo(f"run {run_id}")
     for key, value in metrics.items():
         typer.echo(f"  {key:>20}: {value:,.4f}")
-
-
-@app.command("features")
-def features_cmd() -> None:
-    """Rebuild the monthly point-in-time feature panel."""
-    typer.echo(tasks.features_task(get_settings()))
 
 
 @app.command("scoreboard")
@@ -209,16 +262,6 @@ def context_cmd() -> None:
 def make_vs_buy_cmd() -> None:
     """Compare our strategies with funds anyone can buy (needs TIINGO_API_KEY for mutual funds)."""
     typer.echo(tasks.make_vs_buy_task(get_settings()))
-
-
-@app.command("make-vs-buy-history")
-def make_vs_buy_history_cmd(
-    publish: Annotated[
-        Path | None, typer.Option(help="Main data directory to publish the results to.")
-    ] = None,
-) -> None:
-    """Compare funds (since launch) with our strategies since 1999 on the Sharadar history."""
-    typer.echo(tasks.make_vs_buy_history_task(get_settings(), publish))
 
 
 @app.command("tax-runs")

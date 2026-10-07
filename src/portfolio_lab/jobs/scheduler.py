@@ -50,16 +50,17 @@ class Job:
 
 
 JOBS: tuple[Job, ...] = (
+    # Fetch, then rewrite every source into the hive and rebuild the derived tables.
     Job("daily_ingest", tasks.daily_ingest_task, "session"),
-    # After the day's prices: record the paper account, rebalance at month ends.
+    Job("conform", tasks.conform_task, "session"),
+    Job("derive", tasks.derive_task, "session"),
+    # After the day's data: record the paper account, rebalance at month ends, and keep
+    # the Paper page's backtest line current with the account.
     Job("paper", tasks.paper_task, "session"),
-    # Keep the Paper page's backtest line current with the account (the weekly baselines
-    # would leave it up to a week behind).
     Job("paper_backtest", tasks.paper_backtest_task, "session"),
     Job("verify_prices", tasks.verify_task, "weekly"),
     Job("fundamentals", tasks.fundamentals_task, "weekly"),
     Job("macro", tasks.macro_task, "weekly"),
-    Job("features", tasks.features_task, "weekly"),
     Job("delisted", tasks.delisted_task, "weekly"),
     Job("scheduled_backtests", tasks.scheduled_backtests_task, "weekly"),
     Job("make_vs_buy", tasks.make_vs_buy_task, "weekly"),

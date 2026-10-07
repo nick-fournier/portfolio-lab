@@ -172,7 +172,7 @@ def sensitivities(panel: Panel, observations: pl.DataFrame, dates: list[date]) -
     """
     obs = _prepared(observations)
     ret = panel.field("ret_cc")
-    spy = panel.symbol_index["SPY"]
+    spy = panel.market
     frames = []
     for day in dates:
         i = panel.date_index[day]

@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse
 
 from portfolio_lab.backtest.results import list_runs, load_run
 from portfolio_lab.core.paths import DataPaths
+from portfolio_lab.data import ids, reader
 from portfolio_lab.jobs.tasks import PAPER_STRATEGY
 from portfolio_lab.web.charts import growth_figure
 
@@ -30,14 +31,14 @@ def _backtest(data_dir: Path) -> pl.DataFrame:
 
 
 def _spy(paths: DataPaths, start: date) -> pl.DataFrame:
-    """SPY's daily returns from ``start``."""
-    files = list(paths.prices_benchmarks.glob("year=*/data.parquet"))
-    if not files:
+    """SPY's daily returns after ``start``."""
+    if not paths.ids.exists():
         return pl.DataFrame()
-    return (
-        pl.scan_parquet(files).filter((pl.col("symbol") == "SPY") & (pl.col("date") > start))
-        .select("date", pl.col("ret_cc").alias("ret")).collect()
-    )  # fmt: skip
+    found = ids.lookup(ids.Ids.load(paths.ids), pl.DataFrame({"ticker": ["SPY"], "date": [start]}))
+    if found["sid"][0] is None:
+        return pl.DataFrame()
+    rows = reader.read(paths.root, "prices", ["ret_cc"], start, sids=[found["sid"][0]])
+    return rows.filter(pl.col("date") > start).select("date", pl.col("ret_cc").alias("ret"))
 
 
 def _growth(snapshots: pl.DataFrame, others: dict[str, pl.DataFrame]) -> pl.DataFrame:

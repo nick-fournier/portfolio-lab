@@ -91,6 +91,7 @@ class BuyHold:
 
     def target_weights(self, view: DataView) -> Weights:
         """All-in on ``symbol`` once it has a price; cash before that."""
-        closes = view.close([self.symbol])
-        has_price = self.symbol in closes.index and bool(closes.notna().all())
-        return {self.symbol: 1.0} if has_price else {}
+        symbol = view.resolve(self.symbol) or self.symbol
+        closes = view.close([symbol])
+        has_price = symbol in closes.index and bool(closes.notna().all())
+        return {symbol: 1.0} if has_price else {}

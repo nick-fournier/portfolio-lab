@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default=Path("data"), alias="PORTFOLIO_DATA_DIR")
     #: Trading records (paper account); default ``data_dir/trading``.
     trading_dir: Path | None = Field(default=None, alias="PORTFOLIO_TRADING_DIR")
+    #: Where the fetchers (Alpaca, NASDAQ, Tiingo, FRED, EDGAR) keep what they download,
+    #: in their own layout, for the conformers to read; default ``data_dir/ingest``.
+    ingest_dir: Path | None = Field(default=None, alias="PORTFOLIO_INGEST_DIR")
     alpaca_api_key_id: SecretStr | None = None
     alpaca_api_secret_key: SecretStr | None = None
     alpaca_data_url: str = "https://data.alpaca.markets"
@@ -34,6 +37,10 @@ class Settings(BaseSettings):
     tiingo_api_key: SecretStr | None = None
     benchmark_symbols: tuple[str, ...] = ("SPY", "QQQ", "IWM")
     log_level: str = "INFO"
+
+    def for_ingest(self) -> "Settings":
+        """These settings with ``data_dir`` pointed at the fetchers' store."""
+        return self.model_copy(update={"data_dir": self.ingest_dir or self.data_dir / "ingest"})
 
     def alpaca_headers(self) -> dict[str, str]:
         """Return the Alpaca authentication headers.

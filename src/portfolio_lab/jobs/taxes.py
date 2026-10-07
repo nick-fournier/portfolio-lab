@@ -30,7 +30,7 @@ from portfolio_lab.backtest.tax import CASH, monthly_gains
 from portfolio_lab.core.config import Settings
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
-from portfolio_lab.jobs.tasks import HISTORY_COMPARE_START, PRODUCTION, _attach_runtime
+from portfolio_lab.jobs.tasks import PRODUCTION, _attach_runtime, first_start
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.strategies.base import create
 
@@ -50,12 +50,11 @@ def variant_key(execution: Execution) -> str:
 
 
 def _stored(data_dir: Path, run_label: str) -> str | None:
-    """Latest stored run from :data:`HISTORY_COMPARE_START` with this label and a trade log."""
+    """Latest stored run with this label and a trade log."""
     for stored in list_runs(data_dir):
         meta: dict[str, Any] = stored["meta"]
         has_log = (runs_dir(data_dir) / meta["run_id"] / "trades.parquet").exists()
-        start = meta["start"] == str(HISTORY_COMPARE_START)
-        if meta.get("label") == run_label and start and has_log:
+        if meta.get("label") == run_label and has_log:
             return meta["run_id"]
     return None
 
@@ -78,7 +77,7 @@ def tax_runs_task(settings: Settings, publish: Path | None = None) -> dict[str, 
             continue
         if panel is None:
             panel = Panel.load(settings.data_dir)
-        config = BacktestConfig(HISTORY_COMPARE_START, panel.dates[-1], execution=execution)
+        config = BacktestConfig(first_start(panel), panel.dates[-1], execution=execution)
         result = run(strategy, panel, config)
         runs[key] = save_run(result, settings.data_dir)
         log.info("tax variant %s saved as %s", key, runs[key])

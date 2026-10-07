@@ -2,7 +2,7 @@
 
 For every 10-K and 10-Q filing, :func:`filing_states` computes what was known on its filing
 date about the fiscal period it reports (``period_end``) and the same period a year
-earlier (columns suffixed ``_py``):
+earlier (columns prefixed ``prior_``):
 
 - **Flows** (net income, cash flow, revenue, ...) as trailing-twelve-month (TTM) sums of the
   last four fiscal quarters. Quarters are reported directly or follow from two year-to-date
@@ -50,11 +50,20 @@ FLOW_TAGS: dict[str, tuple[str, ...]] = {
         "RevenueFromContractWithCustomerIncludingAssessedTax",
     ),
     "gross_profit": ("GrossProfit",),
-    "cost_of_revenue": ("CostOfRevenue", "CostOfGoodsAndServicesSold"),
+    "cost_of_revenue": ("CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold",
+                        "CostOfServices"),
     "operating_income": ("OperatingIncomeLoss",),
-    "capex": ("PaymentsToAcquirePropertyPlantAndEquipment",),
-    "dividends": ("PaymentsOfDividends", "PaymentsOfDividendsCommonStock"),
-}
+    "capex": ("PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"),
+    "dividends": ("PaymentsOfDividends", "PaymentsOfDividendsCommonStock",
+                  "PaymentsOfOrdinaryDividends"),
+    "sga": ("SellingGeneralAndAdministrativeExpense",),
+    "interest_expense": ("InterestExpense", "InterestExpenseDebt"),
+    "rnd": ("ResearchAndDevelopmentExpense",
+            "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost"),
+    "depreciation": ("DepreciationDepletionAndAmortization", "DepreciationAndAmortization",
+                     "DepreciationAmortizationAndAccretionNet"),
+    "tax": ("IncomeTaxExpenseBenefit",),
+}  # fmt: skip
 #: Share counts averaged over a period: the latest quarter's value, not a sum.
 AVERAGE_TAGS: dict[str, tuple[str, ...]] = {
     "shares_weighted": ("WeightedAverageNumberOfSharesOutstandingBasic",),
@@ -64,14 +73,22 @@ BALANCE_TAGS: dict[str, tuple[str, ...]] = {
     "assets_cur": ("AssetsCurrent",),
     "liab_cur": ("LiabilitiesCurrent",),
     "liabilities": ("Liabilities",),
-    "lt_debt": ("LongTermDebtNoncurrent", "LongTermDebt", "LongTermDebtAndCapitalLeaseObligations"),
-    "debt_cur": ("DebtCurrent", "LongTermDebtCurrent"),
+    "lt_debt": ("LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations",
+                "LongTermDebt"),
+    "debt_cur": ("DebtCurrent", "LongTermDebtCurrent",
+                 "LongTermDebtAndCapitalLeaseObligationsCurrent", "ShortTermBorrowings"),
     "equity": (
         "StockholdersEquity",
         "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
     ),
-    "cash": ("CashAndCashEquivalentsAtCarryingValue",),
-}
+    "cash": ("CashAndCashEquivalentsAtCarryingValue",
+             "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "Cash"),
+    "ppe": ("PropertyPlantAndEquipmentNet",),
+    "inventory": ("InventoryNet",),
+    "receivables": ("AccountsReceivableNetCurrent", "ReceivablesNetCurrent"),
+    "payables": ("AccountsPayableCurrent",),
+    "intangibles": ("IntangibleAssetsNetIncludingGoodwill",),
+}  # fmt: skip
 SHARES_TAGS = ("EntityCommonStockSharesOutstanding", "CommonStockSharesOutstanding")
 CONCEPTS = [*FLOW_TAGS, *AVERAGE_TAGS, *BALANCE_TAGS]
 #: Two period ends within this many days are the same period.
@@ -237,13 +254,13 @@ def _company_states(rows: pl.DataFrame) -> list[dict]:
             "cik": filing[0][0], "accn": accn, "form": filing[0][2],
             "filed": max(r[3] for r in filing), "period_end": end, "shares_out": known.shares(),
         }  # fmt: skip
-        for when, suffix in ((end, ""), (prior, "_py")):
+        for when, prefix in ((end, ""), (prior, "prior_")):
             for c in FLOW_TAGS:
-                state[c + suffix] = known.ttm(c, when)
+                state[prefix + c] = known.ttm(c, when)
             for c in AVERAGE_TAGS:
-                state[c + suffix] = known.latest_quarter(c, when)
+                state[prefix + c] = known.latest_quarter(c, when)
             for c in BALANCE_TAGS:
-                state[c + suffix] = known.balance(c, when)
+                state[prefix + c] = known.balance(c, when)
         states.append(state)
     return states
 
@@ -267,7 +284,7 @@ def filing_states(facts: pl.DataFrame, workers: int = WORKERS) -> pl.DataFrame:
 
     Returns:
         One row per filing: cik, accn, form, filed, period_end, shares_out, and each concept
-        in :data:`CONCEPTS` with its prior-year value (``_py``); nulls where unknown.
+        in :data:`CONCEPTS` with its prior-year value (``prior_``); nulls where unknown.
     """
     parts = _concept_rows(facts).partition_by("cik", maintain_order=True)
     if workers > 1:
@@ -279,5 +296,5 @@ def filing_states(facts: pl.DataFrame, workers: int = WORKERS) -> pl.DataFrame:
         states = _companies_states(parts)
     schema = {"cik": pl.Int64, "accn": pl.String, "form": pl.String, "filed": pl.Date,
               "period_end": pl.Date, "shares_out": pl.Float64}  # fmt: skip
-    schema |= {c + s: pl.Float64 for s in ("", "_py") for c in CONCEPTS}
+    schema |= {p + c: pl.Float64 for p in ("", "prior_") for c in CONCEPTS}
     return pl.DataFrame(states, schema=schema).sort("cik", "filed", "accn")

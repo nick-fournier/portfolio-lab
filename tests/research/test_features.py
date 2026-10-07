@@ -18,13 +18,13 @@ def _states(dates, symbols=SYMBOLS, step=63):
     rows = []
     for k, _ in enumerate(symbols):
         for n, i in enumerate(range(5, len(dates), step)):
-            row = {c + s: None for s in ("", "_py") for c in CONCEPTS}
+            row = {p + c: None for p in ("", "prior_") for c in CONCEPTS}
             row |= {
                 "cik": k, "accn": f"{k}-{n}", "form": "10-Q", "filed": dates[i],
                 "period_end": dates[i] - timedelta(days=40), "shares_out": 1e6 * (k + 1),
-                "net_income": 10.0 + n + k, "net_income_py": 8.0 + k, "equity": 500.0 + n,
-                "assets": 1000.0 + 10 * n, "assets_py": 1000.0, "revenue": 300.0 + k,
-                "revenue_py": 280.0, "cfo": 12.0 + k, "liabilities": 400.0,
+                "net_income": 10.0 + n + k, "prior_net_income": 8.0 + k, "equity": 500.0 + n,
+                "assets": 1000.0 + 10 * n, "prior_assets": 1000.0, "revenue": 300.0 + k,
+                "prior_revenue": 280.0, "cfo": 12.0 + k, "liabilities": 400.0,
             }  # fmt: skip
             rows.append(row)
     return pl.DataFrame(rows, infer_schema_length=None)
@@ -34,8 +34,8 @@ def _states(dates, symbols=SYMBOLS, step=63):
 def inputs(make_panel):
     panel = make_panel(symbols=SYMBOLS, days=400)
     tickers = pl.DataFrame({"symbol": SYMBOLS, "cik": range(len(SYMBOLS))})
-    companies = pl.DataFrame({"cik": range(len(SYMBOLS)), "sic": [3570] * 6 + [6022] * 6})
-    return panel, _states(panel.dates), tickers, companies
+    industry = pl.DataFrame({"symbol": SYMBOLS, "sic": [3570] * 6 + [6022] * 6})
+    return panel, _states(panel.dates).join(tickers, on="cik"), industry
 
 
 def _month_end(panel, after=260):
@@ -44,13 +44,11 @@ def _month_end(panel, after=260):
 
 
 def test_features_are_point_in_time(inputs):
-    panel, states, tickers, companies = inputs
+    panel, states, industry = inputs
     i = _month_end(panel)
     day = panel.dates[i]
     start = panel.dates[0]
-    clean = build_features(panel, states, tickers, companies, start=start).filter(
-        pl.col("date") == day
-    )
+    clean = build_features(panel, states, industry, start=start).filter(pl.col("date") == day)
     # Garbage after the date, rewritten filings from the date on, and one filed that day.
     changed = states.with_columns(
         pl.when(pl.col("filed") >= day).then(1e12).otherwise(pl.col("net_income"))
@@ -62,18 +60,18 @@ def test_features_are_point_in_time(inputs):
         .with_columns(pl.lit(day).alias("filed"), pl.lit(-1e9).alias("equity"))
     )
     poisoned = build_features(
-        _poisoned(panel, i), pl.concat([changed, extra]), tickers, companies, start=start
+        _poisoned(panel, i), pl.concat([changed, extra]), industry, start=start
     ).filter(pl.col("date") == day)
     assert clean.height == len(SYMBOLS)
     assert clean.equals(poisoned)
 
 
 def test_market_value_and_ratios(inputs):
-    panel, states, tickers, companies = inputs
+    panel, states, industry = inputs
     i = _month_end(panel)
     day = panel.dates[i]
     row = (
-        build_features(panel, states, tickers, companies, start=panel.dates[0])
+        build_features(panel, states, industry, start=panel.dates[0])
         .filter((pl.col("date") == day) & (pl.col("symbol") == "S03"))
         .row(0, named=True)
     )
@@ -91,9 +89,9 @@ def test_market_value_and_ratios(inputs):
 
 
 def test_stale_filings_are_ignored(inputs):
-    panel, states, tickers, companies = inputs
+    panel, states, industry = inputs
     first_only = states.filter(pl.col("accn").str.ends_with("-0"))
-    out = build_features(panel, first_only, tickers, companies, start=panel.dates[0])
+    out = build_features(panel, first_only, industry, start=panel.dates[0])
     age = (out["date"] - panel.dates[5]).dt.total_days()
     assert (
         out.filter(age > MAX_FILING_AGE_DAYS)["earnings_yield"].null_count()
