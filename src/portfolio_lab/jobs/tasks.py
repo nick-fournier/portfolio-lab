@@ -198,13 +198,16 @@ def features_task(settings: Settings) -> dict:
     tailwinds are added (see ``research.context``).
     """
     paths = DataPaths(settings.data_dir)
-    companies = paths.fundamentals_companies
     panel = Panel.load(settings.data_dir)
+    tickers = pl.read_parquet(paths.fundamentals_tickers)
+    industry = None
+    if paths.fundamentals_companies.exists():
+        companies = pl.read_parquet(paths.fundamentals_companies)
+        industry = tickers.join(companies.select("cik", "sic"), on="cik").select("symbol", "sic")
     features = build_features(
         panel,
-        pl.read_parquet(paths.fundamentals_states),
-        pl.read_parquet(paths.fundamentals_tickers),
-        pl.read_parquet(companies) if companies.exists() else None,
+        pl.read_parquet(paths.fundamentals_states).join(tickers, on="cik"),
+        industry,
         pl.read_parquet(paths.fscores) if paths.fscores.exists() else None,
     )
     if paths.macro.exists():

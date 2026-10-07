@@ -125,15 +125,22 @@ def _fundamental_features() -> list[pl.Expr]:
         return pl.when(b > 0).then(a / b)
 
     gross = pl.coalesce(c("gross_profit"), c("revenue") - c("cost_of_revenue"))
-    gross_py = pl.coalesce(c("gross_profit_py"), c("revenue_py") - c("cost_of_revenue_py"))
+    prior_gross = pl.coalesce(
+        c("prior_gross_profit"), c("prior_revenue") - c("prior_cost_of_revenue")
+    )
     lt_debt = pl.when(c("lt_debt").is_null() & c("liabilities").is_not_null()).then(0.0)
     lt_debt = lt_debt.otherwise(c("lt_debt"))
-    lt_debt_py = pl.when(c("lt_debt_py").is_null() & c("liabilities_py").is_not_null()).then(0.0)
-    lt_debt_py = lt_debt_py.otherwise(c("lt_debt_py"))
-    roa, roa_py = ratio(c("net_income"), c("assets")), ratio(c("net_income_py"), c("assets_py"))
-    margin, margin_py = ratio(gross, c("revenue")), ratio(gross_py, c("revenue_py"))
+    prior_lt_debt = pl.when(
+        c("prior_lt_debt").is_null() & c("prior_liabilities").is_not_null()
+    ).then(0.0)
+    prior_lt_debt = prior_lt_debt.otherwise(c("prior_lt_debt"))
+    roa, prior_roa = (
+        ratio(c("net_income"), c("assets")),
+        ratio(c("prior_net_income"), c("prior_assets")),
+    )
+    margin, prior_margin = ratio(gross, c("revenue")), ratio(prior_gross, c("prior_revenue"))
     current = ratio(c("assets_cur"), c("liab_cur"))
-    current_py = ratio(c("assets_cur_py"), c("liab_cur_py"))
+    prior_current = ratio(c("prior_assets_cur"), c("prior_liab_cur"))
     return [
         ratio(c("net_income"), mv).alias("earnings_yield"),
         ratio(c("equity"), mv).alias("book_to_market"),
@@ -148,16 +155,16 @@ def _fundamental_features() -> list[pl.Expr]:
         ratio(c("operating_income"), c("revenue")).alias("operating_margin"),
         ratio(c("liabilities"), c("assets")).alias("leverage"),
         current.alias("current_ratio"),
-        (roa - roa_py).alias("d_roa"),
-        (ratio(lt_debt, c("assets")) - ratio(lt_debt_py, c("assets_py"))).alias("d_lt_debt"),
-        (current - current_py).alias("d_current_ratio"),
-        (margin - margin_py).alias("d_gross_margin"),
-        (ratio(c("revenue"), c("assets")) - ratio(c("revenue_py"), c("assets_py"))).alias(
+        (roa - prior_roa).alias("d_roa"),
+        (ratio(lt_debt, c("assets")) - ratio(prior_lt_debt, c("prior_assets"))).alias("d_lt_debt"),
+        (current - prior_current).alias("d_current_ratio"),
+        (margin - prior_margin).alias("d_gross_margin"),
+        (ratio(c("revenue"), c("assets")) - ratio(c("prior_revenue"), c("prior_assets"))).alias(
             "d_asset_turnover"
         ),
-        (ratio(c("shares_weighted"), c("shares_weighted_py")) - 1).alias("share_issuance"),
-        (ratio(c("assets"), c("assets_py")) - 1).alias("asset_growth"),
-        (ratio(c("revenue"), c("revenue_py")) - 1).alias("sales_growth"),
+        (ratio(c("shares_weighted"), c("prior_shares_weighted")) - 1).alias("share_issuance"),
+        (ratio(c("assets"), c("prior_assets")) - 1).alias("asset_growth"),
+        (ratio(c("revenue"), c("prior_revenue")) - 1).alias("sales_growth"),
         mv.log().alias("log_size"),
     ]
 
@@ -182,8 +189,7 @@ def _asof(grid: pl.DataFrame, table: pl.DataFrame, max_age: int) -> pl.DataFrame
 def build_features(
     panel: Panel,
     states: pl.DataFrame,
-    tickers: pl.DataFrame,
-    companies: pl.DataFrame | None = None,
+    industry: pl.DataFrame | None = None,
     fscores: pl.DataFrame | None = None,
     start: date | None = None,
 ) -> pl.DataFrame:
@@ -191,9 +197,9 @@ def build_features(
 
     Args:
         panel: Prices and eligibility.
-        states: Filing states from ``research.fundamentals.filing_states``.
-        tickers: symbol -> cik map.
-        companies: SEC profiles with ``cik`` and ``sic`` (for industry features).
+        states: Filing states (``research.fundamentals.filing_states`` layout, with the
+            prior-year ``prior_`` columns) carrying the panel's ``symbol``.
+        industry: symbol and ``sic`` (for industry features).
         fscores: Point-in-time F-scores by symbol (symbol, filed, fscore, n_signals).
         start: First month end (default: the first with a year of price history).
 
@@ -201,7 +207,7 @@ def build_features(
         date, symbol, sic2, market_value, the features, and ``fscore``.
     """
     grid = _price_grid(panel, start or panel.dates[0])
-    by_symbol = states.join(tickers, on="cik").drop("accn", "form")
+    by_symbol = states.drop("accn", "form", "cik", "sid", strict=False)
     grid = _asof(grid, by_symbol, MAX_FILING_AGE_DAYS)
     grid = grid.with_columns(_market_value(grid, panel))
     grid = grid.with_columns(_fundamental_features())
@@ -209,9 +215,9 @@ def build_features(
         scored = fscores.filter(pl.col("n_signals") >= 8).select("symbol", "filed", "fscore")
         scored = scored.with_columns(pl.col("fscore").cast(pl.Float64))
         grid = _asof(grid, scored, MAX_FILING_AGE_DAYS).drop("filed_right", strict=False)
-    if companies is not None:
+    if industry is not None:
         grid = grid.join(
-            companies.select("cik", (pl.col("sic") // 100).alias("sic2")), on="cik", how="left"
+            industry.select("symbol", (pl.col("sic") // 100).alias("sic2")), on="symbol", how="left"
         )
         group = ("date", "sic2")
         enough = pl.col("sic2").is_not_null() & (pl.len().over(group) >= MIN_INDUSTRY)

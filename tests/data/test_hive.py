@@ -20,6 +20,7 @@ TICKERS = pl.DataFrame(
      "category": ["Domestic Common Stock", "Domestic Common Stock Primary Class", "ETF",
                   "Domestic Common Stock Primary Class"],
      "cusips": ["111 222", "333", None, "333"], "figi": ["BBG1", None, None, None],
+     "siccode": ["3571", "2834", None, "2834"],
      "secfilings": ["https://sec.gov/x?action=getcompany&CIK=0000000077&y=1", None, None, None],
      "firstpricedate": ["2015-01-02", "2000-01-03", "2010-01-04", "2000-01-03"],
      "lastpricedate": ["2026-01-30", "2014-06-30", "2026-01-30", "2014-06-30"],
@@ -44,7 +45,7 @@ def test_ids_seed_one_security_per_permaticker_with_its_names(ids):
     assert s["category"].to_list() == ["common", "common", "etf"]
     assert s.filter(pl.col("sid") == 2).row(0, named=True) | {} == pytest.approx(
         {"sid": 2, "name": "New Co", "exchange": "NYSE", "category": "common", "cik": 77,
-         "cusip": "111", "figi": "BBG1", "first": date(2015, 1, 2), "last": None}
+         "cusip": "111", "figi": "BBG1", "sic": 3571, "first": date(2015, 1, 2), "last": None}
     )  # fmt: skip
     assert s.filter(pl.col("sid") == 1)["last"][0] == date(2014, 6, 30)  # dead
     names = ids.tickers.filter(pl.col("sid") == 2).sort("from", "ticker")

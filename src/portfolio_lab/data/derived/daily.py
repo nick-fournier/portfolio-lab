@@ -102,7 +102,8 @@ def panel(
     """Prices and the daily table as a :class:`Panel` (symbols are sids as strings).
 
     Columns are every security with a common-stock listing plus the market index, so
-    the arrays stay small; ``panel.market`` is the index's column.
+    the arrays stay small; ``panel.market`` is the index's column. The derived
+    fundamentals (F-scores), monthly and environment tables are attached when built.
     """
     rules = rules or EligibilityRules()
     ids = ids_.Ids.load(DataPaths(root).ids)
@@ -154,4 +155,18 @@ def panel(
         traded=flags["traded"], market=symbols.index(str(market)),
     )  # fmt: skip
     out.ids = ids
+    derived = DataPaths(root).root / "derived"
+    if (derived / "fundamentals.parquet").exists():
+        scores = pl.read_parquet(
+            derived / "fundamentals.parquet", columns=["sid", "filed", "fscore", "n_signals"]
+        )
+        out.fundamentals = (
+            scores.drop_nulls("fscore")
+            .select(pl.col("sid").cast(pl.String).alias("symbol"), "filed", "fscore", "n_signals")
+            .sort("filed")
+        )
+    for name in ("features", "environment"):
+        file = derived / f"{'monthly' if name == 'features' else name}.parquet"
+        if file.exists():
+            setattr(out, name, pl.read_parquet(file).sort("date"))
     return out

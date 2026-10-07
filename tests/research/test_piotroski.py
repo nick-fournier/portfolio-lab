@@ -127,11 +127,11 @@ def test_output_columns():
 def test_fscores_from_states_counts_signals():
     state = {
         "cik": 1, "form": "10-K", "filed": date(2020, 3, 1), "period_end": date(2019, 12, 31),
-        "net_income": 10.0, "net_income_py": 5.0, "cfo": 15.0, "assets": 100.0,
-        "assets_py": 100.0, "lt_debt": 10.0, "lt_debt_py": 20.0, "assets_cur": 30.0,
-        "assets_cur_py": 20.0, "liab_cur": 10.0, "liab_cur_py": 10.0, "shares_weighted": 1.0,
-        "shares_weighted_py": 1.0, "revenue": 50.0, "revenue_py": 40.0, "gross_profit": 25.0,
-        "gross_profit_py": 16.0, "cost_of_revenue": None, "cost_of_revenue_py": None,
+        "net_income": 10.0, "prior_net_income": 5.0, "cfo": 15.0, "assets": 100.0,
+        "prior_assets": 100.0, "lt_debt": 10.0, "prior_lt_debt": 20.0, "assets_cur": 30.0,
+        "prior_assets_cur": 20.0, "liab_cur": 10.0, "prior_liab_cur": 10.0, "shares_weighted": 1.0,
+        "prior_shares_weighted": 1.0, "revenue": 50.0, "prior_revenue": 40.0, "gross_profit": 25.0,
+        "prior_gross_profit": 16.0, "cost_of_revenue": None, "prior_cost_of_revenue": None,
     }  # fmt: skip
     quarter = state | {"form": "10-Q"}
     scores = fscores_from_states(pl.DataFrame([state, quarter]))

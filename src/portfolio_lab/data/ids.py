@@ -8,7 +8,7 @@ conformed table keys on ``sid`` instead, and sources resolve their tickers throu
 Three tables, in ``DataPaths.ids``:
 
 - ``securities``: sid, name, exchange, category (``common``, ``adr``, ``preferred``,
-  ``etf``, ``cef``, ...), cik, cusip, figi, first and last trading dates (``last`` null
+  ``etf``, ``cef``, ...), cik, cusip, figi, sic, first and last trading dates (``last`` null
   while alive).
 - ``tickers``: sid, ticker, from, to (null while current), ``dated`` (from a recorded
   change, or inferred from a source's list of related names).
@@ -31,7 +31,8 @@ log = logging.getLogger(__name__)
 
 SECURITIES = {
     "sid": pl.Int64, "name": pl.String, "exchange": pl.String, "category": pl.String,
-    "cik": pl.Int64, "cusip": pl.String, "figi": pl.String, "first": pl.Date, "last": pl.Date,
+    "cik": pl.Int64, "cusip": pl.String, "figi": pl.String, "sic": pl.Int64, "first": pl.Date,
+    "last": pl.Date,
 }  # fmt: skip
 TICKERS = {"sid": pl.Int64, "ticker": pl.String, "from": pl.Date, "to": pl.Date,
            "dated": pl.Boolean}  # fmt: skip
@@ -160,6 +161,7 @@ def from_sharadar(tickers: pl.DataFrame, actions: pl.DataFrame) -> Ids:
             pl.col("secfilings").str.extract(r"CIK=(\d+)", 1).cast(pl.Int64).alias("cik"),
             pl.col("category").map_elements(category, return_dtype=pl.String),
             pl.col("cusips").str.split(" ").list.first().alias("cusip"),
+            pl.col("siccode").cast(pl.Int64, strict=False).alias("sic"),
         )
     )
     securities = _frame(rows, SECURITIES)

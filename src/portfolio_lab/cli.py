@@ -20,7 +20,7 @@ from portfolio_lab.data.conform import alpaca as conform_alpaca
 from portfolio_lab.data.conform import edgar as conform_edgar
 from portfolio_lab.data.conform import fred, nasdaq, tiingo
 from portfolio_lab.data.conform import sharadar as conform_sharadar
-from portfolio_lab.data.derived import daily
+from portfolio_lab.data.derived import daily, fundamentals, monthly
 from portfolio_lab.forecast_cli import forecast_app
 from portfolio_lab.jobs import tasks, taxes
 from portfolio_lab.research.scorecard import scorecard
@@ -171,6 +171,18 @@ def hive_store_cmd(
 def hive_daily_cmd() -> None:
     """Rebuild the derived daily table (liquidity, history, listing flags)."""
     typer.echo(daily.build(get_settings().data_dir))
+
+
+@hive_app.command("fundamentals")
+def hive_fundamentals_cmd() -> None:
+    """Rebuild the derived fundamentals table (prior year, F-scores)."""
+    typer.echo(fundamentals.build(get_settings().data_dir))
+
+
+@hive_app.command("monthly")
+def hive_monthly_cmd() -> None:
+    """Rebuild the derived monthly (stock inputs) and environment tables."""
+    typer.echo(monthly.build(get_settings().data_dir))
 
 
 @app.command("backtest")

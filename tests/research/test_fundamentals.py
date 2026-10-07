@@ -60,8 +60,8 @@ def test_point_in_time_restatement(states):
 def test_unknown_history_is_null_and_balances_have_prior_year(states):
     assert states["q3"]["net_income"] is None  # no fourth quarter of 2021 yet
     k = states["k"]
-    assert (k["assets"], k["assets_py"]) == (1100, 900)
-    assert k["net_income_py"] is None
+    assert (k["assets"], k["prior_assets"]) == (1100, 900)
+    assert k["prior_net_income"] is None
     assert k["shares_out"] == 105
     assert states["q1"]["shares_out"] is None
 
