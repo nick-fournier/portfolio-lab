@@ -6,7 +6,12 @@ import polars as pl
 import pytest
 
 from portfolio_lab.research.forecaster import nine
-from portfolio_lab.strategies.meanvar.nine import MIN_SLOPE_MONTHS, NineInputs
+from portfolio_lab.strategies.meanvar.nine import (
+    MIN_SLOPE_MONTHS,
+    NineInputs,
+    ar1_annual,
+    ar1_forecast_sum,
+)
 
 SYMBOLS = [f"S{k}" for k in range(6)]
 
@@ -21,10 +26,10 @@ def _inputs(tmp_path, months=40, seed=0) -> NineInputs:
     for m in range(months):
         for s in SYMBOLS:
             rows.append({"date": _month(m), "symbol": s, "actual": rng.normal(0, 0.05),
-                         "forecast": rng.normal(0, 0.01),
+                         "forecast": rng.normal(0, 0.01), "spy12": 0.1,
                          **{t: rng.normal() for t in nine.TERMS}})  # fmt: skip
     pl.DataFrame(rows).write_parquet(tmp_path / nine.FILE)
-    slopes = [{"date": _month(m), **{t: rng.normal(0, 0.01) for t in nine.TERMS}}
+    slopes = [{"date": _month(m), **{t: rng.normal(0, 0.01) for t in nine.TERMS}, "center": 0.08}
               for m in range(months)]  # fmt: skip
     pl.DataFrame(slopes).write_parquet(tmp_path / nine.SLOPES)
     return NineInputs(tmp_path)
@@ -37,17 +42,29 @@ def _prices(seed=1, days=260):
                         index=index, columns=SYMBOLS)  # fmt: skip
 
 
-def test_expected_returns_keep_the_forecasts_order_with_the_trailing_spread(tmp_path):
+def test_expected_returns_keep_the_forecasts_order_with_the_ar1_spread(tmp_path):
     inputs = _inputs(tmp_path)
     asof = _month(30) + timedelta(days=2)
-    trailing = pd.Series(np.linspace(-0.2, 0.4, len(SYMBOLS)), index=SYMBOLS)
-    mu = inputs.expected(asof, trailing, _prices(), risk_free=0.03)
-    assert mu.std() == pytest.approx(trailing.std())
+    mu = inputs.expected(asof, _prices(), risk_free=0.03)
+    assert mu.std() == pytest.approx(ar1_annual(_prices()).std())
     forecast = pd.Series(inputs.forecasts(asof))
     vol = _prices().pct_change().std() * 252**0.5
     raw = ((forecast - forecast.mean()) / forecast.std() * vol).reindex(mu.index)
     assert np.allclose((mu - 0.03) / raw, ((mu - 0.03) / raw).iloc[0])  # T-bill + k * raw
-    assert inputs.expected(_month(30) + timedelta(days=20), trailing, _prices(), 0.03).empty
+    assert inputs.expected(_month(30) + timedelta(days=20), _prices(), 0.03).empty
+
+
+def test_ar1_sum_matches_iterating_the_fitted_recursion():
+    rng = np.random.default_rng(4)
+    r = np.zeros(500)
+    for t in range(1, 500):
+        r[t] = 0.0004 + 0.3 * r[t - 1] + rng.normal(0, 0.01)
+    phi, c = np.polyfit(r[:-1], r[1:], 1)
+    path, last = [], r[-1]
+    for _ in range(21):
+        last = c + phi * last
+        path.append(last)
+    assert ar1_forecast_sum(r, 21) == pytest.approx(sum(path))
 
 
 def test_covariance_is_symmetric_positive_and_uses_only_known_months(tmp_path):

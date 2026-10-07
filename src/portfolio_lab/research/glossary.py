@@ -47,7 +47,7 @@ GLOSSARY: dict[str, Entry] = {
     ),
     "rd_mve": Entry(
         f"Research and development spending over the last twelve months divided by "
-        f"{_MARKET_VALUE} (none reported counts as zero).",
+        f"{_MARKET_VALUE}.",
         "Markets under-price R&D, an expense today for profits later, so heavy spenders "
         "tend to earn more afterwards.",
     ),

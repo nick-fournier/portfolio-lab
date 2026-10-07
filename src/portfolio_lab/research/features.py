@@ -66,12 +66,33 @@ def _price_features(panel: Panel, index: int, cols: np.ndarray) -> dict[str, np.
             # growth is relative to the price just before the window (1.0).
             "mom_12_1": np.where(enough, growth[-MONTH - 1] - 1, np.nan),
             "ret_1m": np.where(enough, growth[-1] / growth[-MONTH - 1] - 1, np.nan),
-            # months 2 to 6 back, skipping the latest month like ``mom_12_1``
-            "mom6m": np.where(enough, growth[-MONTH - 1] / growth[-6 * MONTH - 1] - 1, np.nan),
             "volatility": np.where(enough, np.nanstd(window, axis=0), np.nan),
             "beta": np.where(enough, beta, np.nan),
             "log_adv": np.log(panel.field("adv")[index, cols]),
         }
+
+
+def _mom6m(panel: Panel, grid: pl.DataFrame) -> pl.Series:
+    """Return compounded over months 2 to 6 back, from calendar-month returns.
+
+    A month's return compounds every bar in that calendar month; a month without bars
+    is missing, and so is any window that includes it. Months are the grid's month ends.
+    """
+    ends = sorted(grid["date"].unique().to_list())
+    ret = np.nan_to_num(panel.field("ret_cc").astype(np.float64))
+    has = np.isfinite(panel.field("close"))
+    key = np.array([d.year * 12 + d.month for d in panel.dates])
+    monthly = np.full((len(ends), len(panel.symbols)), np.nan)
+    for k, end in enumerate(ends):
+        rows = key == end.year * 12 + end.month
+        bars = has[rows].any(axis=0)
+        monthly[k] = np.where(bars, np.prod(1 + ret[rows], axis=0) - 1, np.nan)
+    window = np.full_like(monthly, np.nan)
+    for k in range(5, len(ends)):
+        window[k] = np.prod(1 + monthly[k - 5 : k], axis=0) - 1
+    position = {d: k for k, d in enumerate(ends)}
+    rows = np.array([position[d] for d in grid["date"].to_list()])
+    return pl.Series("mom6m", window[rows, grid["_col"].to_numpy()]).fill_nan(None)
 
 
 def _price_grid(panel: Panel, start: date) -> pl.DataFrame:
@@ -171,8 +192,7 @@ def _fundamental_features() -> list[pl.Expr]:
         (ratio(c("assets"), c("prior_assets")) - 1).alias("asset_growth"),
         (ratio(c("revenue"), c("prior_revenue")) - 1).alias("sales_growth"),
         mv.log().alias("log_size"),
-        # R&D a company doesn't report counts as none (Sharadar's convention; EDGAR omits it)
-        ratio(c("rnd").fill_null(0.0), mv).alias("rd_mve"),
+        ratio(c("rnd"), mv).alias("rd_mve"),
     ]
 
 
@@ -214,6 +234,7 @@ def build_features(
         date, symbol, sic2, market_value, the features, and ``fscore``.
     """
     grid = _price_grid(panel, start or panel.dates[0])
+    grid = grid.with_columns(_mom6m(panel, grid))
     by_symbol = states.drop("accn", "form", "cik", "sid", strict=False)
     grid = _asof(grid, by_symbol, MAX_FILING_AGE_DAYS)
     grid = grid.with_columns(_market_value(grid, panel))

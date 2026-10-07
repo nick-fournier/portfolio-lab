@@ -38,12 +38,17 @@ class EligibilityRules:
         min_dollar_volume: Minimum trailing median daily dollar volume.
         adv_window: Sessions in the trailing dollar-volume median.
         min_history: Minimum number of bars observed so far (excludes fresh listings).
+        ever_tradeable: Only stocks that at some point in their whole history closed above
+            $5 on a day with $1M traded: the old Sharadar ingest's admission rule, which
+            the research results were built on. It looks ahead (whether a stock counts in
+            2005 depends on its later prices), so it is off by default; hive panels only.
     """
 
     min_price: float = 5.0
     min_dollar_volume: float = 1e6
     adv_window: int = 60
     min_history: int = 252
+    ever_tradeable: bool = False
 
 
 class Panel:

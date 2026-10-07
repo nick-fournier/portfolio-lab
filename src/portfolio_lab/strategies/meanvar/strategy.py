@@ -420,7 +420,7 @@ class MeanVar:
         windows = {s: prices[s].to_numpy() for s in prices.columns}
         mu = pd.Series(self._get_forecaster().forecast(view.asof, windows), dtype=float)
         if self.expected == "nine":
-            mu = self._nine_inputs().expected(view.asof, mu, prices, view.risk_free())
+            mu = self._nine_inputs().expected(view.asof, prices, view.risk_free())
             mu = mu.clip(*MU_BOUNDS)
             prices = prices[[s for s in prices.columns if s in mu.index]]
             if prices.shape[1] < 2:

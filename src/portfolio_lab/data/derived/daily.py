@@ -31,6 +31,8 @@ log = logging.getLogger(__name__)
 
 TABLE = "daily"
 ADV_WINDOW = 60
+#: ``EligibilityRules.ever_tradeable``: the old ingest's admission floor on a single day.
+EVER_PRICE, EVER_DOLLARS = 5.0, 1_000_000
 #: The market index, in the panel under its own ticker.
 MARKET = "SPY"
 #: Actions after which a dead stock exits at its last price rather than as a delisting.
@@ -140,6 +142,13 @@ def panel(
     # One chunk of securities at a time: the whole long table is several GB.
     for k in range(CHUNKS):
         chunk = [s for s in sids if s % CHUNKS == k]
+        if rules.ever_tradeable:  # see EligibilityRules: looks ahead, research only
+            history = reader.read(root, "prices", ["close", "volume"], sids=chunk)
+            ok = (pl.col("close") > EVER_PRICE) & (
+                pl.col("close") * pl.col("volume") > EVER_DOLLARS
+            )
+            admitted = set(history.filter(ok)["sid"].unique())
+            chunk = [s for s in chunk if s in admitted or s == market]
         prices = reader.read(root, "prices", ["close", "ret_cc", "ret_co"], start, end, chunk)
         daily = table.filter(pl.col("sid").is_in(chunk))
         if start:

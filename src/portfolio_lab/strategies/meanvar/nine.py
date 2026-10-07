@@ -4,14 +4,16 @@
 (``research.forecaster.nine``, next month over the T-bill) is put in Grinold's form,
 ``T-bill + k x volatility x z``: ``z`` is the forecast standardized across the candidates,
 volatility the stock's annual volatility over the price window, and ``k`` makes the
-spread of the result match the spread of the trailing returns production uses, so the
-optimizer sees returns of a familiar size. Candidates without a forecast are left out.
+spread of the result match the spread of an AR(1) model's expected returns over the same
+window (:func:`ar1_annual`), so the optimizer sees returns of a familiar size. Candidates
+without a forecast, or whose AR(1) fails, are left out.
 
 **Covariance** (:meth:`NineInputs.covariance`): the average of three estimates, each
 annual:
 
 - *price*: the candidates' daily log returns over the window, shrunk (Ledoit-Wolf);
-- *factor*: ``X F X' + D``, with ``X`` each stock's nine terms this month, ``F`` the
+- *factor*: ``X F X' + D``, with ``X`` each stock's nine terms this month (interactions
+  centered as in ``nine.slopes``, on a full-sample mean, as in research), ``F`` the
   covariance of the terms' monthly payoffs (``nine.slopes``) over every earlier month, and
   ``D`` each stock's forecast-error variance over its last :data:`ERROR_MONTHS` months;
 - *residual*: the forecast errors' own covariance over the last :data:`RESIDUAL_MONTHS`
@@ -44,6 +46,44 @@ ERROR_MONTHS, MIN_ERROR_MONTHS = 36, 12
 RESIDUAL_MONTHS, MIN_RESIDUAL_MONTHS, MAX_MISSING = 60, 24, 12
 #: Share of price variance assumed idiosyncratic when a stock has no error history.
 IDIOSYNCRATIC = 0.85**2
+
+
+#: Forecast horizon of the AR(1) behind Grinold's scale, in sessions, and its return bounds.
+HORIZON, MU_BOUNDS = 21, (-0.99, 5.0)
+
+
+def ar1_forecast_sum(returns: np.ndarray, horizon: int) -> float:
+    """Sum of the next ``horizon`` returns forecast by an AR(1) fitted with least squares.
+
+    Fits ``r[t] = c + phi * r[t-1]``; with long-run mean ``mu = c / (1 - phi)`` the k-step
+    forecast is ``mu + phi**k * (r[-1] - mu)``, so the sum over ``k = 1..horizon`` is
+    ``horizon * mu + (r[-1] - mu) * phi * (1 - phi**horizon) / (1 - phi)``. ``phi`` is
+    clipped to keep the process stationary.
+    """
+    phi, c = np.polyfit(returns[:-1], returns[1:], 1)
+    phi = float(np.clip(phi, -0.99, 0.99))
+    mu = c / (1 - phi)
+    return float(horizon * mu + (returns[-1] - mu) * phi * (1 - phi**horizon) / (1 - phi))
+
+
+def ar1_annual(prices: pd.DataFrame) -> pd.Series:
+    """Each column's annual expected return from an AR(1) on its daily log returns.
+
+    Columns with fewer than 30 prices, a non-positive price or a failed fit are left out.
+    """
+    out = {}
+    for symbol in prices.columns:
+        p = prices[symbol].to_numpy()
+        if len(p) < 30 or not np.all(p > 0):
+            continue
+        try:
+            log_return = ar1_forecast_sum(np.diff(np.log(p)), HORIZON)
+        except (ValueError, np.linalg.LinAlgError):
+            continue
+        annual = np.exp(log_return * TRADING_DAYS / HORIZON) - 1
+        if np.isfinite(annual):
+            out[symbol] = float(np.clip(annual, *MU_BOUNDS))
+    return pd.Series(out, dtype=float)
 
 
 def _shrunk(returns: np.ndarray) -> np.ndarray:
@@ -81,25 +121,23 @@ class NineInputs:
         month = self._forecasts.filter(pl.col("date") == made)
         return dict(zip(month["symbol"], month["forecast"], strict=True))
 
-    def expected(
-        self, asof: date, trailing: pd.Series, prices: pd.DataFrame, risk_free: float
-    ) -> pd.Series:
+    def expected(self, asof: date, prices: pd.DataFrame, risk_free: float) -> pd.Series:
         """Annual expected returns in Grinold's form (module docs).
 
         Args:
             asof: The decision date.
-            trailing: Production's expected returns (trailing) for the candidates.
             prices: The candidates' price window.
             risk_free: Annual T-bill rate.
         """
         forecast = self.forecasts(asof)
-        names = [s for s in trailing.index if s in forecast and s in prices.columns]
+        reference = ar1_annual(prices)
+        names = [s for s in reference.index if s in forecast]
         f = pd.Series({s: forecast[s] for s in names}, dtype=float)
         if len(f) < 2 or f.std() == 0:
             return pd.Series(dtype=float)
         vol = prices[names].pct_change().std() * TRADING_DAYS**0.5
         raw = (f - f.mean()) / f.std() * vol.reindex(names).fillna(0.0)
-        k = float(trailing.reindex(names).std() / raw.std()) if raw.std() > 0 else 1.0
+        k = float(reference.reindex(names).std() / raw.std()) if raw.std() > 0 else 1.0
         return risk_free + k * raw
 
     def covariance(self, asof: date, prices: pd.DataFrame) -> pd.DataFrame:
@@ -114,7 +152,9 @@ class NineInputs:
         if len(payoffs) < MIN_SLOPE_MONTHS or made is None:
             return pd.DataFrame(price, index=names, columns=names)
         f = np.cov(payoffs.T) * 12
-        terms = self._forecasts.filter(pl.col("date") == made).select("symbol", *nine.TERMS)
+        center = float(self._slopes["center"][0])
+        month = self._forecasts.filter(pl.col("date") == made)
+        terms = nine.centered(month, center).select("symbol", *nine.TERMS)
         exposure = dict(zip(terms["symbol"], terms.select(nine.TERMS).to_numpy(), strict=True))
         x = np.array([np.nan_to_num(exposure.get(s, np.zeros(len(nine.TERMS)))) for s in names])
         errors = self._forecasts.filter(

@@ -20,7 +20,7 @@ def _table(months: int = 40, n: int = 200, noise: float = 0.2, seed: int = 0) ->
         actual = 0.01 + 0.02 * x[:, 0] - 0.01 * x[:, 2] + 0.005 * x[:, 7] + rng.normal(0, noise, n)
         frames.append(pl.DataFrame({
             "date": [_month_end(m)] * n, "symbol": [f"S{k:03d}" for k in range(n)],
-            "actual": actual, "has_momentum": [True] * n,
+            "actual": actual, "has_momentum": [True] * n, "spy12": [0.1] * n,
             **{t: x[:, j] for j, t in enumerate(nine.TERMS)},
         }))  # fmt: skip
     return pl.concat(frames)

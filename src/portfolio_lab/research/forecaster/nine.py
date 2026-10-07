@@ -86,7 +86,8 @@ def table(panel: Panel, monthly: pl.DataFrame) -> pl.DataFrame:
 
     Returns:
         date, symbol, ``actual`` (next month's return minus the T-bill; null in the last
-        month), ``has_momentum`` and :data:`TERMS`, sorted by date and symbol.
+        month), ``has_momentum``, ``spy12`` (SPY's one-year return) and :data:`TERMS`,
+        sorted by date and symbol.
     """
     monthly_cols = [src for src, where in INPUTS.values() if where == "monthly"]
     data = monthly.select("date", "symbol", *monthly_cols)
@@ -103,8 +104,9 @@ def table(panel: Panel, monthly: pl.DataFrame) -> pl.DataFrame:
         rf = DataView(panel, i).risk_free() / 12
         frames.append(pl.DataFrame({
             "date": [day] * len(panel.symbols), "symbol": panel.symbols,
-            "mom12_raw": _momentum(panel, i),
-            "actual": nxt - rf if nxt is not None else np.full(len(panel.symbols), np.nan),
+            "mom12_raw": _momentum(panel, i).astype(np.float64),
+            "actual": (nxt - rf if nxt is not None else np.full(len(panel.symbols), np.nan))
+            .astype(np.float64),
             "spy12": float(_momentum(panel, i)[spy]),
         }))  # fmt: skip
     priced = pl.concat(frames).with_columns(pl.col("mom12_raw", "actual").fill_nan(None))
@@ -117,7 +119,7 @@ def table(panel: Panel, monthly: pl.DataFrame) -> pl.DataFrame:
                       pl.col("mom12_raw").is_not_null().alias("has_momentum"), *inputs)  # fmt: skip
     out = out.with_columns(pl.col(n).fill_null(0.0) for n in INPUTS)
     return out.select(
-        "date", "symbol", "actual", "has_momentum", *INPUTS,
+        "date", "symbol", "actual", "has_momentum", "spy12", *INPUTS,
         (pl.col("mom12") * pl.col("spy12").fill_nan(0.0)).alias("mom12_x_spy"),
         (pl.col("mom6") * pl.col("spy12").fill_nan(0.0)).alias("mom6_x_spy"),
     ).sort("date", "symbol")  # fmt: skip
@@ -130,8 +132,8 @@ def walk(data: pl.DataFrame) -> pl.DataFrame:
         data: From :func:`table`.
 
     Returns:
-        date, symbol, actual, ``forecast`` (next month's return over the T-bill) and the
-        :data:`TERMS` (the stock's exposures, for the factor covariance).
+        date, symbol, actual, ``forecast`` (next month's return over the T-bill), ``spy12``
+        and the :data:`TERMS` (the stock's exposures, for the factor covariance).
     """
     data = data.sort("date", "symbol")
     x = np.column_stack([np.ones(data.height), data.select(TERMS).to_numpy()])
@@ -146,7 +148,7 @@ def walk(data: pl.DataFrame) -> pl.DataFrame:
     for a, b in zip(bounds, [*bounds[1:], len(dates)], strict=True):
         if fitted >= MIN_MONTHS:
             coef = np.linalg.lstsq(xtx, xty, rcond=None)[0]
-            out.append(data[a:b].select("date", "symbol", "actual", *TERMS).with_columns(
+            out.append(data[a:b].select("date", "symbol", "actual", "spy12", *TERMS).with_columns(
                 pl.Series("forecast", x[a:b] @ coef)))  # fmt: skip
         rows = slice(a, b)
         use = fit[rows]
@@ -162,18 +164,40 @@ def walk(data: pl.DataFrame) -> pl.DataFrame:
 MIN_STOCKS = 200
 
 
+def spy12_center(data: pl.DataFrame) -> float:
+    """SPY's one-year return averaged over every month in ``data``.
+
+    As in research (to be revisited): the covariance's interaction terms are centered on
+    this full-sample mean, which uses months after each decision date. The forecasts are
+    unaffected (the main terms absorb any centering).
+    """
+    months = data.group_by("date").agg(pl.col("spy12").first())["spy12"]
+    return float(months.filter(months.is_finite()).mean())
+
+
+def centered(data: pl.DataFrame, center: float) -> pl.DataFrame:
+    """``data`` with the interaction terms built on ``spy12 - center`` (0 where unknown)."""
+    s12 = pl.when(pl.col("spy12").is_finite()).then(pl.col("spy12") - center).otherwise(0.0)
+    return data.with_columns((pl.col("mom12") * s12).alias("mom12_x_spy"),
+                             (pl.col("mom6") * s12).alias("mom6_x_spy"))  # fmt: skip
+
+
 def slopes(data: pl.DataFrame) -> pl.DataFrame:
     """Each month's cross-sectional slopes of the target on the :data:`TERMS` (Fama-MacBeth).
 
     The covariance of these slopes over earlier months is how the terms' payoffs move
     together, the factor part of the strategy's covariance (``strategies.meanvar.nine``).
+    The interactions are centered (:func:`centered`) on :func:`spy12_center`.
 
     Args:
         data: From :func:`table`.
 
     Returns:
-        date and one column per term; months with fewer than :data:`MIN_STOCKS` are left out.
+        date, one column per term and ``center`` (the same in every row); months with
+        fewer than :data:`MIN_STOCKS` are left out.
     """
+    center = spy12_center(data)
+    data = centered(data, center)
     rows = []
     for (day,), month in data.filter(
         pl.col("has_momentum") & pl.col("actual").is_not_null()
@@ -183,4 +207,4 @@ def slopes(data: pl.DataFrame) -> pl.DataFrame:
         x = np.column_stack([np.ones(month.height), month.select(TERMS).to_numpy()])
         coef = np.linalg.lstsq(x, month["actual"].to_numpy(), rcond=None)[0][1:]
         rows.append({"date": day, **dict(zip(TERMS, coef.tolist(), strict=True))})
-    return pl.DataFrame(rows).sort("date")
+    return pl.DataFrame(rows).sort("date").with_columns(pl.lit(center).alias("center"))
