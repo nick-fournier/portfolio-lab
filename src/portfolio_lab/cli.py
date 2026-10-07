@@ -167,6 +167,18 @@ def hive_store_cmd(
         typer.echo(f"{module.SOURCE}: {module.build(get_settings().data_dir, store)}")
 
 
+@hive_app.command("conform")
+def hive_conform_cmd() -> None:
+    """Rewrite every fetched source (the ingest store) into the hive's conformed tables."""
+    typer.echo(tasks.conform_task(get_settings()))
+
+
+@hive_app.command("derive")
+def hive_derive_cmd() -> None:
+    """Rebuild every derived table (daily, fundamentals, monthly, environment)."""
+    typer.echo(tasks.derive_task(get_settings()))
+
+
 @hive_app.command("daily")
 def hive_daily_cmd() -> None:
     """Rebuild the derived daily table (liquidity, history, listing flags)."""
@@ -188,7 +200,10 @@ def hive_monthly_cmd() -> None:
 @app.command("backtest")
 def backtest_cmd(
     strategy: Annotated[str, typer.Argument(help="Registered strategy name.")],
-    start: Day,
+    start: Annotated[
+        datetime | None,
+        typer.Option(formats=["%Y-%m-%d"], help="First date (default: a year into the data)."),
+    ] = None,
     end: Annotated[
         datetime | None, typer.Option(formats=["%Y-%m-%d"], help="Last date (default: latest).")
     ] = None,
@@ -207,7 +222,7 @@ def backtest_cmd(
     run_id, metrics = tasks.backtest_task(
         get_settings(),
         strategy,
-        start.date(),
+        start.date() if start else None,
         end.date() if end else None,
         _parse_params(param or []),
         notional,
@@ -217,12 +232,6 @@ def backtest_cmd(
     typer.echo(f"run {run_id}")
     for key, value in metrics.items():
         typer.echo(f"  {key:>20}: {value:,.4f}")
-
-
-@app.command("features")
-def features_cmd() -> None:
-    """Rebuild the monthly point-in-time feature panel."""
-    typer.echo(tasks.features_task(get_settings()))
 
 
 @app.command("scoreboard")
@@ -253,16 +262,6 @@ def context_cmd() -> None:
 def make_vs_buy_cmd() -> None:
     """Compare our strategies with funds anyone can buy (needs TIINGO_API_KEY for mutual funds)."""
     typer.echo(tasks.make_vs_buy_task(get_settings()))
-
-
-@app.command("make-vs-buy-history")
-def make_vs_buy_history_cmd(
-    publish: Annotated[
-        Path | None, typer.Option(help="Main data directory to publish the results to.")
-    ] = None,
-) -> None:
-    """Compare funds (since launch) with our strategies since 1999 on the Sharadar history."""
-    typer.echo(tasks.make_vs_buy_history_task(get_settings(), publish))
 
 
 @app.command("tax-runs")

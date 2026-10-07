@@ -224,8 +224,8 @@ def test_compare_page(client, tmp_path):
                      "period": "full", "start": days[0]})  # fmt: skip
         curves += [{"date": d, "key": key, "growth": rate ** ((d - days[0]).days / 365.25)}
                    for d in days]  # fmt: skip
-    pl.DataFrame(rows).write_parquet(folder / "history_summary.parquet")
-    pl.DataFrame(curves).write_parquet(folder / "history_growth.parquet")
+    pl.DataFrame(rows).write_parquet(folder / "summary.parquet")
+    pl.DataFrame(curves).write_parquet(folder / "growth.parquet")
     page = client.get("/compare").text
     for expected in ("Returns", "Passive factor funds", "18.0%", "8.0%",
                      "since 1999-01-04", ">10Y<", ">20Y<"):  # fmt: skip

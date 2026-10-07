@@ -1,12 +1,15 @@
 """Job entry points shared by the CLI and the scheduler.
 
-Each task opens its own HTTP clients, runs one unit of work end to end, and returns a
-summary dict. They are idempotent: re-running after a crash or restart is safe.
+Three kinds, in the order the scheduler runs them: **fetch** (each source's downloads,
+kept in the ingest store, ``Settings.for_ingest``), **conform and derive** (the hive:
+``data.conform`` then ``data.derived``), and **model** (backtests, the paper account,
+the scoreboard), which read the hive through ``Panel.load``. Each task opens its own
+HTTP clients, runs one unit of work end to end, and returns a summary dict. They are
+idempotent: re-running after a crash or restart is safe.
 """
 
 import logging
 from datetime import date
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -20,6 +23,8 @@ from portfolio_lab.core.config import Settings
 from portfolio_lab.core.http import RateLimitedClient
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic, write_status
+from portfolio_lab.data.conform import alpaca, edgar, fred, nasdaq, tiingo
+from portfolio_lab.data.derived import daily, fundamentals, monthly
 from portfolio_lab.data.ingest.delisted import ingest_delisted
 from portfolio_lab.data.ingest.fundamentals import ingest_fundamentals
 from portfolio_lab.data.ingest.funds import ingest_funds
@@ -28,15 +33,11 @@ from portfolio_lab.data.ingest.prices import update_prices, verify_prices
 from portfolio_lab.data.ingest.rates import ingest_rates
 from portfolio_lab.data.ingest.universe import current_symbols, ingest_universe
 from portfolio_lab.data.sources.alpaca import make_client
-from portfolio_lab.data.sources.edgar import annual
-from portfolio_lab.data.sources.tiingo import fetch_fund_history
 from portfolio_lab.research.conditions import caution_dial, conditional_ic
-from portfolio_lab.research.context import STOCK_FEATURES, environment, sensitivities, tailwinds
-from portfolio_lab.research.features import FEATURES, build_features
-from portfolio_lab.research.fundamentals import filing_states
+from portfolio_lab.research.context import STOCK_FEATURES
+from portfolio_lab.research.features import FEATURES
 from portfolio_lab.research.funds import FUNDS, compare
-from portfolio_lab.research.panel import Panel
-from portfolio_lab.research.piotroski import build_fscores, fscores_by_symbol
+from portfolio_lab.research.panel import EligibilityRules, Panel
 from portfolio_lab.research.scoreboard import HORIZON, evaluate, summarize
 from portfolio_lab.signals import base as signals
 from portfolio_lab.strategies.base import create
@@ -93,8 +94,6 @@ SCOREBOARD_SIGNALS: tuple[tuple[str, dict[str, Any]], ...] = (
 FORECAST_WORKERS = 4
 #: SEC fair-access limit is 10 requests/second; stay well under it.
 EDGAR_REQUESTS_PER_MINUTE = 300
-#: Start date for scheduled backtests (one year after data starts, for lookbacks).
-SCHEDULED_START = date(2017, 1, 3)
 #: Runs kept per configuration; older ones are deleted after each scheduled refresh.
 RUNS_KEPT_PER_CONFIG = 3
 
@@ -106,6 +105,7 @@ def public_client(settings: Settings) -> RateLimitedClient:
 
 def ingest_universe_task(settings: Settings) -> dict:
     """Snapshot the symbol directory for today."""
+    settings = settings.for_ingest()
     with public_client(settings) as client:
         return ingest_universe(settings, client, date.today())
 
@@ -116,6 +116,7 @@ def ingest_prices_task(settings: Settings, full: bool = False) -> dict:
     Raises:
         RuntimeError: If no universe has been ingested yet.
     """
+    settings = settings.for_ingest()
     paths = DataPaths(settings.data_dir)
     symbols = current_symbols(paths)
     if not symbols:
@@ -126,6 +127,7 @@ def ingest_prices_task(settings: Settings, full: bool = False) -> dict:
 
 def ingest_benchmarks_task(settings: Settings, full: bool = False) -> dict:
     """Update daily prices for the benchmark ETFs."""
+    settings = settings.for_ingest()
     dataset = DataPaths(settings.data_dir).prices_benchmarks
     with make_client(settings) as client:
         return update_prices(
@@ -135,6 +137,7 @@ def ingest_benchmarks_task(settings: Settings, full: bool = False) -> dict:
 
 def ingest_rates_task(settings: Settings) -> dict:
     """Refresh the risk-free rate history."""
+    settings = settings.for_ingest()
     with public_client(settings) as client:
         return ingest_rates(settings, client)
 
@@ -156,81 +159,52 @@ FRED_REQUESTS_PER_MINUTE = 100
 def macro_task(settings: Settings) -> dict:
     """Refresh the FRED market and economic context series."""
     with RateLimitedClient(max_per_minute=FRED_REQUESTS_PER_MINUTE) as client:
-        return ingest_macro(settings, client)
+        return ingest_macro(settings.for_ingest(), client)
 
 
 def delisted_task(settings: Settings) -> dict:
     """Find stocks delisted since the history start and backfill their prices."""
+    settings = settings.for_ingest()
     with public_client(settings) as public, make_client(settings) as alpaca:
         return ingest_delisted(settings, public, alpaca)
 
 
 def fundamentals_task(settings: Settings, force: bool = False) -> dict:
-    """Refresh SEC fundamentals for the universe and recompute point-in-time F-scores."""
-    paths = DataPaths(settings.data_dir)
-    symbols = current_symbols(paths)
+    """Refresh SEC EDGAR's bulk facts and company profiles for the universe."""
+    settings = settings.for_ingest()
+    symbols = current_symbols(DataPaths(settings.data_dir))
     headers = {"User-Agent": settings.edgar_user_agent}
     with RateLimitedClient(headers=headers, max_per_minute=EDGAR_REQUESTS_PER_MINUTE) as client:
-        summary = ingest_fundamentals(settings, client, symbols, force=force)
-    facts = pl.read_parquet(paths.fundamentals_facts)
-    tickers = pl.read_parquet(paths.fundamentals_tickers)
-    scores = fscores_by_symbol(build_fscores(annual(facts)), tickers)
-    write_parquet_atomic(scores, paths.fscores)
-    status = {
-        "filings_scored": scores.height,
-        "symbols": scores["symbol"].n_unique(),
-        "with_8_signals": scores.filter(pl.col("n_signals") >= 8).height,
-        "latest_filing": scores["filed"].max(),
-    }
-    write_status(settings.data_dir, "fscores", status)
-    log.info("fscores: %d filings for %d symbols", status["filings_scored"], status["symbols"])
-    states = filing_states(facts)
-    write_parquet_atomic(states, paths.fundamentals_states)
-    log.info("fundamentals: %d filing states", states.height)
-    return {"fundamentals": summary, "fscores": status, "states": states.height}
+        return ingest_fundamentals(settings, client, symbols, force=force)
 
 
-def features_task(settings: Settings) -> dict:
-    """Rebuild the monthly point-in-time feature panel and market environment.
+def conform_task(settings: Settings) -> dict:
+    """Rewrite every fetched source into the hive's conformed tables (``data.conform``)."""
+    root, store = settings.data_dir, settings.for_ingest().data_dir
+    out = {m.SOURCE: m.build(root, store) for m in (alpaca, nasdaq, tiingo, fred)}
+    zip_path = DataPaths(store).edgar_bulk
+    if zip_path.exists():
+        out[edgar.SOURCE] = edgar.build(root, zip_path)
+    write_status(root, "conform", out)
+    return out
 
-    Fundamentals, profiles and prices give the stock features; with FRED context series
-    ingested, the environment table is written and each stock's factor sensitivities and
-    tailwinds are added (see ``research.context``).
-    """
-    paths = DataPaths(settings.data_dir)
-    panel = Panel.load(settings.data_dir)
-    tickers = pl.read_parquet(paths.fundamentals_tickers)
-    industry = None
-    if paths.fundamentals_companies.exists():
-        companies = pl.read_parquet(paths.fundamentals_companies)
-        industry = tickers.join(companies.select("cik", "sic"), on="cik").select("symbol", "sic")
-    features = build_features(
-        panel,
-        pl.read_parquet(paths.fundamentals_states).join(tickers, on="cik"),
-        industry,
-        pl.read_parquet(paths.fscores) if paths.fscores.exists() else None,
-    )
-    if paths.macro.exists():
-        observations = pl.read_parquet(paths.macro)
-        dates = features["date"].unique().sort().to_list()
-        env = environment(observations, dates, features)
-        write_parquet_atomic(env, paths.environment)
-        stock_context = tailwinds(sensitivities(panel, observations, dates), env)
-        features = features.join(stock_context, on=["date", "symbol"], how="left")
-    write_parquet_atomic(features, paths.features)
-    covered = features.select(pl.col("earnings_yield").is_not_null().mean()).item()
-    status = {
-        "rows": features.height,
-        "months": features["date"].n_unique(),
-        "latest": features["date"].max(),
-        "with_fundamentals": round(float(covered), 3),
-    }
-    write_status(settings.data_dir, "features", status)
-    return status
+
+#: Research's wider universe; production uses ``EligibilityRules()``.
+RESEARCH_RULES = EligibilityRules(min_price=1.0, min_dollar_volume=1e5)
+
+
+def derive_task(settings: Settings) -> dict:
+    """Rebuild the derived tables: daily, fundamentals, monthly and environment."""
+    root = settings.data_dir
+    out = {"daily": daily.build(root), "fundamentals": fundamentals.build(root),
+           "monthly": monthly.build(root)}  # fmt: skip
+    write_status(root, "derive", out)
+    return out
 
 
 def verify_task(settings: Settings, sample: int = 50) -> dict:
     """Spot-check stored returns against a fresh fetch, repairing drift."""
+    settings = settings.for_ingest()
     with make_client(settings) as client:
         return verify_prices(settings, client, DataPaths(settings.data_dir).prices_daily, sample)
 
@@ -244,10 +218,15 @@ def _attach_runtime(obj: Any, settings: Settings) -> Any:
     return obj
 
 
+def first_start(panel: Panel) -> date:
+    """The first session with a year of history before it: where backtests start."""
+    return panel.dates[min(EligibilityRules().min_history, len(panel.dates) - 1)]
+
+
 def backtest_task(
     settings: Settings,
     strategy: str,
-    start: date,
+    start: date | None = None,
     end: date | None = None,
     params: dict[str, Any] | None = None,
     notional: float = 100_000,
@@ -262,7 +241,7 @@ def backtest_task(
     strat = _attach_runtime(create(strategy, **(params or {})), settings)
     panel = Panel.load(settings.data_dir, end=end)
     config = BacktestConfig(
-        start=start,
+        start=start or first_start(panel),
         end=end or panel.dates[-1],
         costs=CostModel(notional=notional),
         max_weight=max_weight,
@@ -281,7 +260,7 @@ def paper_backtest_task(settings: Settings) -> dict:
     the account: the weekly baselines would leave it up to a week behind.
     """
     name, params = PAPER_STRATEGY
-    run_id, metrics = backtest_task(settings, name, SCHEDULED_START, params=params)
+    run_id, metrics = backtest_task(settings, name, params=params)
     pruned = prune_runs(settings.data_dir, keep=RUNS_KEPT_PER_CONFIG)
     return {"run": run_id, "cagr": metrics.get("cagr"), "pruned": len(pruned)}
 
@@ -289,7 +268,7 @@ def paper_backtest_task(settings: Settings) -> dict:
 def scheduled_backtests_task(settings: Settings) -> dict:
     """Re-run the baseline backtests through the latest data, then prune old runs."""
     runs = {
-        f"{name} {params}".strip(): backtest_task(settings, name, SCHEDULED_START, params=params)[0]
+        f"{name} {params}".strip(): backtest_task(settings, name, params=params)[0]
         for name, params in SCHEDULED_BACKTESTS
     }
     pruned = prune_runs(settings.data_dir, keep=RUNS_KEPT_PER_CONFIG)
@@ -322,7 +301,7 @@ def scoreboard_task(
         label = signal_label(name, params)
         signal = _attach_runtime(signals.create(name, **params), settings)
         try:
-            frames.append(evaluate(signal, label, panel, SCHEDULED_START))
+            frames.append(evaluate(signal, label, panel, first_start(panel)))
         finally:
             if callable(close := getattr(signal, "close", None)):
                 close()
@@ -362,9 +341,10 @@ def context_task(settings: Settings) -> dict:
 def make_vs_buy_task(settings: Settings) -> dict:
     """Refresh fund prices and compare them with our strategies' latest runs."""
     paths = DataPaths(settings.data_dir)
-    with make_client(settings) as alpaca, RateLimitedClient(max_per_minute=60) as tiingo:
-        ingest_funds(settings, alpaca, tiingo, last_complete_session())
-    prices = pl.read_parquet(paths.fund_prices)
+    store = settings.for_ingest()
+    with make_client(store) as client, RateLimitedClient(max_per_minute=60) as tiingo_client:
+        ingest_funds(store, client, tiingo_client, last_complete_session())
+    prices = pl.read_parquet(DataPaths(store.data_dir).fund_prices)
     series = {
         f.symbol: (f.name, f.category, prices.filter(pl.col("symbol") == f.symbol))
         for f in FUNDS
@@ -377,82 +357,16 @@ def make_vs_buy_task(settings: Settings) -> dict:
         label = meta.get("label") or meta["strategy"]
         daily = load_run(settings.data_dir, meta["run_id"]).daily.select("date", "ret")
         series[f"ours: {label}"] = (label, "ours", daily)
-    rates = pl.read_parquet(paths.rates) if paths.rates.exists() else None
-    summary, growth = compare(series, rates, SCHEDULED_START)
+    rates = pl.read_parquet(DataPaths(store.data_dir).rates)
+    start = min(frame["date"].min() for _, _, frame in series.values())
+    production = next((k for k in series if k.startswith("ours: ") and "kelly" in k), None)
+    summary, growth = compare(series, rates, start, ours=production)
     write_parquet_atomic(summary, paths.make_vs_buy / "summary.parquet")
     write_parquet_atomic(growth, paths.make_vs_buy / "growth.parquet")
     common = summary.filter(pl.col("period") == "common")
     status = {"series": summary["key"].n_unique(), "common_start": common["start"].min()}
     write_status(settings.data_dir, "make_vs_buy", status)
     return status
-
-
-#: Start of the long make-vs-buy comparison (the Sharadar history's first full year).
-HISTORY_COMPARE_START = date(1999, 1, 4)
-
-
-def make_vs_buy_history_task(settings: Settings, publish: Path | None = None) -> dict:
-    """Make vs buy over the Sharadar history: funds since launch vs our strategies since 1999.
-
-    Fund prices (distribution-adjusted) come from Tiingo, so nothing published below is
-    Sharadar data; ours are backtests on the Sharadar history in ``settings.data_dir``:
-    meanvar, meanvar behind F-score >= 7, meanvar behind the continuous F-score (healthiest
-    27%) and :data:`PRODUCTION`, all from :data:`HISTORY_COMPARE_START`.
-
-    With ``publish`` (the main data directory), the summary and the growth of $1 are also
-    written there (``make_vs_buy/history_summary.parquet``, ``history_growth.parquet``) for
-    the Compare page: fund series from Tiingo and our derived results, which the Sharadar
-    license lets us keep.
-    """
-    paths = DataPaths(settings.data_dir)
-    if not settings.tiingo_api_key:
-        raise RuntimeError("TIINGO_API_KEY is needed for fund prices")
-    token = settings.tiingo_api_key.get_secret_value()
-    with RateLimitedClient(max_per_minute=30) as tiingo:
-        frames = [
-            fetch_fund_history(tiingo, f.symbol.replace(".", "-"), token, HISTORY_COMPARE_START)
-            .with_columns(pl.lit(f.symbol).alias("symbol"))
-            for f in FUNDS
-        ]  # fmt: skip
-    prices = (
-        pl.concat(frames)
-        .sort("symbol", "date")
-        .with_columns(
-            (pl.col("adj_close") / pl.col("adj_close").shift(1).over("symbol") - 1).alias("ret")
-        )
-    )
-    write_parquet_atomic(prices, paths.fund_prices)
-    start = HISTORY_COMPARE_START
-    ours = {
-        "meanvar": backtest_task(settings, "meanvar", start)[0],
-        "meanvar + F-score >= 7": backtest_task(settings, "meanvar", start,
-                                                params={"min_fscore": 7})[0],
-        "meanvar + continuous F-score (healthiest 27%)": backtest_task(
-            settings, "meanvar", start, params={"healthy_share": 0.27})[0],
-        "production (tapered healthiest of the most liquid + bear defense)": backtest_task(
-            settings, PRODUCTION[0], start, params=PRODUCTION[1])[0],
-    }  # fmt: skip
-    series = {
-        f.symbol: (f.name, f.category, prices.filter(pl.col("symbol") == f.symbol))
-        for f in FUNDS
-        if prices.filter(pl.col("symbol") == f.symbol).height
-    }
-    production = None
-    for name, run_id in ours.items():  # named like the live runs, so the pages merge them
-        stored = load_run(settings.data_dir, run_id)
-        label = stored.meta.get("label") or name
-        series[f"ours: {label}"] = (label, "ours", stored.daily.select("date", "ret"))
-        if name.startswith("production"):
-            production = f"ours: {label}"
-    rates = pl.read_parquet(paths.rates) if paths.rates.exists() else None
-    summary, growth = compare(series, rates, start, ours=production)
-    write_parquet_atomic(summary, paths.make_vs_buy / "summary.parquet")
-    write_parquet_atomic(growth, paths.make_vs_buy / "growth.parquet")
-    if publish is not None:
-        folder = DataPaths(publish).make_vs_buy
-        write_parquet_atomic(summary, folder / "history_summary.parquet")
-        write_parquet_atomic(growth, folder / "history_growth.parquet")
-    return {"runs": ours, "series": len(series)}
 
 
 #: The strategy the paper account follows: production.
@@ -466,7 +380,7 @@ def paper_task(settings: Settings, dry_run: bool = False) -> dict:
     broker = PaperBroker(settings)
     try:
         return paper.run(settings.data_dir, strategy, broker,
-                         refresh=lambda: features_task(settings), dry_run=dry_run,
+                         refresh=lambda: derive_task(settings), dry_run=dry_run,
                          trading_dir=settings.trading_dir)  # fmt: skip
     finally:
         broker.close()

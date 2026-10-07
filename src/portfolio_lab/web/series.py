@@ -1,11 +1,9 @@
 """Growth series and return horizons shared by the Overview and Compare pages.
 
-Two sources, merged by key: the long comparison (``make_vs_buy/history_*``: funds since
-launch and our strategies backtested since 1999) and the live data (each configuration's
-latest run, and ``make_vs_buy/growth.parquet`` for funds since 2017). For a key in both,
-the longer history wins. Everything is cached until one of its files changes, and charts
-use weekly points (the last close of each week), which look the same as daily ones at a
-fraction of the size.
+Two sources, merged by key: the fund comparison (``make_vs_buy``: funds since launch)
+and each configuration's latest run, which wins for a key in both. Everything is cached
+until one of its files changes, and charts use weekly points (the last close of each
+week), which look the same as daily ones at a fraction of the size.
 """
 
 from collections.abc import Callable
@@ -52,9 +50,7 @@ def cached(name: str, paths: list[Path], build: Callable[[], Any]) -> Any:
 def sources(data_dir: Path) -> list[Path]:
     """Files whose change invalidates the series."""
     folder = DataPaths(data_dir).make_vs_buy
-    names = ("summary.parquet", "growth.parquet", "history_summary.parquet",
-             "history_growth.parquet")  # fmt: skip
-    return [runs_dir(data_dir), *(folder / n for n in names)]
+    return [runs_dir(data_dir), folder / "summary.parquet", folder / "growth.parquet"]
 
 
 def _from_growth(summary: pl.DataFrame, growth: pl.DataFrame) -> dict[str, Series]:
@@ -92,22 +88,15 @@ def production_keys() -> set[str]:
 
 
 def load(data_dir: Path) -> dict[str, Series]:
-    """All series, the longest history winning for each key (see module docs)."""
+    """All series: the fund comparison, then the live runs (see module docs)."""
 
     def build() -> dict[str, Series]:
         folder = DataPaths(data_dir).make_vs_buy
+        s, g = folder / "summary.parquet", folder / "growth.parquet"
         merged: dict[str, Series] = {}
-        for summary, growth in (("summary", "growth"), ("history_summary", "history_growth")):
-            s, g = folder / f"{summary}.parquet", folder / f"{growth}.parquet"
-            if s.exists() and g.exists():
-                merged |= _from_growth(pl.read_parquet(s), pl.read_parquet(g))
-        for key, live in _live_runs(data_dir).items():
-            old = merged.get(key)
-            if old is None or old.daily["date"].min() >= live.daily["date"].min():
-                merged[key] = live
-            else:  # keep the long history, but link to the live run's page
-                merged[key] = Series(old.key, old.name, old.category, old.daily, live.run_id)
-        return merged
+        if s.exists() and g.exists():
+            merged |= _from_growth(pl.read_parquet(s), pl.read_parquet(g))
+        return merged | _live_runs(data_dir)
 
     return cached(f"series:{data_dir}", sources(data_dir), build)
 
