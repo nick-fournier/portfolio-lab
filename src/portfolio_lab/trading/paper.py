@@ -169,7 +169,9 @@ def run(
         raise RuntimeError(f"strategy produced no targets for {session}")
     equity = float(broker.account()["equity"])
     i = panel.date_index[session]
-    prices = {s: float(panel.field("close")[i, panel.symbol_index[s]]) for s in targets}
+    prices = {panel.names[s]: float(panel.field("close")[i, panel.symbol_index[s]])
+              for s in targets}  # fmt: skip
+    targets = {panel.names[s]: w for s, w in targets.items()}
     closes, orders = plan_orders(targets, equity, held, prices, broker.fractionable)
     if dry_run:
         return {"session": session, "equity": equity, "targets": targets, "closes": closes,

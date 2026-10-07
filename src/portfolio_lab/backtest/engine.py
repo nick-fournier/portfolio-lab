@@ -382,7 +382,7 @@ def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
     columns = ["date", "nav", "ret", "turnover", "cost", "cash", "holdings"]
     daily_df = pl.DataFrame(daily, schema=columns, orient="row")
     days = slice(first + 1, last + 1)
-    bench_col = panel.symbol_index.get(config.benchmark)
+    bench_col = panel.symbol_index.get(panel.resolve(config.benchmark))
     bench = np.nan_to_num(panel.field("ret_cc")[days, bench_col]) if bench_col is not None else None
     if bench is not None:
         daily_df = daily_df.with_columns(pl.Series("benchmark_ret", bench))
@@ -396,6 +396,12 @@ def run(strategy: Strategy, panel: Panel, config: BacktestConfig) -> RunResult:
         daily_df["holdings"].to_numpy(),
     )
     explanation = _explanation(strategy, config)
+    if any(s != n for s, n in panel.names.items()):  # the hive: sids -> tickers
+        signals = getattr(strategy, "last_signals", None)
+        if signals:
+            strategy.last_signals = {panel.names.get(s, s): v for s, v in signals.items()}
+        weights_df = weights_df.with_columns(pl.col("symbol").replace(panel.names))
+        trades.symbols = [panel.names.get(s, s) for s in trades.symbols]
     metrics["forced_liquidations"] = float(liquidations)
     metrics["otc_delistings"] = float(delistings)
     meta = {

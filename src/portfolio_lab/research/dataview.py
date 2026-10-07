@@ -86,6 +86,10 @@ class DataView:
         data = self._panel.field(f"ret_{kind}")[rows][:, cols]
         return pd.DataFrame(data, index=pd.DatetimeIndex(self._panel.dates[rows]), columns=names)
 
+    def resolve(self, name: str) -> str | None:
+        """The panel symbol displayed as ``name`` (a ticker), if any."""
+        return self._panel.resolve(name)
+
     def market(self) -> pd.Series:
         """The market index's (SPY) daily returns from the panel's start to the decision date."""
         if self._panel.market is None:

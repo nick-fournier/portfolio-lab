@@ -93,6 +93,16 @@ def _fell_to_otc(root: Path, securities: pl.DataFrame) -> list[str]:
     return [str(s) for s in dead if s not in bought]
 
 
+def _names(ids: ids_.Ids, sids: list[int]) -> dict[str, str]:
+    """Each sid's current ticker (its last dated name), for orders and results."""
+    latest = (
+        ids.tickers.filter(pl.col("sid").is_in(sids))
+        .sort("dated", "from", descending=[False, False])
+        .group_by("sid").agg(pl.col("ticker").last())
+    )  # fmt: skip
+    return {str(s): t for s, t in latest.rows()}
+
+
 def panel(
     root: Path,
     start: date | None = None,
@@ -152,7 +162,7 @@ def panel(
     out = Panel(
         dates, symbols, fields, flags["eligible"], _daily_rates(dates, rates),
         [str(s) for s in universe], fell_to_otc=_fell_to_otc(root, ids.securities),
-        traded=flags["traded"], market=symbols.index(str(market)),
+        traded=flags["traded"], market=symbols.index(str(market)), names=_names(ids, sids),
     )  # fmt: skip
     out.ids = ids
     derived = DataPaths(root).root / "derived"

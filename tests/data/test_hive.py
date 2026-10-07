@@ -4,6 +4,8 @@ import numpy as np
 import polars as pl
 import pytest
 
+from portfolio_lab.backtest.costs import CostModel
+from portfolio_lab.backtest.engine import BacktestConfig, run
 from portfolio_lab.core.calendar import sessions as _sessions
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.data import ids as ids_
@@ -11,7 +13,8 @@ from portfolio_lab.data import reader, schemas
 from portfolio_lab.data.conform import fred, nasdaq, tiingo
 from portfolio_lab.data.conform.edgar import primary_sids
 from portfolio_lab.data.derived import daily
-from portfolio_lab.research.panel import EligibilityRules
+from portfolio_lab.research.panel import EligibilityRules, Panel
+from portfolio_lab.strategies.base import create
 
 TICKERS = pl.DataFrame(
     {"table": ["SEP", "SEP", "SFP", "SF1"], "permaticker": ["200", "100", "300", "100"],
@@ -206,3 +209,14 @@ def test_daily_table_and_panel_from_the_hive(tmp_path, ids):
     assert p.eligible[:, 0].sum() == len(days) - 251 and not p.eligible[:, 1].any()
     assert p.fell_to_otc.tolist() == [False, False, False]  # sid 3 was bought out
     assert p.rf_daily[0] == pytest.approx(0.0252 / 252)
+
+
+def test_hive_panel_names_tickers_and_backtests_report_them(tmp_path, ids):
+    days = _hive(tmp_path, ids)
+    daily.build(tmp_path)
+    p = Panel.load(tmp_path, rules=EligibilityRules(5.0, 1e4, 60, 252))  # delegates to the hive
+    assert p.names == {"2": "NEW", "3": "FUND", "4": "SPY"} and p.resolve("SPY") == "4"
+    config = BacktestConfig(start=days[260], end=days[-1], costs=CostModel(notional=1e5))
+    result = run(create("buy_hold"), p, config)
+    assert set(result.weights["symbol"]) == {"SPY"}
+    assert result.daily["benchmark_ret"].drop_nulls().len() > 0
