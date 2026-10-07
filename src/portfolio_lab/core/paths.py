@@ -55,8 +55,8 @@ class DataPaths:
 
     @property
     def environment(self) -> Path:
-        """Monthly point-in-time market environment (``research.context``)."""
-        return self.root / "macro" / "environment.parquet"
+        """Monthly point-in-time market environment (``data.derived.monthly``)."""
+        return self.root / "derived" / "environment.parquet"
 
     @property
     def context_conditions(self) -> Path:
@@ -120,8 +120,13 @@ class DataPaths:
 
     @property
     def features(self) -> Path:
-        """Monthly point-in-time feature panel (``research.features``)."""
-        return self.root / "features" / "monthly.parquet"
+        """Monthly point-in-time stock inputs (``data.derived.monthly``)."""
+        return self.root / "derived" / "monthly.parquet"
+
+    @property
+    def fundamentals(self) -> Path:
+        """Filings with their prior year and F-scores (``data.derived.fundamentals``)."""
+        return self.root / "derived" / "fundamentals.parquet"
 
     @property
     def characteristics(self) -> Path:

@@ -191,11 +191,11 @@ def test_run_page_explains_the_run(tmp_path):
 def test_context_page(client, tmp_path):
     assert "No market context yet" in client.get("/context").text
     day = date(2024, 1, 31)
-    (tmp_path / "macro").mkdir(exist_ok=True)
+    (tmp_path / "derived").mkdir(exist_ok=True)
     pl.DataFrame(
         {"date": [day], "oil": [80.0], "oil_chg3m": [0.1], "oil_pct": [0.6], "vix": [15.0],
          "vix_pct": [0.2], "equity_risk_premium": [-0.01]}
-    ).write_parquet(tmp_path / "macro" / "environment.parquet")  # fmt: skip
+    ).write_parquet(tmp_path / "derived" / "environment.parquet")  # fmt: skip
     pl.DataFrame(
         {"trait": ["roa"], "condition": ["VIX"], "bucket": ["calm"],
          "months": [30], "mean_ic": [0.04], "t": [2.5]}

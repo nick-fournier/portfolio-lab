@@ -14,7 +14,7 @@ import polars as pl
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
 from portfolio_lab.data import reader
-from portfolio_lab.data.derived import daily, fundamentals
+from portfolio_lab.data.derived import daily
 from portfolio_lab.research.context import environment, sensitivities, tailwinds
 from portfolio_lab.research.features import build_features
 from portfolio_lab.research.panel import EligibilityRules
@@ -22,15 +22,11 @@ from portfolio_lab.research.panel import EligibilityRules
 log = logging.getLogger(__name__)
 
 
-def path(root: Path, table: str = "monthly") -> Path:
-    """Where ``monthly`` or ``environment`` lives."""
-    return DataPaths(root).root / "derived" / f"{table}.parquet"
-
-
 def build(root: Path, rules: EligibilityRules | None = None) -> dict:
     """Rebuild the monthly and environment tables (module docs)."""
     panel = daily.panel(root, rules=rules)
-    states = pl.read_parquet(fundamentals.path(root)).with_columns(
+    paths = DataPaths(root)
+    states = pl.read_parquet(paths.fundamentals).with_columns(
         pl.col("sid").cast(pl.String).alias("symbol")
     )
     scores = states.filter(pl.col("fscore").is_not_null()).select(
@@ -42,8 +38,8 @@ def build(root: Path, rules: EligibilityRules | None = None) -> dict:
     observations = reader.read(root, "series").filter(pl.col("series") != "DTB3")
     dates = features["date"].unique().sort().to_list()
     env = environment(observations, dates, features)
-    write_parquet_atomic(env, path(root, "environment"))
+    write_parquet_atomic(env, paths.environment)
     context = tailwinds(sensitivities(panel, observations, dates), env)
     features = features.join(context, on=["date", "symbol"], how="left")
-    write_parquet_atomic(features, path(root))
+    write_parquet_atomic(features, paths.features)
     return {"stock_months": features.height, "months": len(dates)}

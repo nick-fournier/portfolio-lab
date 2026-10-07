@@ -18,14 +18,8 @@ from portfolio_lab.data import reader, schemas
 from portfolio_lab.research.fundamentals import CONCEPTS as PRIOR
 from portfolio_lab.research.piotroski import fscores_from_states
 
-TABLE = "fundamentals"
 TOLERANCE = "20d"
 YEAR = timedelta(days=365)
-
-
-def path(root: Path) -> Path:
-    """Where the table lives."""
-    return DataPaths(root).root / "derived" / f"{TABLE}.parquet"
 
 
 def with_prior(filings: pl.DataFrame, key: str = "sid") -> pl.DataFrame:
@@ -62,5 +56,5 @@ def build(root: Path) -> dict:
     lead = ["sid", "filed", "period_end", "form", "shares_out"]
     rows = rows.select(*lead, *schemas.CONCEPTS, *[f"prior_{c}" for c in PRIOR],
                        "fscore", "n_signals").sort("sid", "filed", "period_end")  # fmt: skip
-    write_parquet_atomic(rows, path(root))
+    write_parquet_atomic(rows, DataPaths(root).fundamentals)
     return {"filings": rows.height, "scored": int(rows["fscore"].is_not_null().sum())}
