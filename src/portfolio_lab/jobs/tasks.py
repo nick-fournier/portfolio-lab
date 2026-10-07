@@ -223,7 +223,7 @@ def first_start(panel: Panel) -> date:
     return panel.dates[min(EligibilityRules().min_history, len(panel.dates) - 1)]
 
 
-def backtest_task(
+def backtest_task(  # noqa: PLR0913 - the CLI's options, one each
     settings: Settings,
     strategy: str,
     start: date | None = None,
@@ -232,14 +232,27 @@ def backtest_task(
     notional: float = 100_000,
     max_weight: float = 1.0,
     delisting_return: float = BacktestConfig.delisting_return,
+    *,
+    panel: Panel | None = None,
 ) -> tuple[str, dict[str, float]]:
     """Run one backtest on the stored data and save it.
+
+    Args:
+        settings: Application settings.
+        strategy: Registered strategy name.
+        start: First session (default: a year into the data, ``first_start``).
+        end: Last session (default: the latest).
+        params: Strategy parameters.
+        notional: Portfolio size in dollars, for costs.
+        max_weight: Largest weight in any one name.
+        delisting_return: Return on exit for stocks that fell to OTC.
+        panel: An already loaded panel (jobs running several backtests share one).
 
     Returns:
         The run id and its metrics.
     """
     strat = _attach_runtime(create(strategy, **(params or {})), settings)
-    panel = Panel.load(settings.data_dir, end=end)
+    panel = panel or Panel.load(settings.data_dir, end=end)
     config = BacktestConfig(
         start=start or first_start(panel),
         end=end or panel.dates[-1],
@@ -267,8 +280,9 @@ def paper_backtest_task(settings: Settings) -> dict:
 
 def scheduled_backtests_task(settings: Settings) -> dict:
     """Re-run the baseline backtests through the latest data, then prune old runs."""
+    panel = Panel.load(settings.data_dir)
     runs = {
-        f"{name} {params}".strip(): backtest_task(settings, name, params=params)[0]
+        f"{name} {params}".strip(): backtest_task(settings, name, params=params, panel=panel)[0]
         for name, params in SCHEDULED_BACKTESTS
     }
     pruned = prune_runs(settings.data_dir, keep=RUNS_KEPT_PER_CONFIG)
