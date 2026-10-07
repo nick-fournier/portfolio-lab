@@ -10,11 +10,13 @@ Market value is shares outstanding (from that filing) times the price on the fil
 grown by the stock's total return since, which carries it through splits without having to
 detect them. Features (all floats; null where an input is missing):
 
-- **Valuation**: earnings, book, cash-flow, free-cash-flow, sales and dividend yields.
+- **Valuation**: earnings, book, cash-flow, free-cash-flow, sales and dividend yields, and
+  R&D over market value.
 - **Quality** (the raw Piotroski inputs and relatives): return on assets, cash flow to
   assets, accruals, gross profitability, operating margin, leverage, current ratio, and
   their year-on-year changes; share issuance, asset and sales growth.
-- **Price**: 12-1 month momentum, last month's return, volatility, beta, size, liquidity.
+- **Price**: 12-1 and 6-1 month momentum, last month's return, volatility, beta, size,
+  liquidity.
 - ``fscore`` for comparison, and ``*_ind``: key features as percentiles within the stock's
   industry (SIC major group) on that date.
 """
@@ -43,7 +45,8 @@ FEATURES = (
     "dividend_yield", "roa", "cfo_to_assets", "accruals", "gross_profitability",
     "operating_margin", "leverage", "current_ratio", "d_roa", "d_lt_debt", "d_current_ratio",
     "d_gross_margin", "d_asset_turnover", "share_issuance", "asset_growth", "sales_growth",
-    "log_size", "mom_12_1", "ret_1m", "volatility", "beta", "log_adv", "fscore",
+    "log_size", "mom_12_1", "mom6m", "ret_1m", "volatility", "beta", "log_adv", "fscore",
+    "rd_mve",
     *(f"{c}_ind" for c in INDUSTRY_RELATIVE),
 )  # fmt: skip
 
@@ -63,6 +66,8 @@ def _price_features(panel: Panel, index: int, cols: np.ndarray) -> dict[str, np.
             # growth is relative to the price just before the window (1.0).
             "mom_12_1": np.where(enough, growth[-MONTH - 1] - 1, np.nan),
             "ret_1m": np.where(enough, growth[-1] / growth[-MONTH - 1] - 1, np.nan),
+            # months 2 to 6 back, skipping the latest month like ``mom_12_1``
+            "mom6m": np.where(enough, growth[-MONTH - 1] / growth[-6 * MONTH - 1] - 1, np.nan),
             "volatility": np.where(enough, np.nanstd(window, axis=0), np.nan),
             "beta": np.where(enough, beta, np.nan),
             "log_adv": np.log(panel.field("adv")[index, cols]),
@@ -166,6 +171,8 @@ def _fundamental_features() -> list[pl.Expr]:
         (ratio(c("assets"), c("prior_assets")) - 1).alias("asset_growth"),
         (ratio(c("revenue"), c("prior_revenue")) - 1).alias("sales_growth"),
         mv.log().alias("log_size"),
+        # R&D a company doesn't report counts as none (Sharadar's convention; EDGAR omits it)
+        ratio(c("rnd").fill_null(0.0), mv).alias("rd_mve"),
     ]
 
 

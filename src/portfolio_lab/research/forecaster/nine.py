@@ -28,8 +28,10 @@ from portfolio_lab.research.dataview import DataView
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.scoreboard import forward_returns
 
-#: Where :func:`walk`'s forecasts are kept, in ``DataPaths.forecaster``.
+#: Where :func:`walk`'s forecasts (with each stock's terms) are kept, in ``DataPaths.forecaster``.
 FILE = "nine.parquet"
+#: Where :func:`slopes` are kept.
+SLOPES = "nine_slopes.parquet"
 #: Months of history before the first forecast.
 MIN_MONTHS = 24
 #: Daily returns in one-year momentum (and SPY's one-year return).
@@ -39,12 +41,12 @@ MIN_COVERAGE = 0.95
 #: Stock inputs: name -> (source column, table it comes from).
 INPUTS = {
     "mom12": ("mom12_raw", "panel"),
-    "mom6": ("mom6m", "characteristics"),
+    "mom6": ("mom6m", "monthly"),
     "cfo_assets": ("cfo_to_assets", "monthly"),
     "fcf_yield": ("fcf_yield", "monthly"),
     "sales_yield": ("sales_yield", "monthly"),
     "earnings_yield": ("earnings_yield", "monthly"),
-    "rd_mve": ("rd_mve", "characteristics"),
+    "rd_mve": ("rd_mve", "monthly"),
 }
 #: Inputs clipped at the month's 1st/99th percentiles after the transform.
 CLIPPED = ("rd_mve",)
@@ -75,23 +77,19 @@ def _momentum(panel: Panel, i: int) -> np.ndarray:
     return np.where(ok, growth, np.nan)
 
 
-def table(panel: Panel, monthly: pl.DataFrame, characteristics: pl.DataFrame) -> pl.DataFrame:
+def table(panel: Panel, monthly: pl.DataFrame) -> pl.DataFrame:
     """Stock-months with the nine terms and the target (module docs).
 
     Args:
-        panel: Prices, the T-bill and SPY.
-        monthly: The monthly feature panel (``DataPaths.features``); its rows are the stocks.
-        characteristics: The extra inputs (``DataPaths.characteristics``).
+        panel: Prices, the T-bill and the market.
+        monthly: The monthly stock inputs (``DataPaths.features``); its rows are the stocks.
 
     Returns:
         date, symbol, ``actual`` (next month's return minus the T-bill; null in the last
         month), ``has_momentum`` and :data:`TERMS`, sorted by date and symbol.
     """
     monthly_cols = [src for src, where in INPUTS.values() if where == "monthly"]
-    char_cols = [src for src, where in INPUTS.values() if where == "characteristics"]
-    data = monthly.select("date", "symbol", *monthly_cols).join(
-        characteristics.select("date", "symbol", *char_cols), on=["date", "symbol"], how="left"
-    )
+    data = monthly.select("date", "symbol", *monthly_cols)
     ends = sorted(d for d in data["date"].unique().to_list() if d in panel.date_index)
     spy = panel.market
     frames = []
@@ -132,7 +130,8 @@ def walk(data: pl.DataFrame) -> pl.DataFrame:
         data: From :func:`table`.
 
     Returns:
-        date, symbol, actual and ``forecast`` (next month's return over the T-bill).
+        date, symbol, actual, ``forecast`` (next month's return over the T-bill) and the
+        :data:`TERMS` (the stock's exposures, for the factor covariance).
     """
     data = data.sort("date", "symbol")
     x = np.column_stack([np.ones(data.height), data.select(TERMS).to_numpy()])
@@ -147,7 +146,7 @@ def walk(data: pl.DataFrame) -> pl.DataFrame:
     for a, b in zip(bounds, [*bounds[1:], len(dates)], strict=True):
         if fitted >= MIN_MONTHS:
             coef = np.linalg.lstsq(xtx, xty, rcond=None)[0]
-            out.append(data[a:b].select("date", "symbol", "actual").with_columns(
+            out.append(data[a:b].select("date", "symbol", "actual", *TERMS).with_columns(
                 pl.Series("forecast", x[a:b] @ coef)))  # fmt: skip
         rows = slice(a, b)
         use = fit[rows]
@@ -157,3 +156,31 @@ def walk(data: pl.DataFrame) -> pl.DataFrame:
             xty += xs.T @ y[rows][use]
             fitted += 1
     return pl.concat(out) if out else pl.DataFrame()
+
+
+#: Fewest stocks with a target for a month's slopes.
+MIN_STOCKS = 200
+
+
+def slopes(data: pl.DataFrame) -> pl.DataFrame:
+    """Each month's cross-sectional slopes of the target on the :data:`TERMS` (Fama-MacBeth).
+
+    The covariance of these slopes over earlier months is how the terms' payoffs move
+    together, the factor part of the strategy's covariance (``strategies.meanvar.nine``).
+
+    Args:
+        data: From :func:`table`.
+
+    Returns:
+        date and one column per term; months with fewer than :data:`MIN_STOCKS` are left out.
+    """
+    rows = []
+    for (day,), month in data.filter(
+        pl.col("has_momentum") & pl.col("actual").is_not_null()
+    ).group_by("date"):
+        if month.height < MIN_STOCKS:
+            continue
+        x = np.column_stack([np.ones(month.height), month.select(TERMS).to_numpy()])
+        coef = np.linalg.lstsq(x, month["actual"].to_numpy(), rcond=None)[0][1:]
+        rows.append({"date": day, **dict(zip(TERMS, coef.tolist(), strict=True))})
+    return pl.DataFrame(rows).sort("date")
