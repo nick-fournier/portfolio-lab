@@ -93,7 +93,7 @@ def table(panel: Panel, monthly: pl.DataFrame, characteristics: pl.DataFrame) ->
         characteristics.select("date", "symbol", *char_cols), on=["date", "symbol"], how="left"
     )
     ends = sorted(d for d in data["date"].unique().to_list() if d in panel.date_index)
-    spy = panel.symbol_index["SPY"]
+    spy = panel.market
     frames = []
     for k, day in enumerate(ends):
         i = panel.date_index[day]

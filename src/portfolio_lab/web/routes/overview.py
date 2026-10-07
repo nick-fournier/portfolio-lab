@@ -1,6 +1,5 @@
 """Landing page (strategy overview with a comparison chart) and the About page."""
 
-import json
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -8,7 +7,7 @@ from fastapi.responses import HTMLResponse
 
 from portfolio_lab.web import series
 from portfolio_lab.web.charts import series_figure
-from portfolio_lab.web.routes.status import data_freshness
+from portfolio_lab.web.routes.status import data_freshness, read_job
 
 router = APIRouter()
 
@@ -50,8 +49,7 @@ def page_context(data_dir: Path) -> dict:
 def overview(request: Request) -> HTMLResponse:
     """Our strategies and the market on one chart and one table, longest history first."""
     data_dir = request.app.state.data_dir
-    prices_path = data_dir / "_status" / "prices.json"
-    prices = json.loads(prices_path.read_text()) if prices_path.exists() else None
+    prices = read_job(data_dir, "prices")
     return request.app.state.templates.TemplateResponse(
         request,
         "overview.html",

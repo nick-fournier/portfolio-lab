@@ -20,7 +20,7 @@ DATA_JOBS = {
     "rates": ("max_date", "latest_rate"),
     "verify_prices": ("checked", "repaired"),
     "fundamentals": ("companies_with_facts", "facts", "latest_filing"),
-    "fscores": ("filings_scored", "with_8_signals", "latest_filing"),
+    "conform": ("alpaca", "nasdaq", "edgar"),
 }
 
 
@@ -53,13 +53,20 @@ def data_freshness(prices: dict[str, Any] | None, now: datetime | None = None) -
             "next": due.astimezone(NEW_YORK)}  # fmt: skip
 
 
+def read_job(data_dir: Path, name: str) -> dict[str, Any] | None:
+    """A job's last status: the hive's own jobs, else the fetchers' (in the ingest store)."""
+    return _read(data_dir / "_status" / f"{name}.json") or _read(
+        data_dir / "ingest" / "_status" / f"{name}.json"
+    )
+
+
 @router.get("/status", response_class=HTMLResponse)
 def status_page(request: Request) -> HTMLResponse:
     """Show each data job's latest summary and the scheduler's state."""
     status_dir = request.app.state.data_dir / "_status"
     jobs = []
     for name, fields in DATA_JOBS.items():
-        info = _read(status_dir / f"{name}.json")
+        info = read_job(request.app.state.data_dir, name)
         if info is not None:
             details = {f: info.get(f) for f in fields}
             jobs.append(
@@ -78,7 +85,7 @@ def status_page(request: Request) -> HTMLResponse:
         {
             "jobs": jobs,
             "scheduler": scheduler_jobs,
-            "freshness": data_freshness(_read(status_dir / "prices.json")),
+            "freshness": data_freshness(read_job(request.app.state.data_dir, "prices")),
         },
     )
 
