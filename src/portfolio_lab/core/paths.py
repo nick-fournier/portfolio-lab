@@ -143,6 +143,22 @@ class DataPaths:
         """Signal scoreboard: per-date rank IC and quintile returns for every signal."""
         return self.root / "results" / "scoreboard.parquet"
 
+    # The data hive (``data.schemas``, ``data.ids``, ``data.reader``): one folder per
+    # source with its raw downloads and conformed tables, and the shared id tables.
+
+    @property
+    def ids(self) -> Path:
+        """The security id tables (``data.ids``)."""
+        return self.root / "ids"
+
+    def raw(self, source: str) -> Path:
+        """A source's downloaded files, kept as received."""
+        return self.root / source / "raw"
+
+    def conformed(self, source: str, table: str) -> Path:
+        """A source's copy of a conformed table (``data.schemas``), as a directory."""
+        return self.root / source / "conformed" / table
+
     @staticmethod
     def year_partition(dataset: Path, year: int) -> Path:
         """Return the parquet file for ``year`` within a year-partitioned dataset."""

@@ -16,6 +16,8 @@ import typer
 from portfolio_lab.backtest.results import load_run
 from portfolio_lab.core.config import get_settings
 from portfolio_lab.core.log import setup_logging
+from portfolio_lab.data.conform import alpaca as conform_alpaca
+from portfolio_lab.data.conform import sharadar as conform_sharadar
 from portfolio_lab.data.ingest import sharadar
 from portfolio_lab.forecast_cli import forecast_app
 from portfolio_lab.jobs import tasks, taxes
@@ -25,6 +27,8 @@ app = typer.Typer(help="Portfolio lab: ingest data, run backtests, serve the das
 ingest_app = typer.Typer(help="Fetch and store market data.")
 app.add_typer(ingest_app, name="ingest")
 app.add_typer(forecast_app, name="forecast")
+hive_app = typer.Typer(help="The data hive: conform each source into the shared tables.")
+app.add_typer(hive_app, name="hive")
 
 Full = Annotated[bool, typer.Option("--full", help="Re-fetch full history instead of updating.")]
 Day = Annotated[datetime, typer.Option(formats=["%Y-%m-%d"], help="Date (YYYY-MM-DD).")]
@@ -139,6 +143,24 @@ def ingest_sharadar_cmd(
     settings = get_settings()
     raw = raw or out / "raw"
     typer.echo(sharadar.build(raw, out, settings.data_dir))
+
+
+@hive_app.command("sharadar")
+def hive_sharadar_cmd(
+    raw: Annotated[
+        Path | None, typer.Option(help="Folder with the bulk zips (default: <data>/sharadar/raw).")
+    ] = None,
+) -> None:
+    """Seed the security ids and conform Sharadar's bulk files."""
+    typer.echo(conform_sharadar.build(get_settings().data_dir, raw))
+
+
+@hive_app.command("alpaca")
+def hive_alpaca_cmd(
+    store: Annotated[Path, typer.Option(help="Old-layout data directory with Alpaca's bars.")],
+) -> None:
+    """Conform Alpaca's stored daily bars (ids must exist: run `hive sharadar` first)."""
+    typer.echo(conform_alpaca.build(get_settings().data_dir, store))
 
 
 @app.command("backtest")
