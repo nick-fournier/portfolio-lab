@@ -297,7 +297,7 @@ def test_paper_page_reads_a_separate_trading_dir(tmp_path):
 
 
 def test_forecasts_page(client, tmp_path):
-    assert "No forecasts published yet" in client.get("/forecasts").text
+    assert "No forecasts yet" in client.get("/forecasts").text
     sizes = {"small": 0.044, "mid": 0.035, "large": 0.026}
     piece = {"ic": 0.037, "ic_t": 4.5, "months_right": 127, "years_right": 16, "years": 18,
              "slope": 0.63, "r2": 0.001, "tenth_yr": 0.105, "ic_by_size": sizes,
@@ -305,22 +305,25 @@ def test_forecasts_page(client, tmp_path):
     summary = {
         "start": "2009-01-30", "end": "2026-08-31", "months": 212, "yearly_noise": 0.025,
         "pieces": {k: {"label": f"{k} label", **piece}
-                   for k in ("forecast", "previous", "production")},
-        "yearly": [{"year": 2009 + k, "ic": 0.03, "margin": 0.02, "old": 0.02, "prev": 0.04}
+                   for k in ("forecast", "production")},
+        "yearly": [{"year": 2009 + k, "ic": 0.03, "margin": 0.02, "old": 0.02}
                    for k in range(18)],
         "bins": [{"bin": k, "forecast": k / 1000, "actual": k / 1600, "margin": 0.002,
                   "q25": -0.05, "q75": 0.05} for k in range(-10, 10)],
-        "trailing": [{"date": f"20{10 + k}-01-31", "ic": 0.03, "old": 0.02, "prev": 0.04}
+        "grinold_bins": [{"bin": k, "forecast": k / 1000, "actual": k / 1100, "margin": 0.002,
+                          "q25": -0.05, "q75": 0.05} for k in range(-10, 10)],
+        "grinold_slope": 0.91,
+        "trailing": [{"date": f"20{10 + k}-01-31", "ic": 0.03, "old": 0.02}
                      for k in range(10)],
         "tenths": [{"date": f"20{10 + k}-01-31", "top": 1 + k / 10, "bottom": 1 - k / 20,
-                    "p_top": 1.0, "p_bottom": 1.0, "q_top": 1.1, "q_bottom": 0.9}
-                   for k in range(10)],
+                    "p_top": 1.0, "p_bottom": 1.0} for k in range(10)],
     }  # fmt: skip
     folder = tmp_path / "results" / "forecaster"
     folder.mkdir(parents=True)
     (folder / "summary.json").write_text(json.dumps(summary))
     page = client.get("/forecasts").text
-    for expected in ("27.8%", "0.034", "16 of 18", "60%", "previous label",
-                     "0.044 / 0.035 / 0.026", "±0.025", "Previous forecaster", 'id="fit"',
-                     'id="trailing"', 'id="tenths"'):  # fmt: skip
+    for expected in ("27.8%", "0.034", "16 of 18", "60%", "production label",
+                     "0.044 / 0.035 / 0.026", "±0.025", "slope 0.91", 'id="fit"',
+                     'id="grinold"', 'id="trailing"', 'id="tenths"'):  # fmt: skip
         assert expected in page, expected
+    assert "revious" not in page

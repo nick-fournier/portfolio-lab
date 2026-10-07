@@ -76,7 +76,7 @@ def test_inputs_are_standardized_within_each_month_and_keep_their_sign():
     assert clipped["z"].abs().max() < out["z"].abs().max()
 
 
-def test_summary_grades_three_forecasts_on_shared_stock_months():
+def test_summary_grades_both_forecasts_on_shared_stock_months():
     rng = np.random.default_rng(5)
     rows = []
     for m in range(120):
@@ -85,22 +85,20 @@ def test_summary_grades_three_forecasts_on_shared_stock_months():
         r = 0.02 * x + rng.normal(0, 0.1, 500)
         for k in range(500):
             rows.append((d, f"S{k:03d}", float(r[k] - r.mean()), float(r[k]), float(x[k]),
-                         float(rng.normal()), float(k), (k - 250) / 500))  # fmt: skip
-    f = pl.DataFrame(rows, schema=["date", "symbol", "actual", "r", "x", "noise", "liq", "size"],
+                         float(k), (k - 250) / 500))  # fmt: skip
+    f = pl.DataFrame(rows, schema=["date", "symbol", "actual", "r", "x", "liq", "size"],
                      orient="row")  # fmt: skip
-    forecasts = f.select("date", "symbol", "actual", pl.col("x").alias("forecast"))
-    previous = f.select("date", "symbol", "actual", "size", pl.col("noise").alias("linear"),
-                        pl.lit(0.0).alias("correction"),
-                        pl.lit(None, dtype=pl.Float64).alias("nets"),
-                        pl.lit(1).alias("components"))  # fmt: skip
-    production = f.select("date", "symbol", (-pl.col("x")).alias("production"))
+    combined = f.select("date", "symbol", "actual", "size", pl.col("x").alias("forecast"),
+                        (-pl.col("x")).alias("production"))  # fmt: skip
     liquid = f.select("date", "symbol", pl.col("liq").alias("liquidity"), "r")
-    s = report.build(forecasts, previous, production, liquid)
+    grinold = f.select("date", "symbol", (pl.col("x") * 0.02).alias("forecast"),
+                       pl.col("r").alias("actual"))  # fmt: skip
+    s = report.build(combined, liquid, grinold)
     p = s["pieces"]
-    assert set(p) == {"forecast", "previous", "production"}
-    assert p["forecast"]["ic"] > 0.1 > abs(p["previous"]["ic"])
-    assert p["production"]["ic"] < -0.1
+    assert set(p) == {"forecast", "production"}
+    assert p["forecast"]["ic"] > 0.1 > -0.1 > p["production"]["ic"]
     assert p["forecast"]["liquid_ic"] > 0.1 and p["forecast"]["top_yr"] > p["production"]["top_yr"]
-    assert {"ic", "old", "prev"} <= set(s["trailing"][0])
-    assert {"top", "p_top", "q_top"} <= set(s["tenths"][0])
-    assert s["yearly"][0]["prev"] is not None
+    assert s["grinold_slope"] == pytest.approx(1, abs=0.15)  # right-sized by construction
+    assert {"ic", "old"} <= set(s["trailing"][0]) and "prev" not in s["trailing"][0]
+    assert {"top", "p_top"} <= set(s["tenths"][0])
+    assert s["yearly"][0]["old"] is not None

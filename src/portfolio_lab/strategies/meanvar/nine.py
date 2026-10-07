@@ -33,6 +33,7 @@ import polars as pl
 from sklearn.covariance import LedoitWolf
 
 from portfolio_lab.research.forecaster import nine
+from portfolio_lab.research.forecaster.nine import ar1_annual
 
 TRADING_DAYS = 252
 #: Forecasts this old or newer count for a rebalance.
@@ -46,44 +47,6 @@ ERROR_MONTHS, MIN_ERROR_MONTHS = 36, 12
 RESIDUAL_MONTHS, MIN_RESIDUAL_MONTHS, MAX_MISSING = 60, 24, 12
 #: Share of price variance assumed idiosyncratic when a stock has no error history.
 IDIOSYNCRATIC = 0.85**2
-
-
-#: Forecast horizon of the AR(1) behind Grinold's scale, in sessions, and its return bounds.
-HORIZON, MU_BOUNDS = 21, (-0.99, 5.0)
-
-
-def ar1_forecast_sum(returns: np.ndarray, horizon: int) -> float:
-    """Sum of the next ``horizon`` returns forecast by an AR(1) fitted with least squares.
-
-    Fits ``r[t] = c + phi * r[t-1]``; with long-run mean ``mu = c / (1 - phi)`` the k-step
-    forecast is ``mu + phi**k * (r[-1] - mu)``, so the sum over ``k = 1..horizon`` is
-    ``horizon * mu + (r[-1] - mu) * phi * (1 - phi**horizon) / (1 - phi)``. ``phi`` is
-    clipped to keep the process stationary.
-    """
-    phi, c = np.polyfit(returns[:-1], returns[1:], 1)
-    phi = float(np.clip(phi, -0.99, 0.99))
-    mu = c / (1 - phi)
-    return float(horizon * mu + (returns[-1] - mu) * phi * (1 - phi**horizon) / (1 - phi))
-
-
-def ar1_annual(prices: pd.DataFrame) -> pd.Series:
-    """Each column's annual expected return from an AR(1) on its daily log returns.
-
-    Columns with fewer than 30 prices, a non-positive price or a failed fit are left out.
-    """
-    out = {}
-    for symbol in prices.columns:
-        p = prices[symbol].to_numpy()
-        if len(p) < 30 or not np.all(p > 0):
-            continue
-        try:
-            log_return = ar1_forecast_sum(np.diff(np.log(p)), HORIZON)
-        except (ValueError, np.linalg.LinAlgError):
-            continue
-        annual = np.exp(log_return * TRADING_DAYS / HORIZON) - 1
-        if np.isfinite(annual):
-            out[symbol] = float(np.clip(annual, *MU_BOUNDS))
-    return pd.Series(out, dtype=float)
 
 
 def _shrunk(returns: np.ndarray) -> np.ndarray:

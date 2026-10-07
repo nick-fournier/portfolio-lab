@@ -38,7 +38,7 @@ from portfolio_lab.data.sources.tiingo import fetch_fund_history
 from portfolio_lab.research.conditions import caution_dial, conditional_ic
 from portfolio_lab.research.context import STOCK_FEATURES
 from portfolio_lab.research.features import FEATURES
-from portfolio_lab.research.forecaster import nine
+from portfolio_lab.research.forecaster import nine, report
 from portfolio_lab.research.funds import FUNDS, compare
 from portfolio_lab.research.panel import EligibilityRules, Panel
 from portfolio_lab.research.scoreboard import HORIZON, evaluate, summarize
@@ -222,6 +222,8 @@ def derive_task(settings: Settings) -> dict:
     write_parquet_atomic(forecasts, paths.forecaster / nine.FILE)
     write_parquet_atomic(nine.slopes(data), paths.forecaster / nine.SLOPES)
     out["forecasts"] = {"months": forecasts["date"].n_unique(), "latest": forecasts["date"].max()}
+    del data
+    report.publish(paths.forecaster, panel, pl.read_parquet(paths.features))
     write_status(root, "derive", out)
     return out
 

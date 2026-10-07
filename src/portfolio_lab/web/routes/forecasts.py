@@ -1,6 +1,6 @@
 """Forecasts page: next month's return for every stock (``research.forecaster``).
 
-Reads the summary written by ``plab forecast publish``.
+Reads the summary the nightly derive step writes (``research.forecaster.report``).
 """
 
 import json
@@ -32,6 +32,7 @@ def page_context(data_dir: Path) -> dict:
             return {}
         s = json.loads(path.read_text())
         return {"s": s, "fit": forecast_fit_figure(s["bins"]),
+                "grinold": forecast_fit_figure(s["grinold_bins"], "over the T-bill"),
                 "years": forecast_years_figure(s["yearly"]),
                 "trailing": forecast_trailing_figure(s["trailing"]),
                 "tenths": forecast_tenths_figure(s["tenths"])}  # fmt: skip

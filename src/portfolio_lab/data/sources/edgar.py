@@ -73,7 +73,7 @@ TAGS: dict[str, str] = {
     "PaymentsOfDividends": "duration",
     "PaymentsOfDividendsCommonStock": "duration",
     "PaymentsOfOrdinaryDividends": "duration",
-    # Operating detail (the extra inputs of ``research.characteristics``).
+    # Operating detail (R&D, SG&A, interest, depreciation, tax, working capital).
     "SellingGeneralAndAdministrativeExpense": "duration",
     "InterestExpense": "duration",
     "InterestExpenseDebt": "duration",

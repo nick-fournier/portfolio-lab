@@ -22,6 +22,7 @@ stocks that have a one-year momentum, from per-month sums; the first forecast co
 """
 
 import numpy as np
+import pandas as pd
 import polars as pl
 
 from portfolio_lab.research.dataview import DataView
@@ -208,3 +209,41 @@ def slopes(data: pl.DataFrame) -> pl.DataFrame:
         coef = np.linalg.lstsq(x, month["actual"].to_numpy(), rcond=None)[0][1:]
         rows.append({"date": day, **dict(zip(TERMS, coef.tolist(), strict=True))})
     return pl.DataFrame(rows).sort("date").with_columns(pl.lit(center).alias("center"))
+
+
+#: Grinold's scale: the AR(1) behind it (horizon in sessions, return bounds, year).
+HORIZON, MU_BOUNDS, TRADING_DAYS = 21, (-0.99, 5.0), 252
+
+
+def ar1_forecast_sum(returns: np.ndarray, horizon: int) -> float:
+    """Sum of the next ``horizon`` returns forecast by an AR(1) fitted with least squares.
+
+    Fits ``r[t] = c + phi * r[t-1]``; with long-run mean ``mu = c / (1 - phi)`` the k-step
+    forecast is ``mu + phi**k * (r[-1] - mu)``, so the sum over ``k = 1..horizon`` is
+    ``horizon * mu + (r[-1] - mu) * phi * (1 - phi**horizon) / (1 - phi)``. ``phi`` is
+    clipped to keep the process stationary.
+    """
+    phi, c = np.polyfit(returns[:-1], returns[1:], 1)
+    phi = float(np.clip(phi, -0.99, 0.99))
+    mu = c / (1 - phi)
+    return float(horizon * mu + (returns[-1] - mu) * phi * (1 - phi**horizon) / (1 - phi))
+
+
+def ar1_annual(prices: pd.DataFrame) -> pd.Series:
+    """Each column's annual expected return from an AR(1) on its daily log returns.
+
+    Columns with fewer than 30 prices, a non-positive price or a failed fit are left out.
+    """
+    out = {}
+    for symbol in prices.columns:
+        p = prices[symbol].to_numpy()
+        if len(p) < 30 or not np.all(p > 0):
+            continue
+        try:
+            log_return = ar1_forecast_sum(np.diff(np.log(p)), HORIZON)
+        except (ValueError, np.linalg.LinAlgError):
+            continue
+        annual = np.exp(log_return * TRADING_DAYS / HORIZON) - 1
+        if np.isfinite(annual):
+            out[symbol] = float(np.clip(annual, *MU_BOUNDS))
+    return pd.Series(out, dtype=float)
