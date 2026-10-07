@@ -1,8 +1,10 @@
 """``plab forecast ...``: the next-month forecaster (``research.forecaster``).
 
-Run in order on a Sharadar data directory: ``inputs`` builds the extra stock inputs,
-``dataset`` assembles the stock and market tables, ``run`` walks forward (resuming where
-an earlier run stopped) and ``grade`` prints the grades.
+Run on a Sharadar data directory: ``inputs`` builds the extra stock inputs and ``nine``
+fits the forecaster month by month (``research.forecaster.nine``); ``publish`` writes the
+Forecasts page's summary. The previous forecaster (linear + trees and nets) is kept for the
+page's comparison: ``dataset`` assembles its tables, ``run`` walks it forward (resuming where
+an earlier run stopped) and ``grade`` prints its grades.
 """
 
 import json
@@ -17,7 +19,7 @@ from portfolio_lab.core.config import get_settings
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
 from portfolio_lab.research.characteristics import build as characteristics
-from portfolio_lab.research.forecaster import dataset, grade, report, walk
+from portfolio_lab.research.forecaster import dataset, grade, nine, report, walk
 from portfolio_lab.research.forecaster.nets import Nets
 from portfolio_lab.research.panel import Panel
 
@@ -35,6 +37,20 @@ def inputs_cmd(
     frame = characteristics.build(data_dir, raw or data_dir / "raw")
     write_parquet_atomic(frame, DataPaths(data_dir).characteristics)
     typer.echo(f"{frame.height:,} stock-months, {len(characteristics.COLUMNS)} inputs")
+
+
+@forecast_app.command("nine")
+def nine_cmd() -> None:
+    """Fit the forecaster month by month and save its forecasts (research.forecaster.nine)."""
+    data_dir = get_settings().data_dir
+    paths = DataPaths(data_dir)
+    data = nine.table(Panel.load(data_dir), pl.read_parquet(paths.features),
+                      pl.read_parquet(paths.characteristics))  # fmt: skip
+    forecasts = nine.walk(data)
+    paths.forecaster.mkdir(parents=True, exist_ok=True)
+    write_parquet_atomic(forecasts, paths.forecaster / nine.FILE)
+    typer.echo(f"{forecasts.height:,} forecasts, {forecasts['date'].n_unique()} months "
+               f"({forecasts['date'].min()} to {forecasts['date'].max()})")  # fmt: skip
 
 
 @forecast_app.command("dataset")
