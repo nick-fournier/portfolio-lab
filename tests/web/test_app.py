@@ -73,10 +73,13 @@ def test_overview_compares_strategies(client):
         assert expected in page.text
 
 
-def test_about(client):
-    page = client.get("/about")
+def test_how_it_works(client):
+    page = client.get("/how-it-works")
     assert page.status_code == 200
-    assert "Survivorship bias" in page.text and "Lead-lag" in page.text
+    for expected in ("Class 1, production", "Class 2", "Grinold", "Sharadar", "paper account"):
+        assert expected in page.text, expected
+    old = client.get("/about", follow_redirects=False)
+    assert old.status_code == 301 and old.headers["location"] == "/how-it-works"
 
 
 def test_runs_list_filters_and_history(client, tmp_path):

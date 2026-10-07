@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}How it works · Portfolio lab{% endblock %}
+{% block content %}
+<div class="prose">
+<h1>How it works</h1>
+<p class="lede">A personal research lab for stock portfolio strategies: one continuous history
+  of US stocks since 1998, an honest walk-forward backtest, two strategies, and a paper
+  account trading the one in production.</p>
+
+<h2>1. Data</h2>
+<p>Every source is kept separately, as delivered and as rewritten into a common set of
+  tables (prices, listings, corporate actions, filings, economic series). One reader merges
+  them into a single continuous history, row by row: the most complete row wins, then the
+  more trusted source. Everything downstream sees that one history and never which source a
+  number came from.</p>
+<table>
+  <thead><tr><th>Data</th><th>Sources</th></tr></thead>
+  <tbody>
+    <tr><td>Daily prices, listings, delistings, buyouts</td><td>Sharadar (1998 on, including every company that later died), Alpaca (2016 on), NASDAQ Trader, Tiingo</td></tr>
+    <tr><td>Company filings</td><td>Sharadar, SEC EDGAR (each value as of the date it was filed)</td></tr>
+    <tr><td>Rates and the economy</td><td>FRED (as first published, never later revisions)</td></tr>
+    <tr><td>Mutual funds, for comparison</td><td>Tiingo</td></tr>
+  </tbody>
+</table>
+<p>A ticker is only a name a company used for a while (CADE has meant four different banks),
+  so every security gets its own permanent id and each source's tickers are matched to it by
+  date. Every evening the new data is fetched, merged, and the derived tables rebuilt: each
+  stock's liquidity, its filings paired with the year before, and every input the models use
+  at each month end.</p>
+
+<h2>2. Universe</h2>
+<p>Common stocks listed on NYSE, NASDAQ and NYSE American, including Canadian companies
+  listed there; ETFs, ADRs, preferred shares, warrants and units are left out. On any day a
+  stock can be held only if, using data up to that day, it traded, closed above $5, traded a
+  median of over $1M a day for the past 60 days, and has a year of history. Companies that
+  later went bankrupt, were bought or were delisted are all in the history. A held stock
+  that is bought exits at its last price; one that falls off its exchange exits at its last
+  exchange price minus 30%, the average loss after such delistings (Shumway, 1997).</p>
+
+<h2>3. Backtests</h2>
+<ul>
+  <li><b>Walk forward, no peeking.</b> At each rebalance a strategy sees data only up to that
+    day's close. A test re-runs every strategy with all future data scrambled and requires its
+    decisions to be identical.</li>
+  <li><b>Realistic execution.</b> Trades happen at the next day's open, paying the spread plus
+    market impact that grows with trade size against the stock's volume. Uninvested cash
+    earns the 3-month Treasury bill rate.</li>
+  <li><b>From the start of the data.</b> Every backtest starts once there is a year of history
+    (January 1999) and is compared with funds anyone can buy over the same years.</li>
+</ul>
+
+<h2>4. The two strategies</h2>
+<p>Both rebalance at each month end, among the same candidates: the healthiest of the 400
+  most liquid stocks, health being the nine Piotroski measures (profitability, cash flow,
+  improving returns, cash-backed earnings, falling debt, rising liquidity, no dilution,
+  improving margins and turnover) as percentiles, averaged. There are no hard cutoffs: a
+  stock's weight limit shrinks as it nears the edge of either list. Both weigh their
+  candidates for the highest expected long-run growth (Kelly: expected return minus half
+  the variance), at most 10% in any stock, and hold the lowest-risk mix instead in a bear
+  market (the S&amp;P 500 15% below its two-year high and below its 200-day average three
+  month ends in a row).</p>
+<ul>
+  <li><b>Class 1, production</b> (the paper account follows it): each stock's expected
+    return is its trailing one-year return, and its risk the shrunk covariance of a year of
+    daily prices.</li>
+  <li><b>Class 2</b>: each stock's expected return comes from the
+    <a href="/forecasts">forecaster</a>, nine terms fitted on all earlier months, rescaled
+    by Grinold's rule; risk averages three covariances (prices, the forecaster's factors,
+    its errors).</li>
+</ul>
+<table>
+  <thead><tr><th>January 2004 to September 2026</th><th class="num">Per year</th><th class="num">Sharpe</th><th class="num">Worst drop</th></tr></thead>
+  <tbody>
+    <tr><td>Class 1, production</td><td class="num">26.2%</td><td class="num">0.84</td><td class="num">−41%</td></tr>
+    <tr><td>Class 2</td><td class="num">27.4%</td><td class="num">0.87</td><td class="num">−39%</td></tr>
+  </tbody>
+</table>
+<p>Before tax, after modeled trading costs. The <a href="/">overview</a> and
+  <a href="/compare">compare</a> pages show both since 1999 against SPY and the best funds;
+  the <a href="/runs">runs</a> page every other strategy tried.</p>
+
+<h2>5. Paper account</h2>
+<p>Production trades an Alpaca paper account (simulated money) every month end, from the
+  same code and data as its backtest; the <a href="/paper">paper</a> page shows the two
+  side by side.</p>
+
+<h2>Caveats</h2>
+<ul>
+  <li>The strategies and their settings were chosen on the same history they are shown on;
+    anything chosen that way looks better here than it will in the future.</li>
+  <li>Returns move a lot by chance: a point or two between two strategies over twenty years
+    can be luck.</li>
+  <li>After Sharadar's history ends, filings come from SEC EDGAR, which reports some items
+    (gross profit, SG&amp;A, debt detail) for fewer companies.</li>
+  <li>Trading costs are a model, not real fills. This is research, not investment advice.</li>
+</ul>
+
+<h2>Built with</h2>
+<p>Python with polars, NumPy and PyPortfolioOpt; FastAPI, HTMX and Plotly for this site. It
+  runs on an Orange Pi 5 at home. Source:
+  <a href="https://github.com/nick-fournier/portfolio-lab">github.com/nick-fournier/portfolio-lab</a>.</p>
+</div>
+{% endblock %}
