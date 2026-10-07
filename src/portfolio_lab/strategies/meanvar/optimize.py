@@ -57,6 +57,7 @@ def optimize(
     max_weight: float = 0.10,
     risk_aversion: float = 1.0,
     caps: dict[str, float] | None = None,
+    cov: pd.DataFrame | None = None,
 ) -> dict[str, float]:
     """Long-only mean-variance weights for the symbols in ``mu``.
 
@@ -69,6 +70,7 @@ def optimize(
         risk_aversion: Risk aversion for ``max_quadratic_utility``.
         caps: Per-symbol caps instead of ``max_weight`` (scaled up together if they sum
             to less than 1, so a fully invested portfolio stays feasible).
+        cov: Annual covariance to use instead of the prices' shrunk sample covariance.
 
     Returns:
         Weights summing to 1 (less sub-cutoff slivers left in cash), or an empty dict (all
@@ -80,7 +82,9 @@ def optimize(
     symbols = [s for s in mu.index if s in prices.columns]
     if len(symbols) < 2:
         return {}
-    cov = CovarianceShrinkage(prices[symbols], frequency=TRADING_DAYS).ledoit_wolf()
+    if cov is None:
+        cov = CovarianceShrinkage(prices[symbols], frequency=TRADING_DAYS).ledoit_wolf()
+    cov = cov.loc[symbols, symbols]
     if caps is None:
         cap = dict.fromkeys(symbols, max(max_weight, 1.0 / len(symbols)))
     else:

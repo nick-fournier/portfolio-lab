@@ -38,6 +38,7 @@ from portfolio_lab.data.sources.tiingo import fetch_fund_history
 from portfolio_lab.research.conditions import caution_dial, conditional_ic
 from portfolio_lab.research.context import STOCK_FEATURES
 from portfolio_lab.research.features import FEATURES
+from portfolio_lab.research.forecaster import nine
 from portfolio_lab.research.funds import FUNDS, compare
 from portfolio_lab.research.panel import EligibilityRules, Panel
 from portfolio_lab.research.scoreboard import HORIZON, evaluate, summarize
@@ -61,9 +62,18 @@ PRODUCTION: tuple[str, dict[str, Any]] = (
     {"health_rank_pool": 400, "soften": "taper", "bear_defense": True, "rebound": "equal",
      "objective": "kelly"},
 )  # fmt: skip
+#: Class 2: the same pool, Kelly and bear switch as :data:`PRODUCTION`, with the nine-term
+#: forecasts (Grinold's form) as expected returns, the price/factor/residual covariance and
+#: no rebound switch (``strategies.meanvar.nine``). 27.9% a year 2004-2026 on the Sharadar
+#: history in research, against production's 26.0%.
+CLASS_2: tuple[str, dict[str, Any]] = (
+    "meanvar",
+    {"health_rank_pool": 400, "soften": "taper", "bear_defense": True, "objective": "kelly",
+     "expected": "nine", "covariance": "thirds"},
+)  # fmt: skip
 #: The production models, drawn on the Overview and Compare charts against SPY and the best
 #: funds (every other strategy is listed in their tables but starts hidden on the chart).
-PRODUCTION_MODELS: tuple[tuple[str, dict[str, Any]], ...] = (PRODUCTION,)
+PRODUCTION_MODELS: tuple[tuple[str, dict[str, Any]], ...] = (PRODUCTION, CLASS_2)
 #: Backtests the scheduler refreshes weekly so the dashboard always shows current baselines.
 SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("buy_hold", {}),  # SPY
@@ -77,6 +87,7 @@ SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
     # The first baseline: meanvar on the healthiest 27% by continuous F-score.
     ("meanvar", {"healthy_share": 0.27}),
     PRODUCTION,
+    CLASS_2,
 )
 #: Signals the weekly scoreboard evaluates: mean-variance's forecasts and classic anomalies.
 SCOREBOARD_SIGNALS: tuple[tuple[str, dict[str, Any]], ...] = (
@@ -196,10 +207,21 @@ RESEARCH_RULES = EligibilityRules(min_price=1.0, min_dollar_volume=1e5)
 
 
 def derive_task(settings: Settings) -> dict:
-    """Rebuild the derived tables: daily, fundamentals, monthly and environment."""
+    """Rebuild the derived tables, then the nine-term forecasts on them.
+
+    The monthly table covers :data:`RESEARCH_RULES`' wider universe, the one the
+    forecaster is fitted on; strategies still choose among their own eligible stocks.
+    """
     root = settings.data_dir
-    out = {"daily": daily.build(root), "fundamentals": fundamentals.build(root),
-           "monthly": monthly.build(root)}  # fmt: skip
+    out = {"daily": daily.build(root), "fundamentals": fundamentals.build(root)}
+    panel = Panel.load(root, rules=RESEARCH_RULES)
+    out["monthly"] = monthly.build(root, panel=panel)
+    paths = DataPaths(root)
+    data = nine.table(panel, pl.read_parquet(paths.features))
+    forecasts = nine.walk(data)
+    write_parquet_atomic(forecasts, paths.forecaster / nine.FILE)
+    write_parquet_atomic(nine.slopes(data), paths.forecaster / nine.SLOPES)
+    out["forecasts"] = {"months": forecasts["date"].n_unique(), "latest": forecasts["date"].max()}
     write_status(root, "derive", out)
     return out
 
@@ -215,6 +237,8 @@ def _attach_runtime(obj: Any, settings: Settings) -> Any:
     """Give model-fitting strategies and signals their cache and worker processes."""
     if hasattr(obj, "cache_dir"):
         obj.cache_dir = DataPaths(settings.data_dir).forecast_cache
+    if hasattr(obj, "forecaster_dir"):
+        obj.forecaster_dir = DataPaths(settings.data_dir).forecaster
     if hasattr(obj, "workers"):
         obj.workers = FORECAST_WORKERS
     return obj
@@ -412,7 +436,7 @@ def make_vs_buy_task(settings: Settings) -> dict:
     return status
 
 
-#: The strategy the paper account follows: production.
+#: The strategy the paper account follows: production (switch to :data:`CLASS_2` here).
 PAPER_STRATEGY: tuple[str, dict[str, Any]] = PRODUCTION
 
 

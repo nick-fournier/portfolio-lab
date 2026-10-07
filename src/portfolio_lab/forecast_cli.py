@@ -44,11 +44,10 @@ def nine_cmd() -> None:
     """Fit the forecaster month by month and save its forecasts (research.forecaster.nine)."""
     data_dir = get_settings().data_dir
     paths = DataPaths(data_dir)
-    data = nine.table(Panel.load(data_dir), pl.read_parquet(paths.features),
-                      pl.read_parquet(paths.characteristics))  # fmt: skip
+    data = nine.table(Panel.load(data_dir), pl.read_parquet(paths.features))
     forecasts = nine.walk(data)
-    paths.forecaster.mkdir(parents=True, exist_ok=True)
     write_parquet_atomic(forecasts, paths.forecaster / nine.FILE)
+    write_parquet_atomic(nine.slopes(data), paths.forecaster / nine.SLOPES)
     typer.echo(f"{forecasts.height:,} forecasts, {forecasts['date'].n_unique()} months "
                f"({forecasts['date'].min()} to {forecasts['date'].max()})")  # fmt: skip
 

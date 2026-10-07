@@ -14,11 +14,13 @@ from portfolio_lab.research.piotroski import PIOTROSKI, health_scores
 from portfolio_lab.strategies import explain
 from portfolio_lab.strategies.base import Weights, register
 from portfolio_lab.strategies.meanvar.forecast import (
+    MU_BOUNDS,
     TRADING_DAYS,
     Forecaster,
     ForecastSpec,
     price_windows,
 )
+from portfolio_lab.strategies.meanvar.nine import NineInputs
 from portfolio_lab.strategies.meanvar.optimize import optimize
 from portfolio_lab.strategies.meanvar.soft import SoftSelector
 
@@ -90,6 +92,10 @@ class MeanVar:
         soften: With ``health_rank_pool``, choose candidates without hard cutoffs
             (``strategies.meanvar.soft``): ``average`` over several pool and list sizes,
             ``taper`` weight caps near the edges, or ``sticky`` (easy in, slow out).
+        expected: Expected returns: ``trailing`` (``model``'s, production) or ``nine`` (the
+            nine-term forecasts in Grinold's form, ``strategies.meanvar.nine``; class 2).
+        covariance: ``price`` (the prices' shrunk sample covariance) or ``thirds`` (the
+            average of price, factor and residual covariances, ``strategies.meanvar.nine``).
         bear_defense: In a bear market (``research.regimes.market_state``) hold the
             minimum-variance portfolio instead of max Sharpe.
         rebound: In a rebound (panic easing after a deep fall), when past losers tend to beat
@@ -107,6 +113,8 @@ class MeanVar:
             (all minimum variance).
         schedule: Rebalance frequency.
         cache_dir: Forecast cache root, set by the runner (not a strategy parameter).
+        forecaster_dir: The nine-term forecaster's results, set by the runner (not a
+            strategy parameter).
         workers: Processes used for model fits (not a strategy parameter).
     """
 
@@ -121,6 +129,8 @@ class MeanVar:
     health_schedule: str | None = None
     health_rank_pool: int | None = None
     soften: str | None = None
+    expected: str = "trailing"
+    covariance: str = "price"
     bear_defense: bool = False
     rebound: str | None = None
     rebound_lookback: int = 21
@@ -131,6 +141,7 @@ class MeanVar:
     schedule: Frequency = "M"
     name: str = "meanvar"
     cache_dir: Path | None = field(default=None, repr=False, metadata={"param": False})
+    forecaster_dir: Path | None = field(default=None, repr=False, metadata={"param": False})
     workers: int = field(default=1, metadata={"param": False})
 
     def __post_init__(self) -> None:
@@ -153,6 +164,8 @@ class MeanVar:
         self._caps: dict[str, float] | None = None  # per-stock caps of the set being weighed
         self._state: tuple[date, str] | None = None  # market state, once per rebalance
         self._held: dict[str, float] = {}
+        self._nine: NineInputs | None = None
+        self._cov: pd.DataFrame | None = None  # covariance of the set being weighed
 
     example_columns: ClassVar[dict[str, str]] = {
         "Expected return (annual)": "pct",
@@ -277,7 +290,15 @@ class MeanVar:
         caps = None
         if self._caps is not None:
             caps = {s: self.max_weight * self._caps[s] for s in mu.index if s in self._caps}
-        return optimize(mu, prices, rf, objective, self.max_weight, caps=caps)
+        return optimize(mu, prices, rf, objective, self.max_weight, caps=caps, cov=self._cov)
+
+    def _nine_inputs(self) -> NineInputs:
+        """The nine-term forecaster's results, loaded once."""
+        if self._nine is None:
+            if self.forecaster_dir is None:
+                raise RuntimeError("expected='nine' needs forecaster_dir (set by the runner)")
+            self._nine = NineInputs(self.forecaster_dir)
+        return self._nine
 
     def _healthy_set(self, view: DataView, among: list[str] | None) -> list[str]:
         """The healthiest ``healthy_share`` of candidates, refreshed per ``health_schedule``."""
@@ -398,6 +419,15 @@ class MeanVar:
         self._caps = caps
         windows = {s: prices[s].to_numpy() for s in prices.columns}
         mu = pd.Series(self._get_forecaster().forecast(view.asof, windows), dtype=float)
+        if self.expected == "nine":
+            mu = self._nine_inputs().expected(view.asof, prices, view.risk_free())
+            mu = mu.clip(*MU_BOUNDS)
+            prices = prices[[s for s in prices.columns if s in mu.index]]
+            if prices.shape[1] < 2:
+                return {}, pd.Series(dtype=float), pd.Series(dtype=float)
+        self._cov = None
+        if self.covariance == "thirds":
+            self._cov = self._nine_inputs().covariance(view.asof, prices)
         weights = self._optimize(mu, prices, view.risk_free(), self.objective)
         if self.risk_gauge and weights:
             weights = self._tilt(view, mu, prices, weights)

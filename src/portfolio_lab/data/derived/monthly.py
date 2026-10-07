@@ -17,14 +17,20 @@ from portfolio_lab.data import reader
 from portfolio_lab.data.derived import daily
 from portfolio_lab.research.context import environment, sensitivities, tailwinds
 from portfolio_lab.research.features import build_features
-from portfolio_lab.research.panel import EligibilityRules
+from portfolio_lab.research.panel import EligibilityRules, Panel
 
 log = logging.getLogger(__name__)
 
 
-def build(root: Path, rules: EligibilityRules | None = None) -> dict:
-    """Rebuild the monthly and environment tables (module docs)."""
-    panel = daily.panel(root, rules=rules)
+def build(root: Path, rules: EligibilityRules | None = None, panel: Panel | None = None) -> dict:
+    """Rebuild the monthly and environment tables (module docs).
+
+    Args:
+        root: The data directory.
+        rules: Which stocks get a row (the panel's eligibility).
+        panel: An already loaded panel (with ``rules``), to share one load.
+    """
+    panel = panel or daily.panel(root, rules=rules)
     paths = DataPaths(root)
     states = pl.read_parquet(paths.fundamentals).with_columns(
         pl.col("sid").cast(pl.String).alias("symbol")

@@ -45,6 +45,12 @@ GLOSSARY: dict[str, Entry] = {
         f"the business going), over the last twelve months, divided by {_MARKET_VALUE}.",
         "Cheap relative to the cash the business actually frees up for its owners.",
     ),
+    "rd_mve": Entry(
+        f"Research and development spending over the last twelve months divided by "
+        f"{_MARKET_VALUE}.",
+        "Markets under-price R&D, an expense today for profits later, so heavy spenders "
+        "tend to earn more afterwards.",
+    ),
     "sales_yield": Entry(
         f"Revenue over the last twelve months divided by {_MARKET_VALUE}; the inverse of "
         "price/sales.",
@@ -160,6 +166,10 @@ GLOSSARY: dict[str, Entry] = {
         "Return from 12 months ago to 1 month ago (skipping the latest month); the same as "
         "mom_12_1.",
         "Momentum: investors under-react to news, so past winners keep winning for a while.",
+    ),
+    "mom6m": Entry(
+        "Return from 6 months ago to 1 month ago (skipping the latest month).",
+        "Shorter-horizon momentum; in the nine-term forecaster it adds to the 12-month signal.",
     ),
     "ret_1m": Entry(
         "Return over the past month.",
