@@ -27,7 +27,7 @@ SUMMARY = "summary.json"
 PIECES = {
     "forecast": "Forecast: least squares on nine terms",
     "previous": "Previous forecaster: linear + trees, averaged with the nets",
-    "production": "Production today: trailing one-year return",
+    "production": "Production's forecast: trailing one-year return",
 }
 TRAILING = 12
 #: The strategy's candidates: this many most liquid stocks each month.
