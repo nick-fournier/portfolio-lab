@@ -23,16 +23,18 @@ from portfolio_lab.core.config import Settings
 from portfolio_lab.core.http import RateLimitedClient
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic, write_status
+from portfolio_lab.data import ids as ids_
+from portfolio_lab.data import reader
 from portfolio_lab.data.conform import alpaca, edgar, fred, nasdaq, tiingo
 from portfolio_lab.data.derived import daily, fundamentals, monthly
 from portfolio_lab.data.ingest.delisted import ingest_delisted
 from portfolio_lab.data.ingest.fundamentals import ingest_fundamentals
-from portfolio_lab.data.ingest.funds import ingest_funds
 from portfolio_lab.data.ingest.macro import ingest_macro
 from portfolio_lab.data.ingest.prices import update_prices, verify_prices
 from portfolio_lab.data.ingest.rates import ingest_rates
 from portfolio_lab.data.ingest.universe import current_symbols, ingest_universe
 from portfolio_lab.data.sources.alpaca import make_client
+from portfolio_lab.data.sources.tiingo import fetch_fund_history
 from portfolio_lab.research.conditions import caution_dial, conditional_ic
 from portfolio_lab.research.context import STOCK_FEATURES
 from portfolio_lab.research.features import FEATURES
@@ -352,26 +354,53 @@ def context_task(settings: Settings) -> dict:
     return status
 
 
+#: Mutual funds' history is fetched from this date (Tiingo); everything else is in the hive.
+FUND_HISTORY_START = date(1998, 1, 2)
+
+
+def fund_returns(settings: Settings) -> dict[str, pl.DataFrame]:
+    """Daily returns (date, ret) of every fund in ``research.funds.FUNDS``.
+
+    Exchange-traded funds (and BRK.B) come from the hive's prices; open-end mutual funds,
+    which no exchange quotes, from Tiingo since :data:`FUND_HISTORY_START`.
+    """
+    root = settings.data_dir
+    traded = [f.symbol for f in FUNDS if f.source != "tiingo"]
+    today = [last_complete_session()] * len(traded)
+    found = ids_.lookup(ids_.Ids.load(DataPaths(root).ids),
+                        pl.DataFrame({"ticker": traded, "date": today}))  # fmt: skip
+    sids = dict(found.drop_nulls("sid").select("ticker", "sid").rows())
+    prices = reader.read(root, "prices", ["ret_cc"], sids=list(sids.values()))
+    out = {t: prices.filter(pl.col("sid") == sid).select("date", pl.col("ret_cc").alias("ret"))
+           for t, sid in sids.items()}  # fmt: skip
+    mutual = [f.symbol for f in FUNDS if f.source == "tiingo"]
+    if settings.tiingo_api_key is None:
+        log.warning("make_vs_buy: TIINGO_API_KEY not set; leaving out %d mutual funds", len(mutual))
+        return out
+    token = settings.tiingo_api_key.get_secret_value()
+    with RateLimitedClient(max_per_minute=60) as client:
+        for symbol in mutual:
+            history = fetch_fund_history(client, symbol, token, FUND_HISTORY_START).sort("date")
+            out[symbol] = history.select(
+                "date", (pl.col("adj_close") / pl.col("adj_close").shift(1) - 1).alias("ret")
+            )
+    return out
+
+
 def make_vs_buy_task(settings: Settings) -> dict:
-    """Refresh fund prices and compare them with our strategies' latest runs."""
+    """Compare funds anyone can buy with our strategies' latest runs, over all history."""
     paths = DataPaths(settings.data_dir)
-    store = settings.for_ingest()
-    with make_client(store) as client, RateLimitedClient(max_per_minute=60) as tiingo_client:
-        ingest_funds(store, client, tiingo_client, last_complete_session())
-    prices = pl.read_parquet(DataPaths(store.data_dir).fund_prices)
-    series = {
-        f.symbol: (f.name, f.category, prices.filter(pl.col("symbol") == f.symbol))
-        for f in FUNDS
-        if prices.filter(pl.col("symbol") == f.symbol).height
-    }
+    names = {f.symbol: (f.name, f.category) for f in FUNDS}
+    series = {s: (*names[s], frame) for s, frame in fund_returns(settings).items() if frame.height}
     for stored in list_runs(settings.data_dir, latest_only=True):
         meta = stored["meta"]
-        if meta["strategy"] == "buy_hold":
-            continue  # SPY is already in the comparison as a fund
         label = meta.get("label") or meta["strategy"]
+        if meta["strategy"] == "buy_hold" or f"ours: {label}" in series:
+            continue  # SPY is already a fund; runs come newest first
         daily = load_run(settings.data_dir, meta["run_id"]).daily.select("date", "ret")
         series[f"ours: {label}"] = (label, "ours", daily)
-    rates = pl.read_parquet(DataPaths(store.data_dir).rates)
+    rates = reader.read(settings.data_dir, "series").filter(pl.col("series") == "DTB3")
+    rates = rates.select("date", pl.col("value").alias("rate"))
     start = min(frame["date"].min() for _, _, frame in series.values())
     production = next((k for k in series if k.startswith("ours: ") and "kelly" in k), None)
     summary, growth = compare(series, rates, start, ours=production)

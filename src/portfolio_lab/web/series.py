@@ -75,10 +75,12 @@ def _live_runs(data_dir: Path) -> dict[str, Series]:
         )
         if meta["strategy"] == "buy_hold":  # a fund held outright: keyed by its symbol
             symbol = meta.get("params", {}).get("symbol") or "SPY"
-            out[symbol] = Series(symbol, symbol, "passive", daily, meta["run_id"])
+            out.setdefault(symbol, Series(symbol, symbol, "passive", daily, meta["run_id"]))
             continue
         label = meta.get("label") or meta["strategy"]
-        out[f"ours: {label}"] = Series(f"ours: {label}", label, "ours", daily, meta["run_id"])
+        key = f"ours: {label}"
+        if key not in out:  # runs come newest first: the newest of a label wins
+            out[key] = Series(key, label, "ours", daily, meta["run_id"])
     return out
 
 
