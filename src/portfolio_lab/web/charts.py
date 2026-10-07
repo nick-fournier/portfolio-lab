@@ -28,6 +28,8 @@ _LAYOUT = {
 _LINE = {"width": 1.4}
 #: Style of the market reference line (the benchmark, or buy-and-hold of it).
 _REFERENCE = {"color": "#6e7781", "dash": "dot", "width": 1.4}
+#: The previous forecaster, on the Forecasts page.
+_PREVIOUS = {"color": "#bf8700", "dash": "dash", "width": 1.4}
 
 
 #: Zoom buttons on long charts: 1, 5 and 10 years back from the end, and everything.
@@ -260,16 +262,22 @@ def tax_layout() -> str:
 
 
 def forecast_years_figure(yearly: list[dict]) -> str:
-    """Each year's average monthly IC: the forecast (bars, 90% margins) and production's."""
+    """Each year's average monthly IC: the forecast (bars, 90% margins) and two references.
+
+    Lines: the previous forecaster's and production's.
+    """
     years = [r["year"] for r in yearly]
+    line = lambda key, name, style: {  # noqa: E731
+        "type": "scatter", "mode": "lines+markers", "name": name, "x": years,
+        "y": [None if r.get(key) is None else round(r[key], 4) for r in yearly], "line": style,
+    }  # fmt: skip
     traces = [
         {"type": "bar", "name": "Forecast", "x": years, "y": [round(r["ic"], 4) for r in yearly],
          "marker": {"color": "#1f77b4"},
          "error_y": {"type": "data", "array": [round(r["margin"] or 0, 4) for r in yearly],
                      "color": "#57606a", "thickness": 1}},
-        {"type": "scatter", "mode": "lines+markers", "name": "Production today (trailing returns)",
-         "x": years, "y": [None if r["old"] is None else round(r["old"], 4) for r in yearly],
-         "line": _REFERENCE},
+        line("prev", "Previous forecaster", _PREVIOUS),
+        line("old", "Production today (trailing returns)", _REFERENCE),
     ]  # fmt: skip
     yaxis = {
         "tickformat": ".2f",
@@ -282,14 +290,17 @@ def forecast_years_figure(yearly: list[dict]) -> str:
 
 
 def forecast_trailing_figure(trailing: list[dict]) -> str:
-    """12-month trailing IC of the forecast and of production's forecast."""
+    """12-month trailing IC of the forecast, the previous forecaster and production's."""
     dates = [r["date"] for r in trailing]
+    line = lambda key, name, style: {  # noqa: E731
+        "type": "scatter", "mode": "lines", "name": name, "x": dates,
+        "y": [round(r[key], 4) for r in trailing], "line": style,
+    }  # fmt: skip
     traces = [
-        {"type": "scatter", "mode": "lines", "name": "Forecast", "x": dates,
-         "y": [round(r["ic"], 4) for r in trailing], "line": {"color": "#1f77b4", "width": 2}},
-        {"type": "scatter", "mode": "lines", "name": "Production today (trailing returns)",
-         "x": dates, "y": [round(r["old"], 4) for r in trailing], "line": _REFERENCE},
-    ]  # fmt: skip
+        line("ic", "Forecast", {"color": "#1f77b4", "width": 2}),
+        line("prev", "Previous forecaster", _PREVIOUS),
+        line("old", "Production today (trailing returns)", _REFERENCE),
+    ]
     yaxis = {
         "tickformat": ".2f",
         "zeroline": True,
@@ -330,7 +341,7 @@ def forecast_fit_figure(bins: list[dict]) -> str:
 def forecast_tenths_figure(tenths: list[dict]) -> str:
     """Growth of $1 relative to the average stock: top and bottom forecast tenths, log scale.
 
-    Solid: the forecast; dotted: production's forecast.
+    Solid: the forecast; dashed: the previous forecaster; dotted: production's forecast.
     """
     dates = [r["date"] for r in tenths]
     line = lambda key, name, color, dash: {  # noqa: E731
@@ -341,6 +352,8 @@ def forecast_tenths_figure(tenths: list[dict]) -> str:
     traces = [
         line("top", "Forecast: top tenth", "#1a7f37", "solid"),
         line("bottom", "Forecast: bottom tenth", "#cf222e", "solid"),
+        line("q_top", "Previous: top tenth", "#1a7f37", "dash"),
+        line("q_bottom", "Previous: bottom tenth", "#cf222e", "dash"),
         line("p_top", "Production: top tenth", "#1a7f37", "dot"),
         line("p_bottom", "Production: bottom tenth", "#cf222e", "dot"),
     ]
