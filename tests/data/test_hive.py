@@ -3,8 +3,11 @@ from datetime import date
 import polars as pl
 import pytest
 
+from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.data import ids as ids_
 from portfolio_lab.data import reader, schemas
+from portfolio_lab.data.conform import fred, nasdaq, tiingo
+from portfolio_lab.data.conform.edgar import primary_sids
 
 TICKERS = pl.DataFrame(
     {"table": ["SEP", "SEP", "SFP", "SF1"], "permaticker": ["200", "100", "300", "100"],
@@ -96,3 +99,54 @@ def test_conform_casts_fills_missing_and_drops_extra_columns():
     out = schemas.conform(frame, "prices")
     assert out.columns == list(schemas.PRICES)
     assert out.schema["close"] == pl.Float64 and out["volume"][0] is None
+
+
+def _old_store(tmp_path):
+    """A data directory in the old layout with one listed stock, one dead one, and rates."""
+    old = DataPaths(tmp_path / "old")
+    pl.DataFrame({"symbol": ["NEW", "IPO"], "name": ["New Co", "Ipo Inc"], "exchange": ["N", "Q"],
+                  "etf": [False, False], "test_issue": [False, False],
+                  "exclude_reason": [None, None], "included": [True, True],
+                  "first_seen": [date(2026, 9, 1), date(2026, 9, 20)],
+                  "last_seen": [date(2026, 10, 1), date(2026, 10, 1)]}).write_parquet(
+        _mk(old.universe_symbols))  # fmt: skip
+    pl.DataFrame({"symbol": ["ACME"], "exchange": ["PINK"], "start": [date(2010, 1, 4)],
+                  "end": [date(2014, 6, 30)], "fell_to_otc": [True], "exclude_reason": [None],
+                  "included": [True], "has_prices": [True]}).write_parquet(
+        _mk(old.universe_delisted))  # fmt: skip
+    pl.DataFrame({"date": [date(2020, 1, 2)], "rate": [0.015]}).write_parquet(_mk(old.rates))
+    return old.root
+
+
+def _mk(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def test_store_conformers_resolve_ids_add_new_listings_and_write_series(tmp_path, ids):
+    ids.save(tmp_path / "ids")
+    store = _old_store(tmp_path)
+    assert nasdaq.build(tmp_path, store) == {"listings": 2, "new_ids": 1}
+    listings = reader.read(tmp_path, "listings")
+    assert listings.select("sid", "exchange", "category").rows() == [
+        (2, "NYSE", "common"), (4, "NASDAQ", "common")]  # fmt: skip
+    assert ids_.Ids.load(tmp_path / "ids").securities.filter(pl.col("sid") == 4)["name"][0] == (
+        "Ipo Inc"
+    )
+    assert tiingo.build(tmp_path, store) == {"actions": 2}
+    actions = reader.read(tmp_path, "actions")
+    assert actions.select("sid", "date", "action").rows() == [
+        (1, date(2014, 6, 30), "delisted"), (1, date(2014, 6, 30), "otc")]  # fmt: skip
+    assert fred.build(tmp_path, store) == {"series": 1}
+    assert reader.read(tmp_path, "series").row(0) == ("DTB3", date(2020, 1, 2),
+                                                      date(2020, 1, 2), 0.015)  # fmt: skip
+
+
+def test_edgar_attaches_a_cik_to_its_longest_listed_common_stock():
+    securities = pl.DataFrame(
+        {"sid": [1, 2, 3, 4], "cik": [9, 9, 9, None],
+         "category": ["preferred", "common", "common", "common"],
+         "first": [date(2000, 1, 3)] * 4,
+         "last": [None, date(2005, 1, 3), None, None]}
+    )  # fmt: skip
+    assert primary_sids(securities).rows() == [(9, 3)]

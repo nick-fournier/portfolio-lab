@@ -50,11 +50,20 @@ FLOW_TAGS: dict[str, tuple[str, ...]] = {
         "RevenueFromContractWithCustomerIncludingAssessedTax",
     ),
     "gross_profit": ("GrossProfit",),
-    "cost_of_revenue": ("CostOfRevenue", "CostOfGoodsAndServicesSold"),
+    "cost_of_revenue": ("CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold",
+                        "CostOfServices"),
     "operating_income": ("OperatingIncomeLoss",),
-    "capex": ("PaymentsToAcquirePropertyPlantAndEquipment",),
-    "dividends": ("PaymentsOfDividends", "PaymentsOfDividendsCommonStock"),
-}
+    "capex": ("PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"),
+    "dividends": ("PaymentsOfDividends", "PaymentsOfDividendsCommonStock",
+                  "PaymentsOfOrdinaryDividends"),
+    "sga": ("SellingGeneralAndAdministrativeExpense",),
+    "interest_expense": ("InterestExpense", "InterestExpenseDebt"),
+    "rnd": ("ResearchAndDevelopmentExpense",
+            "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost"),
+    "depreciation": ("DepreciationDepletionAndAmortization", "DepreciationAndAmortization",
+                     "DepreciationAmortizationAndAccretionNet"),
+    "tax": ("IncomeTaxExpenseBenefit",),
+}  # fmt: skip
 #: Share counts averaged over a period: the latest quarter's value, not a sum.
 AVERAGE_TAGS: dict[str, tuple[str, ...]] = {
     "shares_weighted": ("WeightedAverageNumberOfSharesOutstandingBasic",),
@@ -64,14 +73,22 @@ BALANCE_TAGS: dict[str, tuple[str, ...]] = {
     "assets_cur": ("AssetsCurrent",),
     "liab_cur": ("LiabilitiesCurrent",),
     "liabilities": ("Liabilities",),
-    "lt_debt": ("LongTermDebtNoncurrent", "LongTermDebt", "LongTermDebtAndCapitalLeaseObligations"),
-    "debt_cur": ("DebtCurrent", "LongTermDebtCurrent"),
+    "lt_debt": ("LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations",
+                "LongTermDebt"),
+    "debt_cur": ("DebtCurrent", "LongTermDebtCurrent",
+                 "LongTermDebtAndCapitalLeaseObligationsCurrent", "ShortTermBorrowings"),
     "equity": (
         "StockholdersEquity",
         "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
     ),
-    "cash": ("CashAndCashEquivalentsAtCarryingValue",),
-}
+    "cash": ("CashAndCashEquivalentsAtCarryingValue",
+             "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "Cash"),
+    "ppe": ("PropertyPlantAndEquipmentNet",),
+    "inventory": ("InventoryNet",),
+    "receivables": ("AccountsReceivableNetCurrent", "ReceivablesNetCurrent"),
+    "payables": ("AccountsPayableCurrent",),
+    "intangibles": ("IntangibleAssetsNetIncludingGoodwill",),
+}  # fmt: skip
 SHARES_TAGS = ("EntityCommonStockSharesOutstanding", "CommonStockSharesOutstanding")
 CONCEPTS = [*FLOW_TAGS, *AVERAGE_TAGS, *BALANCE_TAGS]
 #: Two period ends within this many days are the same period.

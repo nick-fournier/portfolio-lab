@@ -17,8 +17,9 @@ from portfolio_lab.backtest.results import load_run
 from portfolio_lab.core.config import get_settings
 from portfolio_lab.core.log import setup_logging
 from portfolio_lab.data.conform import alpaca as conform_alpaca
+from portfolio_lab.data.conform import edgar as conform_edgar
+from portfolio_lab.data.conform import fred, nasdaq, tiingo
 from portfolio_lab.data.conform import sharadar as conform_sharadar
-from portfolio_lab.data.ingest import sharadar
 from portfolio_lab.forecast_cli import forecast_app
 from portfolio_lab.jobs import tasks, taxes
 from portfolio_lab.research.scorecard import scorecard
@@ -128,23 +129,6 @@ def _parse_params(pairs: list[str]) -> dict[str, Any]:
     return params
 
 
-@app.command("ingest-sharadar")
-def ingest_sharadar_cmd(
-    out: Annotated[Path, typer.Option(help="New data directory to write.")],
-    raw: Annotated[
-        Path | None, typer.Option(help="Folder with the bulk zips (default: OUT/raw).")
-    ] = None,
-) -> None:
-    """Build a separate data directory from Sharadar's full-history bulk files.
-
-    The bulk zips live inside the Sharadar directory (``OUT/raw``) so everything under
-    the license sits in one folder.
-    """
-    settings = get_settings()
-    raw = raw or out / "raw"
-    typer.echo(sharadar.build(raw, out, settings.data_dir))
-
-
 @hive_app.command("sharadar")
 def hive_sharadar_cmd(
     raw: Annotated[
@@ -161,6 +145,25 @@ def hive_alpaca_cmd(
 ) -> None:
     """Conform Alpaca's stored daily bars (ids must exist: run `hive sharadar` first)."""
     typer.echo(conform_alpaca.build(get_settings().data_dir, store))
+
+
+@hive_app.command("edgar")
+def hive_edgar_cmd(
+    zip_path: Annotated[
+        Path | None, typer.Option("--zip", help="companyfacts.zip (default: <data>/edgar/raw).")
+    ] = None,
+) -> None:
+    """Conform SEC EDGAR's company facts into filings (ids must exist)."""
+    typer.echo(conform_edgar.build(get_settings().data_dir, zip_path))
+
+
+@hive_app.command("store")
+def hive_store_cmd(
+    store: Annotated[Path, typer.Option(help="Old-layout data directory.")],
+) -> None:
+    """Conform the NASDAQ directory, Tiingo's dead list and FRED's series from an old store."""
+    for module in (nasdaq, tiingo, fred):
+        typer.echo(f"{module.SOURCE}: {module.build(get_settings().data_dir, store)}")
 
 
 @app.command("backtest")
