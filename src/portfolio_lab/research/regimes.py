@@ -78,7 +78,7 @@ def _expanding_pct(values: list[float | None]) -> list[float | None]:
 
 def _month_end(panel: Panel, level: np.ndarray, stocks: np.ndarray, i: int) -> dict:
     """Market state at session ``i`` and what followed."""
-    spy_ret = panel.field("ret_cc")[:, panel.symbol_index["SPY"]]
+    spy_ret = panel.field("ret_cc")[:, panel.market]
     live = np.flatnonzero(panel.eligible[i])
     liquid = live[np.argsort(-np.nan_to_num(panel.field("adv")[i, live], nan=-np.inf))[:POOL]]
     window = pd.DataFrame(panel.field("ret_cc")[i - YEAR + 1 : i + 1][:, liquid])
@@ -110,7 +110,7 @@ def _month_end(panel: Panel, level: np.ndarray, stocks: np.ndarray, i: int) -> d
 
 def signals(panel: Panel, env: pl.DataFrame) -> pl.DataFrame:
     """Every signal and outcome at each month end (see module docs)."""
-    level = np.cumprod(1 + np.nan_to_num(panel.field("ret_cc")[:, panel.symbol_index["SPY"]]))
+    level = np.cumprod(1 + np.nan_to_num(panel.field("ret_cc")[:, panel.market]))
     stocks = np.cumprod(1 + np.nan_to_num(panel.field("ret_cc")), axis=0)
     ends = [panel.date_index[d] for d in rebalance_dates(list(panel.dates), "M")]
     frame = pl.DataFrame([_month_end(panel, level, stocks, i) for i in ends if i >= YEAR])

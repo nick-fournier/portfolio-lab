@@ -1,13 +1,17 @@
 from datetime import date
 
+import numpy as np
 import polars as pl
 import pytest
 
+from portfolio_lab.core.calendar import sessions as _sessions
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.data import ids as ids_
 from portfolio_lab.data import reader, schemas
 from portfolio_lab.data.conform import fred, nasdaq, tiingo
 from portfolio_lab.data.conform.edgar import primary_sids
+from portfolio_lab.data.derived import daily
+from portfolio_lab.research.panel import EligibilityRules
 
 TICKERS = pl.DataFrame(
     {"table": ["SEP", "SEP", "SFP", "SF1"], "permaticker": ["200", "100", "300", "100"],
@@ -150,3 +154,54 @@ def test_edgar_attaches_a_cik_to_its_longest_listed_common_stock():
          "last": [None, date(2005, 1, 3), None, None]}
     )  # fmt: skip
     assert primary_sids(securities).rows() == [(9, 3)]
+
+
+def _hive(tmp_path, ids):
+    """A hive with two common stocks and SPY priced over 300 sessions."""
+    ids = ids.extend(pl.DataFrame({"ticker": ["SPY"], "name": ["S&P 500"], "exchange": ["NYSEARCA"],
+                                   "category": ["etf"], "first": [date(2000, 1, 3)]}))  # fmt: skip
+    ids.save(tmp_path / "ids")
+    days = _sessions(date(2019, 1, 2), date(2020, 3, 31))
+    rows = []
+    for sid, price, volume in ((2, 50.0, 1e5), (3, 20.0, 2e5), (4, 300.0, 1e6)):
+        for k, d in enumerate(days):
+            close = price * (1 + 0.001 * k)
+            rows.append({"sid": sid, "date": d, "open": close, "high": close, "low": close,
+                         "close": close, "volume": volume, "ret_cc": 0.001 if k else None,
+                         "ret_co": 0.0})  # fmt: skip
+    reader.write(tmp_path, "sharadar", "prices", pl.DataFrame(rows))
+    reader.write(tmp_path, "sharadar", "listings", pl.DataFrame(
+        {"sid": [2, 3, 4], "from": [date(2015, 1, 2)] * 3, "to": [None, date(2019, 6, 28), None],
+         "exchange": ["NYSE"] * 3, "category": ["common", "common", "etf"]}))  # fmt: skip
+    reader.write(
+        tmp_path,
+        "sharadar",
+        "actions",
+        pl.DataFrame(
+            {"sid": [3], "date": [date(2019, 6, 28)], "action": ["acquisitionby"], "value": [None]}
+        ),
+    )
+    reader.write(tmp_path, "fred", "series", pl.DataFrame(
+        {"series": ["DTB3"], "date": [date(2019, 1, 2)], "available": [date(2019, 1, 2)],
+         "value": [0.0252]}))  # fmt: skip
+    return days
+
+
+def test_daily_table_and_panel_from_the_hive(tmp_path, ids):
+    days = _hive(tmp_path, ids)
+    assert daily.build(tmp_path)["rows"] == 3 * len(days)
+    table = pl.read_parquet(daily.folder(tmp_path) / "year=*" / "*.parquet").sort("sid", "date")
+    sid3 = table.filter(pl.col("sid") == 3)
+    assert sid3["bars_seen"].to_list() == list(range(1, len(days) + 1))
+    assert sid3["common"].to_list() == [d <= date(2019, 6, 28) for d in days]
+    assert table.filter(pl.col("sid") == 4)["common"].any() is False  # an ETF
+    assert table["adv"].drop_nulls().min() == pytest.approx(50.0 * 1e5, rel=0.2)
+
+    p = daily.panel(tmp_path, rules=EligibilityRules(5.0, 1e6, 60, 252))
+    assert p.symbols == ["2", "3", "4"] and p.market == 2
+    assert p.field("close").dtype == np.float32
+    assert p.universe == {"2", "3"} and not p.eligible[:, 2].any()
+    # sid 2: $5 M/day, eligible once 252 bars are seen; sid 3 never (dead before 252 bars)
+    assert p.eligible[:, 0].sum() == len(days) - 251 and not p.eligible[:, 1].any()
+    assert p.fell_to_otc.tolist() == [False, False, False]  # sid 3 was bought out
+    assert p.rf_daily[0] == pytest.approx(0.0252 / 252)

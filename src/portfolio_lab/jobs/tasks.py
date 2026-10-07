@@ -347,7 +347,7 @@ def context_task(settings: Settings) -> dict:
     by_condition = conditional_ic(pl.read_parquet(paths.scoreboard), env)
     write_parquet_atomic(by_condition, paths.context_conditions)
     panel = Panel.load(settings.data_dir)
-    market = np.nan_to_num(panel.field("ret_cc")[:, panel.symbol_index["SPY"]])
+    market = np.nan_to_num(panel.field("ret_cc")[:, panel.market])
     dial = caution_dial(env, panel.dates, market, panel.date_index)
     write_parquet_atomic(dial, paths.context_dial)
     status = {"conditions_rows": by_condition.height, "dial_rows": dial.height,

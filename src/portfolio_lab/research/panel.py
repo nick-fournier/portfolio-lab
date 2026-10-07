@@ -67,6 +67,7 @@ class Panel:
         traded: Boolean array, same shape: the bar had volume. Halted and dead stocks
             often keep printing zero-volume bars at a frozen price, which are not trades.
             Defaults to "has a close".
+        market: Column of the market index (SPY); defaults to the symbol ``SPY``.
     """
 
     def __init__(  # noqa: PLR0913 - optional extras are keyword-only
@@ -81,6 +82,7 @@ class Panel:
         fundamentals: pl.DataFrame | None = None,
         fell_to_otc: Iterable[str] = (),
         traded: np.ndarray | None = None,
+        market: int | None = None,
     ):
         self.dates = list(dates)
         self.universe = frozenset(universe)
@@ -91,6 +93,7 @@ class Panel:
         self.symbols = list(symbols)
         self.date_index = {d: i for i, d in enumerate(self.dates)}
         self.symbol_index = {s: j for j, s in enumerate(self.symbols)}
+        self.market = self.symbol_index.get("SPY") if market is None else market
         self.fields = dict(fields)
         self.eligible = eligible
         self.rf_daily = rf_daily

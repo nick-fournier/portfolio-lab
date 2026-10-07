@@ -86,6 +86,14 @@ class DataView:
         data = self._panel.field(f"ret_{kind}")[rows][:, cols]
         return pd.DataFrame(data, index=pd.DatetimeIndex(self._panel.dates[rows]), columns=names)
 
+    def market(self) -> pd.Series:
+        """The market index's (SPY) daily returns from the panel's start to the decision date."""
+        if self._panel.market is None:
+            return pd.Series(dtype=float)
+        rows = self._window(self._index + 1)
+        data = self._panel.field("ret_cc")[rows, self._panel.market]
+        return pd.Series(data, index=pd.DatetimeIndex(self._panel.dates[rows]))
+
     def prices(self, lookback: int, symbols: Sequence[str] | None = None) -> pd.DataFrame:
         """Adjusted price index rebuilt from returns, starting at 1.0; NaN before first bar.
 

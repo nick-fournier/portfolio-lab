@@ -53,7 +53,7 @@ def _price_features(panel: Panel, index: int, cols: np.ndarray) -> dict[str, np.
     ret = panel.field("ret_cc")
     window = ret[index - TRADING_DAYS + 1 : index + 1][:, cols]
     growth = np.nancumprod(1 + np.nan_to_num(window), axis=0)
-    spy = np.nan_to_num(ret[index - TRADING_DAYS + 1 : index + 1, panel.symbol_index["SPY"]])
+    spy = np.nan_to_num(ret[index - TRADING_DAYS + 1 : index + 1, panel.market])
     enough = np.isfinite(window).mean(axis=0) >= 0.8
     filled = np.where(np.isfinite(window), window, 0.0)
     spy_c = spy - spy.mean()

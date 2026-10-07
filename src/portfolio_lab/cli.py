@@ -20,6 +20,7 @@ from portfolio_lab.data.conform import alpaca as conform_alpaca
 from portfolio_lab.data.conform import edgar as conform_edgar
 from portfolio_lab.data.conform import fred, nasdaq, tiingo
 from portfolio_lab.data.conform import sharadar as conform_sharadar
+from portfolio_lab.data.derived import daily
 from portfolio_lab.forecast_cli import forecast_app
 from portfolio_lab.jobs import tasks, taxes
 from portfolio_lab.research.scorecard import scorecard
@@ -164,6 +165,12 @@ def hive_store_cmd(
     """Conform the NASDAQ directory, Tiingo's dead list and FRED's series from an old store."""
     for module in (nasdaq, tiingo, fred):
         typer.echo(f"{module.SOURCE}: {module.build(get_settings().data_dir, store)}")
+
+
+@hive_app.command("daily")
+def hive_daily_cmd() -> None:
+    """Rebuild the derived daily table (liquidity, history, listing flags)."""
+    typer.echo(daily.build(get_settings().data_dir))
 
 
 @app.command("backtest")

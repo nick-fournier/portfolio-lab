@@ -294,7 +294,7 @@ class MeanVar:
 
     def _readings(self, view: DataView, prices: pd.DataFrame) -> dict[str, float | None]:
         """This rebalance's stress inputs (``research.stress``), prewarming on the first."""
-        market = view.returns(view.index + 1, ["SPY"]).get("SPY", pd.Series(dtype=float))
+        market = view.market()
         nfci = view.environment("financial_conditions")
         if not self._gauge.histories:  # seed the inputs that have history before the start
             ends = market.groupby(market.index.to_period("M")).tail(1).index[:-1]
@@ -332,7 +332,7 @@ class MeanVar:
         if self._state is not None and self._state[0] == view.asof:
             state = self._state[1]  # several candidate sets on one date: classify once
         else:
-            market = view.returns(view.index + 1, ["SPY"]).get("SPY", pd.Series(dtype=float))
+            market = view.market()
             vix = view.environment("vix")["vix"].to_list()
             state = regimes.market_state(market, vix, self.bear_drawdown, self.vix_easing)
         if self._state is None or self._state[0] != view.asof:

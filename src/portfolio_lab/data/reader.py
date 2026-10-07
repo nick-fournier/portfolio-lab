@@ -94,6 +94,18 @@ def read(
     return lf.select(wanted).collect()
 
 
+def span(root: Path, table: str) -> tuple[date, date] | None:
+    """The first and last date in any source's copy of ``table`` (``None`` if empty)."""
+    paths = DataPaths(root)
+    found = sources(root, table)
+    if not found:
+        return None
+    lf = pl.concat([_scan(paths.conformed(s, table)).select("date") for s in found])
+    bounds = lf.select(pl.col("date").min().alias("lo"), pl.col("date").max().alias("hi"))
+    lo, hi = bounds.collect().row(0)
+    return lo, hi
+
+
 def clear(root: Path, source: str, table: str) -> None:
     """Remove ``source``'s copy of ``table``."""
     folder = DataPaths(root).conformed(source, table)
