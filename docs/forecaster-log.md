@@ -5,10 +5,6 @@ variant is or is not the front runner. Newest decisions first within each sectio
 
 ## How variants are judged
 
-These rules judged the previous forecaster's variants. The nine-term model was judged on the
-portfolio yardstick described in its section.
-
-
 - **Target:** each stock's return from one month end to the next, minus that month's
   average across stocks. All stocks. Capped at the month's 0.1%/99.9% for fitting.
 - **Graded:** unseen months only, 2009-01 to 2026-08 (212 months), every model refit each
@@ -21,52 +17,7 @@ portfolio yardstick described in its section.
   slope ±0.04, best−worst tenth ±0.9%/yr. A difference under about **0.004 in IC** or
   **2%/yr in the tenth gap** is not evidence of a better model.
 
-## Front runner (since 2026-10-07): least squares on nine terms
-
-`research.forecaster.nine`, run with `plab forecast nine`. Rebuilt from scratch after the
-previous forecaster (below) lost to plain momentum inside the portfolio: it gave momentum one
-small vote among 103 inputs, so its top picks among the liquid stocks earned less than the
-trailing-return ranking it was meant to beat.
-
-- **Target:** next month's return minus that month's T-bill, uncapped (what the optimizer
-  needs as an expected return). All stocks with price ≥ $1 and ≥ $100k a day (about 3,400 a
-  month).
-- **Terms:** one-year and six-month momentum, cash flow / assets, FCF, sales and earnings
-  yields, R&D / market value, and each momentum × SPY's one-year return. Each stock input is
-  `asinh(x / median|x|)`, standardized per month (R&D / market also clipped at 1/99%).
-- **Fit:** ordinary least squares with an intercept, every earlier month, refit monthly.
-- **Yardstick (how terms were admitted):** equal-weight top 30 among the 400 most liquid,
-  2004-01 to 2026-08 (272 months), against momentum's top 30 (13.7%/yr). A term stayed only
-  if it raised the top 30 or the top 100/spread and lost nothing in either half
-  (2004–15, 2016–26); R&D / market and momentum × SPY were admitted as reviewed exceptions
-  (each gained overall but lost a little in one half). Result: 20.9%/yr (+8.1 and +6.0 points in the two halves).
-
-Graded on the page (2009-01 to 2026-08, stock-months all three cover):
-
-| Model | Top 30 of 400 /yr | IC, 400 most liquid | IC, all | Slope | Tenth /yr |
-|---|---|---|---|---|---|
-| **Nine terms** | 27.8% | 0.034 | 0.048 | 0.66 | 30.0% |
-| Previous forecaster | 21.9% | 0.029 | 0.058 | 0.93 | 38.3% |
-| Production: trailing one-year return | 19.3% | 0.006 | 0.027 | 0.06 | 5.5% |
-
-The previous forecaster ranks all stocks better, almost entirely in the smallest third (IC
-0.091 vs 0.063), which the strategy never buys.
-
-### Rebuild, 2026-10-05 to 10-07: what didn't make it
-
-- **Extra stock inputs added one at a time** (the 30 reviewed plus 77 more, each transformed
-  by its distribution): only R&D / market passed. Additive inputs added nothing beyond the
-  core.
-- **Interactions:** trees on the residual (three times) found no strong stock × stock
-  interactions (the strongest were flag artifacts). Stock × market interactions were real only
-  for momentum (credit spread, SPY one-year, market volatility); SPY one-year subsumes the rest.
-- **Macro and market-state terms** (credit spread, VIX, bear and rebound flags, PCA axes of
-  the environment): nothing beyond momentum × SPY.
-- **Momentum windows** of 3 and 24 months, a symmetric six-month × six-month SPY term; size,
-  liquidity and volatility as inputs; an asinh or volatility-scaled target; elastic net (its
-  squared-error selection keeps nothing); residual PLS; sector terms.
-
-### The previous forecaster (kept for comparison on the page)
+## Front runner
 
 Two models, each centered within the month, averaged 50/50:
 

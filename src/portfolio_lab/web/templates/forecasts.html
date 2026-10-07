@@ -4,56 +4,62 @@
 {% block content %}
 <h1>Forecasts</h1>
 {% if s %}
-{% set f = s.pieces.forecast %}
-<p class="lede">Next month's return over the T-bill for every stock. Refit every month on all
-  earlier months, and graded only on months it had not seen ({{ s.start[:7] }} to
-  {{ s.end[:7] }}).</p>
+{% set f = s.pieces.forecast %}{% set old = s.pieces.linear_trees %}
+<p class="lede">Next month's return for every stock, relative to the average stock. Refit every
+  month on all earlier months, and graded only on months it had not seen
+  ({{ s.start[:7] }} to {{ s.end[:7] }}).</p>
 <div class="cards">
-  <div class="card"><div class="label">Top 30 of the 400 most liquid</div><div class="value">{{ f.top_yr | pct(1) }}/yr</div></div>
-  <div class="card"><div class="label">Ranking (IC), 400 most liquid</div><div class="value">{{ "%.3f" | format(f.liquid_ic) }}</div></div>
+  <div class="card"><div class="label">Ranking (IC)</div><div class="value">{{ "%.3f" | format(f.ic) }}</div></div>
   <div class="card"><div class="label">Months right</div><div class="value">{{ "%.0f" | format(100 * f.months_right / s.months) }}%</div></div>
+  <div class="card"><div class="label">Best vs worst tenth</div><div class="value">{{ f.tenth_yr | pct(0) }}/yr</div></div>
   <div class="card"><div class="label">Size (slope, 1 = right)</div><div class="value">{{ "%.2f" | format(f.slope) }}</div></div>
 </div>
 
 <div class="prose">
 <h2>How it works</h2>
-<p><b>What it predicts.</b> Each stock's return from one month end to the next, minus that
-  month's T-bill: what the stock is expected to earn over cash. It is built to be the
-  optimizer's expected return; production still uses each stock's trailing one-year return.</p>
-<p><b>Nine terms</b>, as known at each month end:</p>
+<p><b>What it predicts.</b> Each stock's return over the next month minus that month's average
+  return across all stocks:</p>
+<math display="block"><mrow><msub><mi>r</mi><mi>i</mi></msub><mo>=</mo><msub><mi>R</mi><mi>i</mi></msub><mo>−</mo><mover><mi>R</mi><mo>‾</mo></mover></mrow></math>
+<p>The market's own rise or fall is the same for every stock, so it can't help rank them and is
+  left out. Every number on this page is in these units.</p>
+<p><b>Inputs</b>, as known at each month end:</p>
 <ul>
-  <li><b>Momentum:</b> the stock's return over the last year and over the last six months.</li>
-  <li><b>Cash and value:</b> operating cash flow over assets, and the free-cash-flow, sales,
-    earnings and R&amp;D-to-market yields.</li>
-  <li><b>Market trend:</b> each momentum times SPY's return over the last year, so momentum
-    can count for more or less depending on how the market has been doing.</li>
+  <li>103 stock inputs: valuation, profitability, growth, investment, momentum, volatility,
+    liquidity and more, each as the stock's percentile among that month's stocks.</li>
+  <li>116 market inputs: interest rates, credit spreads, oil, jobs, inflation, the VIX and the
+    market's own state. They are the same for every stock in a month, so they can only matter by
+    changing how the stock inputs pay off.</li>
 </ul>
-<p>Each stock input is put on one scale per month: divided by the month's typical size,
-  squashed with asinh (which tames extreme values but keeps the sign) and standardized across
-  that month's stocks. A missing input counts as average.</p>
-<math display="block"><mrow><mtext>forecast</mtext><mo>=</mo><mi>a</mi><mo>+</mo><munderover><mo>∑</mo><mrow><mi>k</mi><mo>=</mo><mn>1</mn></mrow><mn>7</mn></munderover><msub><mi>b</mi><mi>k</mi></msub><msub><mi>x</mi><mi>k</mi></msub><mo>+</mo><msub><mi>c</mi><mn>1</mn></msub><mtext>mom12</mtext><mo>·</mo><mtext>SPY12</mtext><mo>+</mo><msub><mi>c</mi><mn>2</mn></msub><mtext>mom6</mtext><mo>·</mo><mtext>SPY12</mtext></mrow></math>
-<p><b>Fitting.</b> Ordinary least squares on every stock (price at least $1, at least
-  $100k traded a day) in every earlier month, about 3,400 a month. No trees, no nets, no
-  penalties: a straight line on terms that each earned their place one at a time.</p>
+<p><b>Two models, averaged:</b></p>
+<ol>
+  <li><b>Linear + trees.</b> A straight-line model on the stock inputs and on each input × the VIX
+    and × last month's spread of stock returns, then boosted trees on what it misses (stock and
+    market inputs), added at a strength chosen from earlier months (0.25).</li>
+  <li><b>Nets.</b> A small neural network turns each stock's 103 inputs into 8 numbers; the market
+    inputs set the weights on those numbers each month. A penalty keeps the market's effect small
+    unless the data clearly support it.</li>
+</ol>
+<math display="block"><mrow><mtext>forecast</mtext><mo>=</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><mo>(</mo><mtext>linear + trees</mtext><mo>)</mo><mo>+</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><mtext>nets</mtext></mrow></math>
+<p>The two make different mistakes (their forecasts correlate {{ "%.2f" | format(s.corr) }}), so
+  the average ranks better than either. Linear + trees gets the size of the biggest winners and
+  losers about right; the nets rank more steadily.</p>
 </div>
 
 <h2>Results</h2>
 <div class="table-wrap labelled"><table>
-  <tr><th>Model</th><th>Top 30 of 400 /yr</th><th>IC, 400 most liquid</th><th>IC, all</th><th>t</th><th>Months right</th><th>Years right</th><th>Slope</th><th>R²</th><th>Best−worst tenth /yr</th><th>IC small / mid / large</th></tr>
+  <tr><th>Model</th><th>IC</th><th>t</th><th>Months right</th><th>Years right</th><th>Slope</th><th>R²</th><th>Best−worst tenth /yr</th><th>IC small / mid / large</th></tr>
   {% for key, p in s.pieces.items() %}
-  <tr{% if key == "forecast" %} class="ours"{% endif %}><td>{{ p.label }}</td><td>{{ p.top_yr | pct(1) }}</td><td>{{ "%.3f" | format(p.liquid_ic) }}</td><td>{{ "%.3f" | format(p.ic) }}</td><td>{{ "%.1f" | format(p.ic_t) }}</td>
+  <tr{% if key == "forecast" %} class="ours"{% endif %}><td>{{ p.label }}</td><td>{{ "%.3f" | format(p.ic) }}</td><td>{{ "%.1f" | format(p.ic_t) }}</td>
     <td>{{ "%.0f" | format(100 * p.months_right / s.months) }}%</td><td>{{ p.years_right }} of {{ p.years }}</td><td>{{ "%.2f" | format(p.slope) }}</td><td>{{ "%+.2f" | format(p.r2 * 100) }}%</td>
     <td>{{ p.tenth_yr | pct(1) }}</td><td>{% for v in p.ic_by_size.values() %}{{ "%.3f" | format(v) }}{% if not loop.last %} / {% endif %}{% endfor %}</td></tr>
   {% endfor %}
 </table></div>
-<p class="muted">All rows graded on the same stock-months: those all three forecasts cover.
-  Top 30 of 400: each month, the 30 best-forecast stocks among the 400 most liquid, held in
-  equal weights for the month, compounded; before trading costs, without the health screen
-  and without the optimizer, so it grades the forecast alone, not the strategy.
-  IC: rank correlation of forecast and outcome each month, averaged. Months right: share of
-  the {{ s.months }} months whose ranking was better than chance. Slope: how much of a
-  forecast shows up on average (1 = right-sized). R²: against forecasting the average for
-  every stock. Tenth: return of the best-forecast tenth minus the worst, across all stocks.</p>
+<p class="muted">Months right: share of the {{ s.months }} months whose ranking was better than
+  chance (IC above 0). All rows graded on the same stock-months: stocks with about a year of prices,
+  which production's trailing-return forecast needs. IC: rank correlation of forecast and
+  outcome each month, averaged. Slope: how much
+  of a forecast shows up on average (1 = right-sized). R²: against forecasting the average for
+  every stock. Tenth: return of the best-forecast tenth minus the worst.</p>
 
 <h3>Forecast vs outcome</h3>
 <div id="fit" class="chart"></div>
@@ -64,15 +70,15 @@
 <h3>What its picks actually returned</h3>
 <div id="tenths" class="chart"></div>
 <p class="muted">Each month, the tenth of stocks with the highest forecast and the tenth with the
-  lowest, across all stocks; their actual return over the next month relative to the average
-  stock, compounded as growth of $1. Solid: this forecast. Dashed: the previous forecaster.
-  Dotted: production's forecast. The portfolio only buys stocks, so it can't bet against the
-  bottom tenth, only avoid it. Before trading costs.</p>
+  lowest; their actual return over the next month relative to the average stock, compounded
+  as growth of $1. Solid: this forecast. Dotted: production's forecast. The portfolio only buys
+  stocks, so it can't bet against the bottom tenth, only avoid it: that line shows what
+  avoiding those stocks is worth. Before trading costs.</p>
 
-<h3>Ranking by year, against the previous forecaster and production's</h3>
+<h3>Ranking by year, against production's forecast</h3>
 <div id="years" class="chart"></div>
 <p class="muted">Higher is better; 0 is no better than chance. Bars show a 90% margin.</p>
-<h3>Twelve-month average, against the previous forecaster and production's</h3>
+<h3>Twelve-month average, against production's forecast</h3>
 <div id="trailing" class="chart short"></div>
 <p class="muted">IC: how well each month's forecast ranked the stocks by what they actually did
   (0 = no better than chance, higher = better). Each line is a model graded against actual
@@ -81,17 +87,14 @@
 <div class="prose">
 <h2>Limits</h2>
 <ul>
-  <li>Across all stocks the previous forecaster ranks better, almost all of it in the smallest
-    third, which the strategy never buys. Among the 400 most liquid, where it picks, this
-    forecast ranks better and its top 30 earned more.</li>
-  <li>A year's IC moves by about ±{{ "%.3f" | format(s.yearly_noise) }} by chance alone: good
-    and bad years are mostly luck.</li>
-  <li>Forecasts are too big (slope {{ "%.2f" | format(f.slope) }}). The strategy being tested
-    with it rescales them to each stock's volatility before weighing them, so it uses their
-    ranking, not their size.</li>
-  <li>The nine terms were chosen on the same 2004–2026 history they are graded on, one at a
-    time and only if they helped in both halves of it; anything chosen that way looks a little
-    better here than it will in the future.</li>
+  <li>A year's IC moves by about ±{{ "%.3f" | format(s.yearly_noise) }} by chance alone at this
+    level of skill, as much as the signal itself: good and bad years are mostly luck, not
+    patterns the model misses.</li>
+  <li>Forecasts are too big in weak years and about right in strong ones (slope
+    {{ "%.2f" | format(f.slope) }} overall); their size doesn't widen when markets get rougher.
+    Rescaling them from earlier months' skill made the fit worse, so they are left as they are.</li>
+  <li>More gains likely need new information, such as trade policy or foreign rates
+    (<a href="https://github.com/nick-fournier/portfolio-lab/issues/54">#54</a>).</li>
 </ul>
 <p>Everything tried and why it wasn't kept:
   <a href="https://github.com/nick-fournier/portfolio-lab/blob/main/docs/forecaster-log.md">the forecaster log</a>.</p>
