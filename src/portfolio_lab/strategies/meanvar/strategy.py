@@ -112,6 +112,8 @@ class MeanVar:
         gauge_band: Stress levels (0 to 1) where the tilt starts and where it is complete
             (all minimum variance).
         schedule: Rebalance frequency.
+        title: Display name of a named configuration (e.g. "Piotroski health"); not a
+            parameter, so it never changes a run's identity.
         cache_dir: Forecast cache root, set by the runner (not a strategy parameter).
         forecaster_dir: The nine-term forecaster's results, set by the runner (not a
             strategy parameter).
@@ -140,6 +142,7 @@ class MeanVar:
     gauge_band: tuple[float, float] = (0.5, 0.9)
     schedule: Frequency = "M"
     name: str = "meanvar"
+    title: str | None = field(default=None, metadata={"param": False})
     cache_dir: Path | None = field(default=None, repr=False, metadata={"param": False})
     forecaster_dir: Path | None = field(default=None, repr=False, metadata={"param": False})
     workers: int = field(default=1, metadata={"param": False})
