@@ -45,20 +45,20 @@ def ids():
 
 def test_ids_seed_one_security_per_permaticker_with_its_names(ids):
     s = ids.securities.sort("sid")
-    assert s["sid"].to_list() == [1, 2, 3]  # permatickers 100, 200, 300
+    assert s["sid"].to_list() == [100, 200, 300]  # each security's permaticker
     assert s["category"].to_list() == ["common", "common", "etf"]
-    assert s.filter(pl.col("sid") == 2).row(0, named=True) | {} == pytest.approx(
-        {"sid": 2, "name": "New Co", "exchange": "NYSE", "category": "common", "cik": 77,
+    assert s.filter(pl.col("sid") == 200).row(0, named=True) | {} == pytest.approx(
+        {"sid": 200, "name": "New Co", "exchange": "NYSE", "category": "common", "cik": 77,
          "cusip": "111", "figi": "BBG1", "sic": 3571, "first": date(2015, 1, 2), "last": None}
     )  # fmt: skip
-    assert s.filter(pl.col("sid") == 1)["last"][0] == date(2014, 6, 30)  # dead
-    names = ids.tickers.filter(pl.col("sid") == 2).sort("from", "ticker")
+    assert s.filter(pl.col("sid") == 100)["last"][0] == date(2014, 6, 30)  # dead
+    names = ids.tickers.filter(pl.col("sid") == 200).sort("from", "ticker")
     assert names.select("ticker", "from", "to", "dated").rows() == [
         ("ACME", date(2015, 1, 2), None, False),  # from relatedtickers: undated
         ("OLD", date(2015, 1, 2), date(2020, 3, 1), True),
         ("NEW", date(2020, 3, 2), None, True),
     ]
-    assert dict(ids.sharadar.rows()) == {1: 100, 2: 200, 3: 300}
+    assert dict(ids.sharadar.rows()) == {100: 100, 200: 200, 300: 300}
 
 
 def test_lookup_resolves_a_ticker_by_the_date_it_was_used(ids):
@@ -70,17 +70,21 @@ def test_lookup_resolves_a_ticker_by_the_date_it_was_used(ids):
     out = ids_.lookup(ids, rows)
     # OLD after the rename and an unknown name resolve to nothing; ACME was Acme's dated
     # name until 2014 and New Co's inferred name after, so each date picks its company.
-    assert out["sid"].to_list() == [2, 2, None, 1, 2, None]
+    assert out["sid"].to_list() == [200, 200, None, 100, 200, None]
 
 
-def test_extend_appends_new_securities_after_the_highest_sid(ids):
+def test_extend_numbers_new_securities_from_the_reserved_range(ids):
     new = pl.DataFrame({"ticker": ["IPO"], "name": ["Ipo Inc"], "exchange": ["NASDAQ"],
                         "category": ["common"], "first": [date(2026, 2, 2)]})  # fmt: skip
     more = ids.extend(new)
-    assert more.securities["sid"].max() == 4
+    assert more.securities["sid"].max() == ids_.RESERVED + 1
     assert ids_.lookup(more, pl.DataFrame({"ticker": ["IPO"], "date": [date(2026, 3, 1)]}))[
         "sid"
-    ].to_list() == [4]
+    ].to_list() == [ids_.RESERVED + 1]
+    assert (
+        more.extend(new.with_columns(pl.lit("IPO2").alias("ticker"))).securities["sid"].max()
+        == ids_.RESERVED + 2
+    )
 
 
 def test_reader_keeps_the_most_complete_row_then_the_priority_source(tmp_path):
@@ -138,14 +142,13 @@ def test_store_conformers_resolve_ids_add_new_listings_and_write_series(tmp_path
     assert nasdaq.build(tmp_path, store) == {"listings": 2, "new_ids": 1}
     listings = reader.read(tmp_path, "listings")
     assert listings.select("sid", "exchange", "category").rows() == [
-        (2, "NYSE", "common"), (4, "NASDAQ", "common")]  # fmt: skip
-    assert ids_.Ids.load(tmp_path / "ids").securities.filter(pl.col("sid") == 4)["name"][0] == (
-        "Ipo Inc"
-    )
+        (200, "NYSE", "common"), (ids_.RESERVED + 1, "NASDAQ", "common")]  # fmt: skip
+    new_sid = pl.col("sid") == ids_.RESERVED + 1
+    assert ids_.Ids.load(tmp_path / "ids").securities.filter(new_sid)["name"][0] == ("Ipo Inc")
     assert tiingo.build(tmp_path, store) == {"actions": 2}
     actions = reader.read(tmp_path, "actions")
     assert actions.select("sid", "date", "action").rows() == [
-        (1, date(2014, 6, 30), "delisted"), (1, date(2014, 6, 30), "otc")]  # fmt: skip
+        (100, date(2014, 6, 30), "delisted"), (100, date(2014, 6, 30), "otc")]  # fmt: skip
     assert fred.build(tmp_path, store) == {"series": 1}
     assert reader.read(tmp_path, "series").row(0) == ("DTB3", date(2020, 1, 2),
                                                       date(2020, 1, 2), 0.015)  # fmt: skip
@@ -161,6 +164,10 @@ def test_edgar_attaches_a_cik_to_its_longest_listed_common_stock():
     assert primary_sids(securities).rows() == [(9, 3)]
 
 
+#: SPY's sid in the test hive: the first reserved one (Sharadar's test table lacks it).
+SPY = ids_.RESERVED + 1
+
+
 def _hive(tmp_path, ids):
     """A hive with two common stocks and SPY priced over 300 sessions."""
     ids = ids.extend(pl.DataFrame({"ticker": ["SPY"], "name": ["S&P 500"], "exchange": ["NYSEARCA"],
@@ -168,7 +175,7 @@ def _hive(tmp_path, ids):
     ids.save(tmp_path / "ids")
     days = _sessions(date(2019, 1, 2), date(2020, 3, 31))
     rows = []
-    for sid, price, volume in ((2, 50.0, 1e5), (3, 20.0, 2e5), (4, 300.0, 1e6)):
+    for sid, price, volume in ((200, 50.0, 1e5), (300, 20.0, 2e5), (SPY, 300.0, 1e6)):
         for k, d in enumerate(days):
             close = price * (1 + 0.001 * k)
             rows.append({"sid": sid, "date": d, "open": close, "high": close, "low": close,
@@ -176,14 +183,20 @@ def _hive(tmp_path, ids):
                          "ret_co": 0.0})  # fmt: skip
     reader.write(tmp_path, "sharadar", "prices", pl.DataFrame(rows))
     reader.write(tmp_path, "sharadar", "listings", pl.DataFrame(
-        {"sid": [2, 3, 4], "from": [date(2015, 1, 2)] * 3, "to": [None, date(2019, 6, 28), None],
+        {"sid": [200, 300, SPY], "from": [date(2015, 1, 2)] * 3,
+         "to": [None, date(2019, 6, 28), None],
          "exchange": ["NYSE"] * 3, "category": ["common", "common", "etf"]}))  # fmt: skip
     reader.write(
         tmp_path,
         "sharadar",
         "actions",
         pl.DataFrame(
-            {"sid": [3], "date": [date(2019, 6, 28)], "action": ["acquisitionby"], "value": [None]}
+            {
+                "sid": [300],
+                "date": [date(2019, 6, 28)],
+                "action": ["acquisitionby"],
+                "value": [None],
+            }
         ),
     )
     reader.write(tmp_path, "fred", "series", pl.DataFrame(
@@ -196,19 +209,19 @@ def test_daily_table_and_panel_from_the_hive(tmp_path, ids):
     days = _hive(tmp_path, ids)
     assert daily.build(tmp_path)["rows"] == 3 * len(days)
     table = pl.read_parquet(daily.folder(tmp_path) / "year=*" / "*.parquet").sort("sid", "date")
-    sid3 = table.filter(pl.col("sid") == 3)
+    sid3 = table.filter(pl.col("sid") == 300)
     assert sid3["bars_seen"].to_list() == list(range(1, len(days) + 1))
     assert sid3["common"].to_list() == [d <= date(2019, 6, 28) for d in days]
-    assert table.filter(pl.col("sid") == 4)["common"].any() is False  # an ETF
+    assert table.filter(pl.col("sid") == SPY)["common"].any() is False  # an ETF
     assert table["adv"].drop_nulls().min() == pytest.approx(50.0 * 1e5, rel=0.2)
 
     p = daily.panel(tmp_path, rules=EligibilityRules(5.0, 1e6, 60, 252))
-    assert p.symbols == ["2", "3", "4"] and p.market == 2
+    assert p.symbols == ["200", "300", str(SPY)] and p.market == 2
     assert p.field("close").dtype == np.float32
-    assert p.universe == {"2", "3"} and not p.eligible[:, 2].any()
-    # sid 2: $5 M/day, eligible once 252 bars are seen; sid 3 never (dead before 252 bars)
+    assert p.universe == {"200", "300"} and not p.eligible[:, 2].any()
+    # sid 200: $5 M/day, eligible once 252 bars are seen; 300 never (dead before 252 bars)
     assert p.eligible[:, 0].sum() == len(days) - 251 and not p.eligible[:, 1].any()
-    assert p.fell_to_otc.tolist() == [False, False, False]  # sid 3 was bought out
+    assert p.fell_to_otc.tolist() == [False, False, False]  # sid 300 was bought out
     assert p.rf_daily[0] == pytest.approx(0.0252 / 252)
 
 
@@ -216,7 +229,8 @@ def test_hive_panel_names_tickers_and_backtests_report_them(tmp_path, ids):
     days = _hive(tmp_path, ids)
     daily.build(tmp_path)
     p = Panel.load(tmp_path, rules=EligibilityRules(5.0, 1e4, 60, 252))  # delegates to the hive
-    assert p.names == {"2": "NEW", "3": "FUND", "4": "SPY"} and p.resolve("SPY") == "4"
+    assert p.names == {"200": "NEW", "300": "FUND", str(SPY): "SPY"}
+    assert p.resolve("SPY") == str(SPY)
     config = BacktestConfig(start=days[260], end=days[-1], costs=CostModel(notional=1e5))
     result = run(create("buy_hold"), p, config)
     assert set(result.weights["symbol"]) == {"SPY"}
@@ -224,9 +238,9 @@ def test_hive_panel_names_tickers_and_backtests_report_them(tmp_path, ids):
 
 
 def test_alpaca_keeps_one_row_per_security_day_preferring_the_name_used_that_day(ids):
-    # sid 2 was OLD until 2020-03-01 and NEW after; Alpaca has both tickers on both days
+    # sid 200 was OLD until 2020-03-01 and NEW after; Alpaca has both tickers on both days
     rows = pl.DataFrame({
-        "sid": [2, 2, 2, 2], "ticker": ["OLD", "NEW", "OLD", "NEW"],
+        "sid": [200, 200, 200, 200], "ticker": ["OLD", "NEW", "OLD", "NEW"],
         "date": [date(2019, 6, 3), date(2019, 6, 3), date(2021, 6, 1), date(2021, 6, 1)],
         "close": [1.0, 1.1, 2.0, 2.2],
     })  # fmt: skip
@@ -256,3 +270,48 @@ def test_measured_checks_flag_only_what_leaves_its_own_history():
     assert "outside its history" in quality._judge("m", history, 150.0)["flag"]
     assert quality._judge("m", history, 106.0)["flag"] is None  # a record by a normal step
     assert quality._judge("m", history[:5], 150.0)["flag"] is None  # too little history to judge
+
+
+def test_ids_are_permanent_whatever_the_order_or_how_often_they_are_built():
+    shuffled = TICKERS.reverse()
+    assert (
+        ids_.from_sharadar(shuffled, ACTIONS)
+        .securities.sort("sid")
+        .equals(ids_.from_sharadar(TICKERS, ACTIONS).securities.sort("sid"))
+    )
+
+
+def test_refresh_adds_and_updates_but_never_renumbers(ids):
+    # IPO is numbered from the reserved range first (NASDAQ), then Sharadar lists it as 400.
+    listing = {"ticker": ["IPO"], "name": ["Ipo Inc"], "exchange": ["NASDAQ"],
+               "category": ["common"], "first": [date(2026, 2, 2)]}  # fmt: skip
+    ids = ids.extend(pl.DataFrame(listing))
+    ipo = TICKERS.head(1).with_columns(
+        pl.lit("400").alias("permaticker"), pl.lit("IPO").alias("ticker"),
+        pl.lit("2026-02-03").alias("firstpricedate"),
+        pl.lit(None, pl.String).alias("relatedtickers"),
+    )  # fmt: skip
+    newer = pl.concat([TICKERS.with_columns(  # NEW is now delisted
+        pl.when(pl.col("ticker") == "NEW").then(pl.lit("Y")).otherwise("isdelisted")
+        .alias("isdelisted")), ipo])  # fmt: skip
+    out = ids_.refresh(ids, newer, ACTIONS)
+    s = out.securities.sort("sid")
+    assert s["sid"].to_list() == [100, 200, 300, ids_.RESERVED + 1]  # IPO kept its sid
+    assert s.filter(pl.col("sid") == 200)["last"][0] == date(2026, 1, 30)
+    assert dict(out.sharadar.rows())[ids_.RESERVED + 1] == 400
+    assert ids_.refresh(out, newer, ACTIONS).securities.sort("sid").equals(s)  # idempotent
+
+
+def test_a_name_changed_on_its_first_day_is_dropped_and_the_current_name_shown():
+    """Sandisk listed as SNDKV and became SNDK the same day: SNDK is its name."""
+    tickers = TICKERS.head(1).with_columns(
+        pl.lit("SNDK").alias("ticker"), pl.lit("2025-02-24").alias("firstpricedate"),
+        pl.lit(None, pl.String).alias("relatedtickers"),
+    )  # fmt: skip
+    actions = pl.DataFrame(
+        {"date": ["2025-02-24", "2025-02-24"], "action": ["tickerchangefrom", "tickerchangeto"],
+         "ticker": ["SNDK", "SNDK"], "contraticker": ["SNDKV", "SNDK"]}
+    )  # fmt: skip
+    ids = ids_.from_sharadar(tickers, actions)
+    assert ids.tickers["ticker"].to_list() == ["SNDK"]
+    assert daily._names(ids, [200]) == {"200": "SNDK"}

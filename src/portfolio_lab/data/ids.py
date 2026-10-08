@@ -14,8 +14,16 @@ Three tables, in ``DataPaths.ids``:
   change, or inferred from a source's list of related names).
 - ``sharadar``: sid, permaticker.
 
-Sids are seeded from Sharadar's tickers table (:func:`from_sharadar`), which carries the
-history of names, and extended with new listings from any source (:func:`extend`).
+A sid is permanent: assigned once, never renumbered, whatever order data arrives in.
+
+- A security Sharadar knows has its ``permaticker`` (Sharadar's permanent id, never
+  reused) as its sid (:func:`from_sharadar`); rebuilding from scratch gives the same sids.
+- Any other security (a new listing Sharadar doesn't have yet, or anything once Sharadar
+  is gone) gets the next sid from :data:`RESERVED` up (:func:`extend`), recorded in the
+  tables and never reassigned.
+- A newer Sharadar tickers table is merged in by :func:`refresh`, which adds securities
+  and updates names and delisting dates but never changes a sid: a security numbered from
+  the reserved range before Sharadar listed it keeps that sid.
 """
 
 import logging
@@ -41,6 +49,10 @@ CATEGORIES = (
     ("Preferred", "preferred"), ("ADR", "adr"), ("Common", "common"), ("ETF", "etf"),
     ("ETMF", "etf"), ("CEF", "cef"), ("ETN", "etn"), ("ETD", "etd"), ("UNIT", "unit"),
 )  # fmt: skip
+#: Sids of securities Sharadar doesn't know start above this (permatickers are 7 digits).
+RESERVED = 100_000_000
+#: A new Sharadar security takes over a reserved sid whose ticker started within this.
+SAME_LISTING = timedelta(days=10)
 
 
 @dataclass(frozen=True)
@@ -62,7 +74,7 @@ class Ids:
             write_parquet_atomic(getattr(self, name), folder / f"{name}.parquet")
 
     def extend(self, new: pl.DataFrame) -> "Ids":
-        """Ids with new securities appended (sids continue from the highest).
+        """Ids with new securities appended, numbered from :data:`RESERVED` up.
 
         Args:
             new: ticker, name, exchange, category, first (and optionally cik); one row per
@@ -71,7 +83,8 @@ class Ids:
         """
         if new.is_empty():
             return self
-        start = int(self.securities["sid"].max() or 0) + 1
+        taken = self.securities.filter(pl.col("sid") > RESERVED)["sid"].max()
+        start = int(taken) + 1 if taken is not None else RESERVED + 1
         sids = pl.int_range(start, start + new.height, eager=True).alias("sid")
         securities = _frame(new.with_columns(sids), SECURITIES)
         tickers = _frame(
@@ -136,24 +149,37 @@ def _segments(tickers: pl.DataFrame, actions: pl.DataFrame) -> pl.DataFrame:
         .select("sid", "ticker", pl.coalesce("from", "first").alias("from"),
                 pl.col("last").alias("to"))
     )  # fmt: skip
-    return pl.concat([old, current]).with_columns(pl.lit(True).alias("dated"))
+    # a name changed on its first day (e.g. a when-issued ticker) covers no dates
+    named = pl.concat([old, current]).filter(
+        pl.col("to").is_null() | (pl.col("to") >= pl.col("from"))
+    )
+    return named.with_columns(pl.lit(True).alias("dated"))
 
 
-def from_sharadar(tickers: pl.DataFrame, actions: pl.DataFrame) -> Ids:
-    """Seed the ids from Sharadar's ``tickers`` and ``actions`` tables (as read, all strings).
+def from_sharadar(
+    tickers: pl.DataFrame, actions: pl.DataFrame, known: pl.DataFrame | None = None
+) -> Ids:
+    """Ids from Sharadar's ``tickers`` and ``actions`` tables (as read, all strings).
 
-    Every row of the ``SEP`` (stocks) and ``SFP`` (funds) tables becomes a security; the
+    Every row of the ``SEP`` (stocks) and ``SFP`` (funds) tables becomes a security whose
+    sid is its permaticker, or the sid ``known`` (sid, permaticker) already gives it; the
     CIK comes from the SEC filings link, the names from recorded ticker changes
     (:func:`_segments`) plus Sharadar's ``relatedtickers`` (undated).
     """
     rows = (
         tickers.filter(pl.col("table").is_in(["SEP", "SFP"]))
         .unique("permaticker", keep="first")
-        .sort(pl.col("permaticker").cast(pl.Int64))
-        .with_row_index("sid", offset=1)
+        .with_columns(pl.col("permaticker").cast(pl.Int64))
+        .sort("permaticker")
+    )
+    if known is not None:
+        rows = rows.join(known.rename({"sid": "_known"}), on="permaticker", how="left")
+    else:
+        rows = rows.with_columns(pl.lit(None, pl.Int64).alias("_known"))
+    rows = (
+        rows.with_columns(pl.coalesce("_known", "permaticker").alias("sid"))
+        .drop("_known")
         .with_columns(
-            pl.col("sid").cast(pl.Int64),
-            pl.col("permaticker").cast(pl.Int64),
             pl.col("firstpricedate").str.to_date().alias("first"),
             pl.when(pl.col("isdelisted") == "Y")
             .then(pl.col("lastpricedate").str.to_date())
@@ -177,6 +203,43 @@ def from_sharadar(tickers: pl.DataFrame, actions: pl.DataFrame) -> Ids:
     )  # fmt: skip
     names = pl.concat([dated, related]).unique(["sid", "ticker", "from"]).sort("sid", "from")
     return Ids(securities, _frame(names, TICKERS), rows.select("sid", "permaticker"))
+
+
+def refresh(ids: Ids, tickers: pl.DataFrame, actions: pl.DataFrame) -> Ids:
+    """``ids`` updated from a newer Sharadar tickers table, without changing any sid.
+
+    Securities already known keep their sids and take the new names and dates. A security
+    Sharadar lists for the first time takes over the reserved sid of the same listing
+    (same ticker, first trading days within :data:`SAME_LISTING`) if another source
+    numbered it first, else its permaticker. Securities the new table lacks are kept.
+    """
+    fresh = from_sharadar(tickers, actions)
+    new = fresh.securities.join(ids.sharadar, left_on="sid", right_on="permaticker",
+                                how="anti").select("sid", "first")  # fmt: skip
+    reserved = ids.tickers.filter(pl.col("sid") > RESERVED).join(
+        ids.securities.select("sid", pl.col("first").alias("_first")), on="sid"
+    )
+    adopted = (
+        new.join(fresh.tickers.filter(pl.col("to").is_null()).select("sid", "ticker"), on="sid")
+        .join(reserved.select(pl.col("sid").alias("_sid"), "ticker", "_first"), on="ticker")
+        .filter((pl.col("first") - pl.col("_first")).abs() <= SAME_LISTING)
+        .unique("sid", keep="first")
+        .select(pl.col("_sid").alias("sid"), pl.col("sid").alias("permaticker"))
+    )
+    known = pl.concat([ids.sharadar, adopted])
+    fresh = from_sharadar(tickers, actions, known)
+    kept = ~pl.col("sid").is_in(fresh.securities["sid"].implode())
+    merged = Ids(
+        pl.concat([fresh.securities, ids.securities.filter(kept)]).sort("sid"),
+        pl.concat([fresh.tickers, ids.tickers.filter(kept)]).sort("sid", "from"),
+        pl.concat([fresh.sharadar, known.join(fresh.sharadar, on="permaticker", how="anti")]),
+    )
+    before = dict(ids.sharadar.select("permaticker", "sid").rows())
+    after = dict(merged.sharadar.select("permaticker", "sid").rows())
+    changed = [p for p, s in before.items() if after.get(p) != s]
+    if changed:  # the one rule ids must never break
+        raise ValueError(f"ids: refresh would change {len(changed)} sids, e.g. {changed[:5]}")
+    return merged
 
 
 def lookup(ids: Ids, rows: pl.DataFrame) -> pl.DataFrame:
