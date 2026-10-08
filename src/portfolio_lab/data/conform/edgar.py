@@ -89,15 +89,16 @@ def _part(folder: Path, k: int, rows: list[tuple]) -> None:
 def sharadar_definitions(states: pl.DataFrame) -> pl.DataFrame:
     """Concepts redefined as Sharadar defines them, so the two sources agree where they meet.
 
-    Long-term debt includes non-current operating lease liabilities.
+    - Long-term debt includes non-current operating lease liabilities.
+    - Capital spending is net of proceeds from selling property and equipment.
     """
     lease, debt = pl.col("op_lease_nc"), pl.col("lt_debt")
+    capex, proceeds = pl.col("capex"), pl.col("capex_proceeds").fill_null(0.0)
     return states.with_columns(
-        pl.when(lease.is_not_null())
-        .then(debt.fill_null(0.0) + lease)
-        .otherwise(debt)
-        .alias("lt_debt")
-    )
+        pl.when(lease.is_not_null()).then(debt.fill_null(0.0) + lease).otherwise(debt)
+        .alias("lt_debt"),
+        (capex - proceeds).alias("capex"),
+    )  # fmt: skip
 
 
 def filings(facts: pl.DataFrame, sids: pl.DataFrame, workers: int = WORKERS) -> pl.DataFrame:
