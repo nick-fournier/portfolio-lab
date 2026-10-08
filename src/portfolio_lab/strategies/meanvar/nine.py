@@ -72,6 +72,10 @@ class NineInputs:
         self._slopes = pl.read_parquet(self.folder / nine.SLOPES).sort("date")
         self._dates = sorted(f["date"].unique().to_list())
 
+    def first(self) -> date:
+        """The first month with forecasts."""
+        return self._dates[0]
+
     def _made(self, asof: date) -> date | None:
         made = [d for d in self._dates if d <= asof and asof - d <= MAX_AGE]
         return max(made) if made else None
