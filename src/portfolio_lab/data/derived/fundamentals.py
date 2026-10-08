@@ -54,7 +54,8 @@ def build(root: Path) -> dict:
     )
     rows = rows.join(scores, on=["sid", "filed", "period_end"], how="left")
     lead = ["sid", "filed", "period_end", "form", "shares_out"]
-    rows = rows.select(*lead, *schemas.CONCEPTS, *[f"prior_{c}" for c in PRIOR],
+    priors = [f"prior_{c}" for c in PRIOR if c in schemas.CONCEPTS]
+    rows = rows.select(*lead, *schemas.CONCEPTS, *priors,
                        "fscore", "n_signals").sort("sid", "filed", "period_end")  # fmt: skip
     write_parquet_atomic(rows, DataPaths(root).fundamentals)
     return {"filings": rows.height, "scored": int(rows["fscore"].is_not_null().sum())}

@@ -7,6 +7,7 @@ assembles what each filing reported, trailing twelve months (``period = "ttm"``)
 company maps to its primary security: the common stock (or ADR) listed longest.
 """
 
+import hashlib
 import logging
 import multiprocessing
 import shutil
@@ -20,7 +21,13 @@ from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
 from portfolio_lab.data import ids as ids_
 from portfolio_lab.data import reader, schemas
-from portfolio_lab.data.sources.edgar import FACT_SCHEMA, extract_members, member_name
+from portfolio_lab.data.sources.edgar import (
+    DEI_TAGS,
+    FACT_SCHEMA,
+    TAGS,
+    extract_members,
+    member_name,
+)
 from portfolio_lab.research.fundamentals import filing_states
 
 log = logging.getLogger(__name__)
@@ -79,9 +86,23 @@ def _part(folder: Path, k: int, rows: list[tuple]) -> None:
         log.info("edgar: batch %d written", k)
 
 
+def sharadar_definitions(states: pl.DataFrame) -> pl.DataFrame:
+    """Concepts redefined as Sharadar defines them, so the two sources agree where they meet.
+
+    Long-term debt includes non-current operating lease liabilities.
+    """
+    lease, debt = pl.col("op_lease_nc"), pl.col("lt_debt")
+    return states.with_columns(
+        pl.when(lease.is_not_null())
+        .then(debt.fill_null(0.0) + lease)
+        .otherwise(debt)
+        .alias("lt_debt")
+    )
+
+
 def filings(facts: pl.DataFrame, sids: pl.DataFrame, workers: int = WORKERS) -> pl.DataFrame:
     """Conformed filings (trailing twelve months) from the facts, keyed by primary sid."""
-    states = filing_states(facts, workers)
+    states = sharadar_definitions(filing_states(facts, workers))
     keep = [c for c in states.columns if c in schemas.FILINGS and c != "sid"]
     reported = [pl.col(c).is_not_null() for c in keep if c in schemas.CONCEPTS]
     return (
@@ -110,7 +131,9 @@ def build(root: Path, zip_path: Path | None = None, workers: int = WORKERS) -> d
     zip_path = zip_path or paths.raw(SOURCE) / "companyfacts.zip"
     sids = primary_sids(ids_.Ids.load(paths.ids).securities)
     cache = paths.raw(SOURCE) / "facts"
-    stamp = f"{zip_path.stat().st_size}-{int(zip_path.stat().st_mtime)}"
+    # re-extracted when the zip or the extracted tags change
+    tags = hashlib.sha1(" ".join(sorted({*TAGS, *DEI_TAGS})).encode()).hexdigest()[:8]
+    stamp = f"{zip_path.stat().st_size}-{int(zip_path.stat().st_mtime)}-{tags}"
     stamp_file = cache.with_suffix(".stamp")
     if not (cache.exists() and stamp_file.exists() and stamp_file.read_text() == stamp):
         extract(zip_path, sids["cik"].to_list(), cache, workers)

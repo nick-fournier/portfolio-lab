@@ -44,8 +44,8 @@ FLOW_TAGS: dict[str, tuple[str, ...]] = {
         "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
     ),
     "revenue": (
-        "RevenueFromContractWithCustomerExcludingAssessedTax",
         "Revenues",
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
         "SalesRevenueNet",
         "RevenueFromContractWithCustomerIncludingAssessedTax",
     ),
@@ -64,9 +64,13 @@ FLOW_TAGS: dict[str, tuple[str, ...]] = {
                      "DepreciationAmortizationAndAccretionNet"),
     "tax": ("IncomeTaxExpenseBenefit",),
 }  # fmt: skip
-#: Share counts averaged over a period: the latest quarter's value, not a sum.
+#: Share counts averaged over a period: the filing's own period (the quarter for a 10-Q,
+#: the year for a 10-K), never derived by subtraction.
 AVERAGE_TAGS: dict[str, tuple[str, ...]] = {
-    "shares_weighted": ("WeightedAverageNumberOfSharesOutstandingBasic",),
+    "shares_weighted": (
+        "WeightedAverageNumberOfSharesOutstandingBasic",
+        "WeightedAverageNumberOfShareOutstandingBasicAndDiluted",
+    ),
 }
 BALANCE_TAGS: dict[str, tuple[str, ...]] = {
     "assets": ("Assets",),
@@ -75,6 +79,8 @@ BALANCE_TAGS: dict[str, tuple[str, ...]] = {
     "liabilities": ("Liabilities",),
     "lt_debt": ("LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations",
                 "LongTermDebt"),
+    # added to lt_debt in edgar.filings: Sharadar's long-term debt includes these leases
+    "op_lease_nc": ("OperatingLeaseLiabilityNoncurrent",),
     "debt_cur": ("DebtCurrent", "LongTermDebtCurrent",
                  "LongTermDebtAndCapitalLeaseObligationsCurrent", "ShortTermBorrowings"),
     "equity": (
@@ -196,11 +202,18 @@ class _Known:
             match = _previous(quarters, match)
         return total
 
-    def latest_quarter(self, concept: str, end: date) -> float | None:
-        """The quarter (or, failing that, year) value ending at ``end``."""
-        quarters = self.quarters(concept)
-        match = _near(quarters, end)
-        return quarters[match] if match is not None else self.year(concept, end)
+    def average(self, concept: str, end: date, annual: bool) -> float | None:
+        """A period average ending at ``end``: over the year if ``annual``, else the quarter.
+
+        Falls back to the other length, then to any reported length ending there.
+        """
+        durations = self.durations.get(concept, {}).items()
+        reported = [(_kind((e - s).days), v) for (s, e), v in durations if abs(e - end) <= SAME_DAY]
+        for kind in ("fy", "q") if annual else ("q", "fy"):
+            for k, v in reported:
+                if k == kind:
+                    return v
+        return reported[0][1] if reported else None
 
     def balance(self, concept: str, end: date) -> float | None:
         """The instant value at ``end``."""
@@ -258,7 +271,7 @@ def _company_states(rows: pl.DataFrame) -> list[dict]:
             for c in FLOW_TAGS:
                 state[prefix + c] = known.ttm(c, when)
             for c in AVERAGE_TAGS:
-                state[prefix + c] = known.latest_quarter(c, when)
+                state[prefix + c] = known.average(c, when, annual=filing[0][2].startswith("10-K"))
             for c in BALANCE_TAGS:
                 state[prefix + c] = known.balance(c, when)
         states.append(state)

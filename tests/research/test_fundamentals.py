@@ -104,3 +104,17 @@ def test_52_week_calendar_with_a_16_week_quarter():
     states = {r["accn"]: r for r in filing_states(facts, workers=1).iter_rows(named=True)}
     assert states["k"]["net_income"] == pytest.approx(50)
     assert states["q1b"]["net_income"] == pytest.approx(11 + 12 + 17 + 13)
+
+
+def test_weighted_shares_are_the_filings_own_period_never_differenced():
+    """A 10-Q takes the quarter's average, a 10-K the year's; six months minus three is
+    not a share count."""
+    tag = "WeightedAverageNumberOfSharesOutstandingBasic"
+    rows = [
+        (4, tag, D(2022, 6, 30), 110.0, D(2022, 8, 5), "q2", "10-Q", D(2022, 4, 1)),
+        (4, tag, D(2022, 6, 30), 105.0, D(2022, 8, 5), "q2", "10-Q", D(2022, 1, 1)),  # 6M
+        (4, tag, D(2022, 12, 31), 112.0, D(2023, 2, 15), "k", "10-K", D(2022, 1, 1)),
+        (4, tag, D(2022, 12, 31), 120.0, D(2023, 2, 15), "k", "10-K", D(2022, 10, 1)),  # Q4
+    ]
+    states = filing_states(pl.DataFrame(rows, schema=FACT_SCHEMA, orient="row"), workers=1)
+    assert states.sort("filed")["shares_weighted"].to_list() == [110.0, 112.0]

@@ -2,6 +2,7 @@ import httpx
 import polars as pl
 
 from portfolio_lab.core.http import RateLimitedClient
+from portfolio_lab.data.conform.edgar import sharadar_definitions
 from portfolio_lab.data.sources.edgar import (
     BULK_URL,
     FACT_SCHEMA,
@@ -124,3 +125,9 @@ def test_fetch_profiles_reads_industry_and_skips_unknown():
     client = RateLimitedClient(transport=httpx.MockTransport(handler))
     profiles = fetch_profiles(client, [1, 2])
     assert profiles.rows() == [(1, "SVB", 6022, "Banks", "1231")]
+
+
+def test_long_term_debt_includes_operating_leases_as_sharadar_does():
+    states = pl.DataFrame({"lt_debt": [100.0, None, 50.0], "op_lease_nc": [20.0, 30.0, None]})
+    out = sharadar_definitions(states)
+    assert out["lt_debt"].to_list() == [120.0, 30.0, 50.0]
