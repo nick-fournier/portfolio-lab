@@ -69,11 +69,18 @@
   group's average over all months, with a 90% margin. Flatter than the dotted line means the
   forecasts are too big (slope {{ "%.2f" | format(f.slope) }}).</p>
 
-<h3>Forecast vs outcome, after Grinold's rule</h3>
+<h3>After Grinold's rule: the order the optimizer acts on</h3>
 <div id="grinold" class="chart"></div>
-<p class="muted">The forecasts as class 2 hands them to the optimizer, for the 400 most liquid
-  stocks each month (where it picks): grouped and averaged the same way, both over the
-  T-bill. On the dotted line the sizes are right; slope {{ "%.2f" | format(s.grinold_slope) }}.</p>
+<p class="muted">The forecasts as the Forecaster hands them to the optimizer, for the 400 most
+  liquid stocks each month (where it picks), split into 20 groups; bars are each group's
+  average outcome against the average of the 400, with a 90% margin. Rising bars mean the
+  ranking holds up.</p>
+<p class="muted">The sizes are a different matter. Grinold's rule scales the forecasts to
+  the spread of a year of past returns, so the optimizer is told differences about
+  {{ "%.0f" | format(1 / s.grinold_slope) if s.grinold_slope > 0 else "many" }} times larger
+  than the ones that show up (hover a bar for what each group was told). That scale works as
+  a setting for how hard the strategy bets, not as a forecast: scaled to its measured accuracy
+  instead, the strategy returned about 3 points a year less.</p>
 
 <h3>What its picks actually returned</h3>
 <div id="tenths" class="chart"></div>

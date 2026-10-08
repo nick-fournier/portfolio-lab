@@ -13,6 +13,7 @@ from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.web import series
 from portfolio_lab.web.charts import (
     forecast_fit_figure,
+    forecast_order_figure,
     forecast_tenths_figure,
     forecast_trailing_figure,
     forecast_years_figure,
@@ -36,7 +37,7 @@ def page_context(data_dir: Path) -> dict:
         if not s.keys() >= REQUIRED:  # written by older code: the nightly rebuild replaces it
             return {"outdated": True}
         return {"s": s, "fit": forecast_fit_figure(s["bins"]),
-                "grinold": forecast_fit_figure(s["grinold_bins"], "over the T-bill"),
+                "grinold": forecast_order_figure(s["grinold_bins"]),
                 "years": forecast_years_figure(s["yearly"]),
                 "trailing": forecast_trailing_figure(s["trailing"]),
                 "tenths": forecast_tenths_figure(s["tenths"])}  # fmt: skip
