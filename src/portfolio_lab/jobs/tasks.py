@@ -17,6 +17,7 @@ import polars as pl
 
 from portfolio_lab.backtest.costs import CostModel
 from portfolio_lab.backtest.engine import BacktestConfig, run
+from portfolio_lab.backtest.engine import label as strategy_label
 from portfolio_lab.backtest.results import list_runs, load_run, prune_runs, save_run
 from portfolio_lab.core.calendar import last_complete_session
 from portfolio_lab.core.config import Settings
@@ -107,6 +108,23 @@ FORECAST_WORKERS = 4
 EDGAR_REQUESTS_PER_MINUTE = 300
 #: Runs kept per configuration; older ones are deleted after each scheduled refresh.
 RUNS_KEPT_PER_CONFIG = 3
+
+
+def run_label(meta: dict[str, Any]) -> str:
+    """A saved run's display name: its configuration's current title, else its saved label.
+
+    Configurations are matched by their untitled label, which spells out every non-default
+    parameter (a title is not one), so renaming a model renames its earlier runs too.
+    """
+    titled = {}
+    for name, params in PRODUCTION_MODELS:
+        untitled = {k: v for k, v in params.items() if k != "title"}
+        titled[strategy_label(create(name, **untitled))] = strategy_label(create(name, **params))
+    try:
+        saved = strategy_label(create(meta["strategy"], **meta.get("params", {})))
+    except (KeyError, TypeError, ValueError):  # a retired strategy or parameter
+        saved = None
+    return titled.get(saved) or meta.get("label") or meta["strategy"]
 
 
 def public_client(settings: Settings) -> RateLimitedClient:
@@ -419,15 +437,16 @@ def make_vs_buy_task(settings: Settings) -> dict:
     series = {s: (*names[s], frame) for s, frame in fund_returns(settings).items() if frame.height}
     for stored in list_runs(settings.data_dir, latest_only=True):
         meta = stored["meta"]
-        label = meta.get("label") or meta["strategy"]
-        if meta["strategy"] == "buy_hold" or f"ours: {label}" in series:
+        name = run_label(meta)
+        if meta["strategy"] == "buy_hold" or f"ours: {name}" in series:
             continue  # SPY is already a fund; runs come newest first
         daily = load_run(settings.data_dir, meta["run_id"]).daily.select("date", "ret")
-        series[f"ours: {label}"] = (label, "ours", daily)
+        series[f"ours: {name}"] = (name, "ours", daily)
     rates = reader.read(settings.data_dir, "series").filter(pl.col("series") == "DTB3")
     rates = rates.select("date", pl.col("value").alias("rate"))
     start = min(frame["date"].min() for _, _, frame in series.values())
-    production = next((k for k in series if k.startswith("ours: ") and "kelly" in k), None)
+    production = f"ours: {strategy_label(create(PRODUCTION[0], **PRODUCTION[1]))}"
+    production = production if production in series else None
     summary, growth = compare(series, rates, start, ours=production)
     write_parquet_atomic(summary, paths.make_vs_buy / "summary.parquet")
     write_parquet_atomic(growth, paths.make_vs_buy / "growth.parquet")

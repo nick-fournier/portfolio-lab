@@ -18,7 +18,7 @@ import polars as pl
 from portfolio_lab.backtest.engine import label as strategy_label
 from portfolio_lab.backtest.results import list_runs, load_run, runs_dir
 from portfolio_lab.core.paths import DataPaths
-from portfolio_lab.jobs.tasks import PRODUCTION_MODELS
+from portfolio_lab.jobs.tasks import PRODUCTION_MODELS, run_label
 from portfolio_lab.research.funds import CATEGORIES
 from portfolio_lab.strategies.base import create
 
@@ -77,7 +77,7 @@ def _live_runs(data_dir: Path) -> dict[str, Series]:
             symbol = meta.get("params", {}).get("symbol") or "SPY"
             out.setdefault(symbol, Series(symbol, symbol, "passive", daily, meta["run_id"]))
             continue
-        label = meta.get("label") or meta["strategy"]
+        label = run_label(meta)
         key = f"ours: {label}"
         if key not in out:  # runs come newest first: the newest of a label wins
             out[key] = Series(key, label, "ours", daily, meta["run_id"])
