@@ -333,6 +333,33 @@ def forecast_fit_figure(bins: list[dict], basis: str = "vs average stock") -> st
     return json.dumps({"data": traces, "layout": layout})
 
 
+def forecast_order_figure(bins: list[dict]) -> str:
+    """Outcome by forecast group, in order: does the ranking the optimizer acts on hold up?
+
+    Bars are each group's average outcome relative to the average of all groups, in % per
+    month, with 90% margins; the hover also shows the forecast the group was given. The
+    groups are drawn by rank, not by forecast size, because the size after Grinold's rule
+    is a betting scale (see the page).
+    """
+    mean = sum(b["actual"] for b in bins) / len(bins)
+    trace = {
+        "type": "bar", "x": [b["bin"] + 1 for b in bins],
+        "y": [round((b["actual"] - mean) * 100, 3) for b in bins],
+        "customdata": [round(b["forecast"] * 100, 2) for b in bins],
+        "marker": {"color": "#1f77b4"}, "name": "Group average",
+        "error_y": {"type": "data", "array": [round(b["margin"] * 100, 3) for b in bins],
+                    "thickness": 1},
+        "hovertemplate": "group %{x}<br>outcome %{y:.2f}% vs average"
+                         "<br>told %{customdata:.2f}%<extra></extra>",
+    }  # fmt: skip
+    layout = {**_LAYOUT, "hovermode": "closest", "template": _white_template(),
+              "showlegend": False, "margin": {**_LAYOUT["margin"], "l": 55, "b": 45},
+              "xaxis": {"title": {"text": "Forecast group (1 = lowest)"}, "dtick": 1},
+              "yaxis": {"title": {"text": "Outcome vs average, % next month"},
+                        "zeroline": True}}  # fmt: skip
+    return json.dumps({"data": [trace], "layout": layout})
+
+
 def forecast_tenths_figure(tenths: list[dict]) -> str:
     """Growth of $1 relative to the average stock: top and bottom forecast tenths, log scale.
 

@@ -319,7 +319,7 @@ def test_forecasts_page(client, tmp_path):
                   "q25": -0.05, "q75": 0.05} for k in range(-10, 10)],
         "grinold_bins": [{"bin": k, "forecast": k / 1000, "actual": k / 1100, "margin": 0.002,
                           "q25": -0.05, "q75": 0.05} for k in range(-10, 10)],
-        "grinold_slope": 0.91,
+        "grinold_slope": 0.125,
         "trailing": [{"date": f"20{10 + k}-01-31", "ic": 0.03, "old": 0.02}
                      for k in range(10)],
         "tenths": [{"date": f"20{10 + k}-01-31", "top": 1 + k / 10, "bottom": 1 - k / 20,
@@ -328,7 +328,7 @@ def test_forecasts_page(client, tmp_path):
     (folder / "summary.json").write_text(json.dumps(summary))
     page = client.get("/forecasts").text
     for expected in ("27.8%", "0.034", "16 of 18", "60%", "production label",
-                     "0.044 / 0.035 / 0.026", "±0.025", "slope 0.91", 'id="fit"',
+                     "0.044 / 0.035 / 0.026", "±0.025", "8 times larger", 'id="fit"',
                      'id="grinold"', 'id="trailing"', 'id="tenths"'):  # fmt: skip
         assert expected in page, expected
     assert "revious" not in page
