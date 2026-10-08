@@ -147,10 +147,12 @@ def describe(strategy: Strategy, summary_only: bool = False) -> str:
 
 
 def label(strategy: Strategy) -> str:
-    """Short display name: the strategy name plus parameters that differ from defaults.
+    """Short display name: the strategy's title, else its name and non-default parameters.
 
     Includes the rebalance schedule when it differs from the strategy's default.
     """
+    if title := getattr(strategy, "title", None):
+        return title
     if not is_dataclass(strategy):
         return strategy.name
     defaults = {f.name: f.default for f in fields(strategy)}

@@ -49,27 +49,25 @@ from portfolio_lab.trading.broker import PaperBroker
 
 log = logging.getLogger(__name__)
 
-#: The production strategy: meanvar on the healthiest (continuous F-score) of the most liquid
-#: stocks, monthly, with weight limits tapering near the edges of both lists instead of hard
-#: cutoffs (``strategies.meanvar.soft``), weighted for the highest expected long-run growth
-#: (the Kelly objective, ``strategies.meanvar.optimize``), holding the minimum-variance mix in
-#: bear markets and equal weights in rebounds (see ``strategies.meanvar`` and
-#: ``research.regimes``). Kelly replaced max-Sharpe on 2026-10-06: on the same candidates and
-#: switches it compounded at 26.0%/yr against 20.0% over 2004-2026, with about 18 holdings
-#: instead of 25, volatility 32% instead of 21% and a 41% worst drawdown instead of 32%.
+#: The production strategy, "Piotroski health" (class 1): meanvar on the healthiest
+#: (continuous F-score) of the most liquid stocks, monthly, with weight limits tapering near
+#: the edges of both lists instead of hard cutoffs (``strategies.meanvar.soft``), weighted for
+#: the highest expected long-run growth (the Kelly objective, ``strategies.meanvar.optimize``),
+#: holding the minimum-variance mix in bear markets and equal weights in rebounds (see
+#: ``strategies.meanvar`` and ``research.regimes``). Kelly replaced max-Sharpe on 2026-10-06.
 PRODUCTION: tuple[str, dict[str, Any]] = (
     "meanvar",
     {"health_rank_pool": 400, "soften": "taper", "bear_defense": True, "rebound": "equal",
-     "objective": "kelly"},
+     "objective": "kelly", "title": "Piotroski health"},
 )  # fmt: skip
-#: Class 2: the same pool, Kelly and bear switch as :data:`PRODUCTION`, with the nine-term
-#: forecasts (Grinold's form) as expected returns, the price/factor/residual covariance and
-#: no rebound switch (``strategies.meanvar.nine``). 27.9% a year 2004-2026 on the Sharadar
-#: history in research, against production's 26.0%.
+#: "Forecaster" (class 2): the same pool, Kelly and bear switch as :data:`PRODUCTION`, with
+#: the nine-term forecasts (Grinold's form) as expected returns, the price/factor/residual
+#: covariance and no rebound switch (``strategies.meanvar.nine``). 27.4% a year 2004-2026 on
+#: the hive, against production's 26.2%.
 CLASS_2: tuple[str, dict[str, Any]] = (
     "meanvar",
     {"health_rank_pool": 400, "soften": "taper", "bear_defense": True, "objective": "kelly",
-     "expected": "nine", "covariance": "thirds"},
+     "expected": "nine", "covariance": "thirds", "title": "Forecaster"},
 )  # fmt: skip
 #: The production models, drawn on the Overview and Compare charts against SPY and the best
 #: funds (every other strategy is listed in their tables but starts hidden on the chart).
