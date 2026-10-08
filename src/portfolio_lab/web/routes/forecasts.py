@@ -21,6 +21,8 @@ from portfolio_lab.web.charts import (
 router = APIRouter()
 #: Written by ``research.forecaster.report`` (not imported: the site loads no model code).
 SUMMARY = "summary.json"
+#: Keys the page needs; an older summary lacks some until the nightly rebuild.
+REQUIRED = {"pieces", "yearly", "bins", "grinold_bins", "trailing", "tenths"}
 
 
 def page_context(data_dir: Path) -> dict:
@@ -31,6 +33,8 @@ def page_context(data_dir: Path) -> dict:
         if not path.exists():
             return {}
         s = json.loads(path.read_text())
+        if not s.keys() >= REQUIRED:  # written by older code: the nightly rebuild replaces it
+            return {"outdated": True}
         return {"s": s, "fit": forecast_fit_figure(s["bins"]),
                 "grinold": forecast_fit_figure(s["grinold_bins"], "over the T-bill"),
                 "years": forecast_years_figure(s["yearly"]),

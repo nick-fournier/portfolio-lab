@@ -298,6 +298,10 @@ def test_paper_page_reads_a_separate_trading_dir(tmp_path):
 
 def test_forecasts_page(client, tmp_path):
     assert "No forecasts yet" in client.get("/forecasts").text
+    folder = tmp_path / "results" / "forecaster"
+    folder.mkdir(parents=True)
+    (folder / "summary.json").write_text(json.dumps({"pieces": {}, "bins": []}))
+    assert "being rebuilt" in client.get("/forecasts").text
     sizes = {"small": 0.044, "mid": 0.035, "large": 0.026}
     piece = {"ic": 0.037, "ic_t": 4.5, "months_right": 127, "years_right": 16, "years": 18,
              "slope": 0.63, "r2": 0.001, "tenth_yr": 0.105, "ic_by_size": sizes,
@@ -318,8 +322,6 @@ def test_forecasts_page(client, tmp_path):
         "tenths": [{"date": f"20{10 + k}-01-31", "top": 1 + k / 10, "bottom": 1 - k / 20,
                     "p_top": 1.0, "p_bottom": 1.0} for k in range(10)],
     }  # fmt: skip
-    folder = tmp_path / "results" / "forecaster"
-    folder.mkdir(parents=True)
     (folder / "summary.json").write_text(json.dumps(summary))
     page = client.get("/forecasts").text
     for expected in ("27.8%", "0.034", "16 of 18", "60%", "production label",
