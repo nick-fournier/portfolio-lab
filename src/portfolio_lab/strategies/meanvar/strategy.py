@@ -295,6 +295,13 @@ class MeanVar:
             caps = {s: self.max_weight * self._caps[s] for s in mu.index if s in self._caps}
         return optimize(mu, prices, rf, objective, self.max_weight, caps=caps, cov=self._cov)
 
+    def first_decision(self) -> date | None:
+        """The first rebalance with inputs: the first forecast for ``expected="nine"``.
+
+        Earlier months would sit in cash, so backtests start here.
+        """
+        return self._nine_inputs().first() if self.expected == "nine" else None
+
     def _nine_inputs(self) -> NineInputs:
         """The nine-term forecaster's results, loaded once."""
         if self._nine is None:

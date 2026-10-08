@@ -285,7 +285,8 @@ def backtest_task(  # noqa: PLR0913 - the CLI's options, one each
     Args:
         settings: Application settings.
         strategy: Registered strategy name.
-        start: First session (default: a year into the data, ``first_start``).
+        start: First session (default: a year into the data, ``first_start``, or the
+            strategy's ``first_decision`` when later).
         end: Last session (default: the latest).
         params: Strategy parameters.
         notional: Portfolio size in dollars, for costs.
@@ -298,8 +299,12 @@ def backtest_task(  # noqa: PLR0913 - the CLI's options, one each
     """
     strat = _attach_runtime(create(strategy, **(params or {})), settings)
     panel = panel or Panel.load(settings.data_dir, end=end)
+    if start is None:
+        start = first_start(panel)
+        if (first := getattr(strat, "first_decision", lambda: None)()) and first > start:
+            start = first
     config = BacktestConfig(
-        start=start or first_start(panel),
+        start=start,
         end=end or panel.dates[-1],
         costs=CostModel(notional=notional),
         max_weight=max_weight,

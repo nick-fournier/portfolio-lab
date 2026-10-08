@@ -7,6 +7,7 @@ import pytest
 
 from portfolio_lab.research.forecaster import nine
 from portfolio_lab.research.forecaster.nine import ar1_annual, ar1_forecast_sum
+from portfolio_lab.strategies.base import create
 from portfolio_lab.strategies.meanvar.nine import MIN_SLOPE_MONTHS, NineInputs
 
 SYMBOLS = [f"S{k}" for k in range(6)]
@@ -78,3 +79,10 @@ def test_covariance_is_symmetric_positive_and_uses_only_known_months(tmp_path):
     )
     changed.write_parquet(tmp_path / nine.FILE)
     assert np.allclose(NineInputs(tmp_path).covariance(_month(35), prices), cov)
+
+
+def test_the_forecaster_starts_at_its_first_forecast(tmp_path):
+    _inputs(tmp_path)
+    strategy = create("meanvar", expected="nine", forecaster_dir=tmp_path)
+    assert strategy.first_decision() == _month(0)
+    assert create("meanvar").first_decision() is None
