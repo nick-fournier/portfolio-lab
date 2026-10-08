@@ -41,6 +41,26 @@ def _resolve(ids: ids_.Ids, bars: pl.DataFrame) -> pl.DataFrame:
     return bars.join(chosen, on="ticker", how="left")
 
 
+def _one_per_day(ids: ids_.Ids, rows: pl.DataFrame) -> pl.DataFrame:
+    """One row per security and day, where Alpaca carries a security under two tickers.
+
+    Alpaca keeps a renamed security's whole history under both its old and its new ticker
+    (IPOA and SPCE, DHCA and BNAI). On a day both have a bar, the row kept is the one whose
+    ticker was the security's name that day (``ids.lookup``), else the ticker trading most
+    recently.
+    """
+    named = ids_.lookup(ids, rows.select("ticker", "date").unique()).rename({"sid": "_named"})
+    latest = rows.group_by("ticker").agg(pl.col("date").max().alias("_latest"))
+    return (
+        rows.join(named, on=["ticker", "date"], how="left")
+        .join(latest, on="ticker")
+        .with_columns((pl.col("_named") == pl.col("sid")).fill_null(False).alias("_was_named"))
+        .sort(["sid", "date", "_was_named", "_latest"], descending=[False, False, True, True])
+        .unique(["sid", "date"], keep="first", maintain_order=True)
+        .drop("_named", "_latest", "_was_named")
+    )
+
+
 def build(root: Path, store: Path) -> dict:
     """Write Alpaca's conformed prices from the stored bars under ``store``.
 
@@ -77,6 +97,6 @@ def build(root: Path, store: Path) -> dict:
         names = dropped["ticker"].unique()
         log.warning("alpaca: %d rows of %d symbols left out (no id): %s", dropped.height,
                     names.len(), names.head(20).to_list())  # fmt: skip
-    rows = found.drop_nulls("sid")
+    rows = _one_per_day(ids, found.drop_nulls("sid"))
     return {"prices": reader.write(root, SOURCE, "prices", rows), "new_ids": new.height,
             "dropped_rows": dropped.height}  # fmt: skip

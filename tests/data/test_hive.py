@@ -9,8 +9,9 @@ from portfolio_lab.backtest.engine import BacktestConfig, run
 from portfolio_lab.core.calendar import sessions as _sessions
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.data import ids as ids_
-from portfolio_lab.data import reader, schemas
+from portfolio_lab.data import quality, reader, schemas
 from portfolio_lab.data.conform import fred, nasdaq, tiingo
+from portfolio_lab.data.conform.alpaca import _one_per_day
 from portfolio_lab.data.conform.edgar import primary_sids
 from portfolio_lab.data.derived import daily
 from portfolio_lab.research.panel import EligibilityRules, Panel
@@ -220,3 +221,38 @@ def test_hive_panel_names_tickers_and_backtests_report_them(tmp_path, ids):
     result = run(create("buy_hold"), p, config)
     assert set(result.weights["symbol"]) == {"SPY"}
     assert result.daily["benchmark_ret"].drop_nulls().len() > 0
+
+
+def test_alpaca_keeps_one_row_per_security_day_preferring_the_name_used_that_day(ids):
+    # sid 2 was OLD until 2020-03-01 and NEW after; Alpaca has both tickers on both days
+    rows = pl.DataFrame({
+        "sid": [2, 2, 2, 2], "ticker": ["OLD", "NEW", "OLD", "NEW"],
+        "date": [date(2019, 6, 3), date(2019, 6, 3), date(2021, 6, 1), date(2021, 6, 1)],
+        "close": [1.0, 1.1, 2.0, 2.2],
+    })  # fmt: skip
+    out = _one_per_day(ids, rows).sort("date")
+    assert out.select("date", "ticker").rows() == [(date(2019, 6, 3), "OLD"),
+                                                   (date(2021, 6, 1), "NEW")]  # fmt: skip
+
+
+def test_quality_invariants_catch_impossible_rows_and_duplicates(tmp_path):
+    day = date(2020, 1, 2)
+    good = {"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 10.0,
+            "ret_cc": 0.01, "ret_co": 0.0}  # fmt: skip
+    reader.write(tmp_path, "alpaca", "prices", pl.DataFrame(
+        [{"sid": 1, "date": day, **good}, {"sid": 2, "date": day, **good}]))  # fmt: skip
+    assert quality.invariants(tmp_path) == []
+    reader.write(tmp_path, "alpaca", "prices", pl.DataFrame(
+        [{"sid": 1, "date": day, **good}, {"sid": 1, "date": day, **good},
+         {"sid": 2, "date": day, **good, "close": 0.0, "ret_cc": -1.0}]))  # fmt: skip
+    broken = quality.invariants(tmp_path)
+    assert any("duplicate keys" in b for b in broken)
+    assert any("close <= 0" in b for b in broken) and any("-100%" in b for b in broken)
+
+
+def test_measured_checks_flag_only_what_leaves_its_own_history():
+    history = [100.0 + (k % 5) for k in range(40)]
+    assert quality._judge("m", history, 102.0)["flag"] is None
+    assert "outside its history" in quality._judge("m", history, 150.0)["flag"]
+    assert quality._judge("m", history, 106.0)["flag"] is None  # a record by a normal step
+    assert quality._judge("m", history[:5], 150.0)["flag"] is None  # too little history to judge

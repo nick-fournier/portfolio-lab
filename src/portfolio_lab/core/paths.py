@@ -139,6 +139,11 @@ class DataPaths:
         return self.root / "cache" / "forecasts"
 
     @property
+    def quality(self) -> Path:
+        """Data-quality metrics, one row per metric per check (``data.quality``)."""
+        return self.root / "results" / "quality.parquet"
+
+    @property
     def scoreboard(self) -> Path:
         """Signal scoreboard: per-date rank IC and quintile returns for every signal."""
         return self.root / "results" / "scoreboard.parquet"

@@ -21,6 +21,7 @@ DATA_JOBS = {
     "verify_prices": ("checked", "repaired"),
     "fundamentals": ("companies_with_facts", "facts", "latest_filing"),
     "conform": ("alpaca", "nasdaq", "edgar"),
+    "quality": ("stage", "hard", "flags", "metrics"),
 }
 
 
