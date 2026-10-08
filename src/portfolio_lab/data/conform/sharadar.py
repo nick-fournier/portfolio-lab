@@ -5,21 +5,30 @@ The tables are ``tickers``, ``actions``, ``stocks``, ``funds`` and ``fundamental
 Prices: Sharadar's OHLC and volume are split-adjusted, ``closeunadj`` is the traded close
 and ``closeadj`` adjusts for dividends too; raw levels undo the split factor
 (``closeunadj / close``), keeping dollar volume unchanged. Filings: the as-reported rows
-(``ART`` = trailing twelve months, ``ARQ`` = the quarter), dated by the SEC filing date;
-share counts, which Sharadar adjusts for every later split, are divided by the split
-factor on the filing date to restore the count as reported. Everything under the license
-stays inside the source's folder, so cancelling means deleting one directory.
+(``ART`` = trailing twelve months, ``ARQ`` = the quarter), dated by the SEC filing date,
+from the bulk table plus the nightly updates (``sources.sharadar``), each filing's latest
+version winning. Sharadar adjusts share counts for every split after the filing up to
+when the row was pulled; dividing by those splits' ratios restores the count as reported.
+Everything under the license stays inside the source's folder, so cancelling means
+deleting one directory.
+
+:func:`build` writes every table from the bulk zips (prices included, about 3 minutes);
+:func:`update` is the nightly step: ids, listings, actions and filings from the latest
+tickers, actions and fundamentals, leaving prices as they are.
 """
 
 import logging
 import shutil
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 import polars as pl
 
+from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.data import ids as ids_
 from portfolio_lab.data import reader
+from portfolio_lab.data.sources.sharadar import MAPS, UPDATES
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +77,7 @@ def scan(raw: Path, table: str, dtypes: dict[str, pl.DataType] | None = None) ->
     return pl.scan_csv(csv, infer_schema_length=0, schema_overrides=dtypes)
 
 
-def prices(raw: Path, table: str, sids: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+def prices(raw: Path, table: str, sids: pl.DataFrame) -> pl.DataFrame:
     """Conformed price rows from the ``stocks`` or ``funds`` table (module docs).
 
     Args:
@@ -77,9 +86,6 @@ def prices(raw: Path, table: str, sids: pl.DataFrame) -> tuple[pl.DataFrame, pl.
         sids: ticker, sid for the securities to keep (a few thousand at a time: the
             stocks table has 45 M rows).
 
-    Returns:
-        The rows, and ``splits``: sid, date, split (the cumulative split factor) on the
-        days it changed, for the filings' share counts.
     """
     cols = ["ticker", "date", "open", "high", "low", "close", "volume", "closeadj", "closeunadj"]
     dtypes = {"date": pl.Date} | dict.fromkeys(cols[2:], pl.Float64)
@@ -101,11 +107,8 @@ def prices(raw: Path, table: str, sids: pl.DataFrame) -> tuple[pl.DataFrame, pl.
         pl.col("closeadj").alias("close_adj"),
         (pl.col("closeadj") / prev_adj - 1).alias("ret_cc"),
         (pl.col("open") * pl.col("closeadj") / pl.col("close") / prev_adj - 1).alias("ret_co"),
-        split.round(6).alias("split"),
     ).filter(pl.col("close") > 0)  # fmt: skip
-    changed = pl.col("split") != pl.col("split").shift(1).over("sid")
-    splits = rows.filter(changed.fill_null(True)).select("sid", "date", "split")
-    return rows.drop("split"), splits
+    return rows
 
 
 def listings(securities: pl.DataFrame) -> pl.DataFrame:
@@ -125,20 +128,51 @@ def actions(raw: Path, sids: pl.DataFrame) -> pl.DataFrame:
     )  # fmt: skip
 
 
-def filings(raw: Path, sids: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame:
+def fundamentals(raw: Path, columns: list[str]) -> pl.DataFrame:
+    """The bulk fundamentals plus every nightly update, each filing's latest version.
+
+    Adds ``asof``: the date the row's share counts are split-adjusted to (the bulk table's
+    newest ``lastupdated``, or the day an update was pulled).
+    """
+    cols = [*columns, "lastupdated"]
+    bulk = read(raw, "fundamentals", cols)
+    parts = [bulk.with_columns(pl.col("lastupdated").str.to_date().max().alias("asof"))]
+    for csv in sorted((raw / UPDATES).glob("*.csv")):
+        pulled = datetime.strptime(csv.stem, "%Y%m%d").date()
+        part = pl.read_csv(csv, columns=cols, infer_schema_length=0)
+        parts.append(part.with_columns(pl.lit(pulled).alias("asof")))
+    return (
+        pl.concat(parts)
+        .sort("lastupdated", "asof")
+        .unique(["ticker", "dimension", "date", "reportperiod"], keep="last")
+    )
+
+
+def filings(raw: Path, ids: ids_.Ids, sids: pl.DataFrame, actions: pl.DataFrame) -> pl.DataFrame:
     """Conformed filings from the as-reported rows (module docs).
 
+    A row's ticker is valid on the day it was pulled (``asof``): it resolves through
+    Sharadar's ticker -> permaticker map for the fundamentals as of that day
+    (``sources.sharadar.MAPS``), else today's (``sids``), else the dated names.
+
     Args:
-        raw: The bulk zips.
-        sids: ticker, sid.
-        splits: sid, date, split (from :func:`prices`), to restore reported share counts.
+        raw: The bulk zips and updates.
+        ids: The id tables.
+        sids: ticker, sid of today's ``SF1`` tickers.
+        actions: The conformed actions; their splits restore reported share counts.
     """
     cols = ["ticker", "dimension", "date", "reportperiod", "fiscalperiod", "sharesbas",
             *CONCEPTS]  # fmt: skip
+    rows = fundamentals(raw, cols).filter(pl.col("dimension").is_in(list(PERIODS)))
+    keys = rows.select("ticker", "asof").unique()
+    keys = keys.join(_mapped(raw, ids, keys), on=["ticker", "asof"], how="left")
+    keys = keys.join(sids.rename({"sid": "_today"}), on="ticker", how="left")
+    dated = ids_.lookup(ids, keys.select("ticker", pl.col("asof").alias("date")))
+    keys = keys.join(dated.rename({"date": "asof", "sid": "_dated"}), on=["ticker", "asof"])
+    keys = keys.select("ticker", "asof", pl.coalesce("sid", "_today", "_dated").alias("sid"))
     f = (
-        read(raw, "fundamentals", cols)
-        .filter(pl.col("dimension").is_in(list(PERIODS)))
-        .join(sids, on="ticker")
+        rows.join(keys, on=["ticker", "asof"])
+        .drop_nulls("sid")
         .with_columns(
             pl.col("date").str.to_date().alias("filed"),
             pl.col("reportperiod").str.to_date().alias("period_end"),
@@ -149,17 +183,87 @@ def filings(raw: Path, sids: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame
         )
         .rename(CONCEPTS | {"sharesbas": "shares_out"})
         .with_columns(pl.col(c).abs() for c in OUTFLOWS)
+        .with_row_index("_r")
     )  # fmt: skip
-    f = (
-        f.sort("filed")
-        .join_asof(
-            splits.select("sid", pl.col("date").alias("filed"), "split").sort("filed"),
-            on="filed", by="sid", strategy="backward", check_sortedness=False,
-        )
-        .with_columns(pl.col("shares_out") / pl.col("split").fill_null(1.0))
-    )  # fmt: skip
+    splits = actions.filter(pl.col("action") == "split").select(
+        "sid", pl.col("date").alias("_split"), pl.col("value").alias("_ratio")
+    )
+    later = (
+        f.select("_r", "sid", "filed", "asof")
+        .join(splits, on="sid")
+        .filter((pl.col("_split") > pl.col("filed")) & (pl.col("_split") <= pl.col("asof")))
+        .group_by("_r")
+        .agg(pl.col("_ratio").product().alias("_factor"))
+    )
+    f = f.join(later, on="_r", how="left").with_columns(
+        pl.col("shares_out") / pl.col("_factor").fill_null(1.0)
+    )
     return f.select("sid", "filed", "period_end", "period", "form", "shares_out",
                     *CONCEPTS.values())  # fmt: skip
+
+
+def _mapped(raw: Path, ids: ids_.Ids, keys: pl.DataFrame) -> pl.DataFrame:
+    """ticker, asof, sid through the newest kept ``SF1`` map dated on or before ``asof``."""
+    maps = [
+        pl.read_parquet(p).with_columns(
+            pl.lit(datetime.strptime(p.stem, "%Y%m%d").date()).alias("_day"),
+            pl.col("permaticker").cast(pl.Int64),
+        )
+        for p in sorted((raw / MAPS).glob("*.parquet"))
+    ]
+    if not maps:
+        return keys.with_columns(pl.lit(None, pl.Int64).alias("sid")).select(
+            "ticker", "asof", "sid"
+        )
+    found = keys.sort("asof").join_asof(
+        pl.concat(maps).sort("_day"), left_on="asof", right_on="_day", by="ticker",
+        strategy="backward", check_sortedness=False,
+    )  # fmt: skip
+    return found.join(ids.sharadar, on="permaticker", how="left").select("ticker", "asof", "sid")
+
+
+def _ids(paths: DataPaths, raw: Path) -> tuple[ids_.Ids, pl.DataFrame]:
+    """The ids, seeded or refreshed, and (table, ticker, sid) from the tickers table.
+
+    The tables are the prices' (``SEP``, ``SFP``) and the fundamentals' (``SF1``).
+    """
+    tickers = read(raw, "tickers")
+    if (paths.ids / "securities.parquet").exists():
+        ids = ids_.refresh(ids_.Ids.load(paths.ids), tickers, read(raw, "actions"))
+    else:
+        ids = ids_.from_sharadar(tickers, read(raw, "actions"))
+    ids.save(paths.ids)
+    current = (
+        tickers.filter(pl.col("table").is_in(["SEP", "SFP", "SF1"]))
+        .select("table", "ticker", pl.col("permaticker").cast(pl.Int64))
+        .join(ids.sharadar, on="permaticker")
+        .select("table", "ticker", "sid")
+    )
+    return ids, current
+
+
+def _table(current: pl.DataFrame, *tables: str) -> pl.DataFrame:
+    """ticker, sid for the given Sharadar tables, one row per ticker."""
+    return current.filter(pl.col("table").is_in(tables)).drop("table").unique("ticker")
+
+
+def update(root: Path) -> dict:
+    """The nightly step: ids, listings, actions and filings from the latest tables.
+
+    Prices are left as written by :func:`build`.
+    """
+    paths = DataPaths(root)
+    raw = paths.raw(SOURCE)
+    ids, current = _ids(paths, raw)
+    sf1 = _table(current, "SF1")
+    current = _table(current, "SEP", "SFP")
+    acts = actions(raw, current)
+    return {
+        "securities": ids.securities.height,
+        "listings": reader.write(root, SOURCE, "listings", listings(ids.securities)),
+        "actions": reader.write(root, SOURCE, "actions", acts),
+        "filings": reader.write(root, SOURCE, "filings", filings(raw, ids, sf1, acts)),
+    }
 
 
 def build(root: Path, raw: Path | None = None) -> dict:
@@ -172,36 +276,22 @@ def build(root: Path, raw: Path | None = None) -> dict:
             ``raw`` is given, and the tables written under ``<root>/sharadar/conformed``.
         raw: Folder with the bulk zips, if elsewhere.
     """
-    from portfolio_lab.core.paths import DataPaths  # noqa: PLC0415 - avoid a cycle
-
     paths = DataPaths(root)
     raw = raw or paths.raw(SOURCE)
-    tickers = read(raw, "tickers")
-    if (paths.ids / "securities.parquet").exists():
-        ids = ids_.refresh(ids_.Ids.load(paths.ids), tickers, read(raw, "actions"))
-    else:
-        ids = ids_.from_sharadar(tickers, read(raw, "actions"))
-    ids.save(paths.ids)
-    current = (
-        tickers.filter(pl.col("table").is_in(["SEP", "SFP"]))
-        .select("table", "ticker", pl.col("permaticker").cast(pl.Int64))
-        .join(ids.sharadar, on="permaticker")
-        .select("table", "ticker", "sid")
-    )
+    ids, current = _ids(paths, raw)
     reader.clear(root, SOURCE, "prices")
-    counts, splits = {"prices": 0}, []
+    counts = {"prices": 0}
     for table, name in (("SEP", "stocks"), ("SFP", "funds")):
         wanted = current.filter(pl.col("table") == table).drop("table")
         parts = wanted.with_columns((pl.col("sid") % CHUNKS).alias("_k")).partition_by("_k")
         for k, chunk in enumerate(parts):
-            rows, split = prices(raw, name, chunk.drop("_k"))
+            rows = prices(raw, name, chunk.drop("_k"))
             counts["prices"] += reader.write(root, SOURCE, "prices", rows, f"{name}-{k}")
-            splits.append(split)
             del rows
-    splits = pl.concat(splits)
-    current = current.drop("table").unique("ticker")
+    sf1, current = _table(current, "SF1"), _table(current, "SEP", "SFP")
+    acts = actions(raw, current)
     counts["listings"] = reader.write(root, SOURCE, "listings", listings(ids.securities))
-    counts["actions"] = reader.write(root, SOURCE, "actions", actions(raw, current))
-    counts["filings"] = reader.write(root, SOURCE, "filings", filings(raw, current, splits))
+    counts["actions"] = reader.write(root, SOURCE, "actions", acts)
+    counts["filings"] = reader.write(root, SOURCE, "filings", filings(raw, ids, sf1, acts))
     counts["securities"] = ids.securities.height
     return counts
