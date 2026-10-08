@@ -22,9 +22,9 @@ from portfolio_lab.core.calendar import last_complete_session
 from portfolio_lab.core.config import Settings
 from portfolio_lab.core.http import RateLimitedClient
 from portfolio_lab.core.paths import DataPaths
-from portfolio_lab.core.store import write_parquet_atomic, write_status
+from portfolio_lab.core.store import read_status, write_parquet_atomic, write_status
 from portfolio_lab.data import ids as ids_
-from portfolio_lab.data import reader
+from portfolio_lab.data import quality, reader
 from portfolio_lab.data.conform import alpaca, edgar, fred, nasdaq, tiingo
 from portfolio_lab.data.derived import daily, fundamentals, monthly
 from portfolio_lab.data.ingest.delisted import ingest_delisted
@@ -224,6 +224,7 @@ def derive_task(settings: Settings) -> dict:
     out["forecasts"] = {"months": forecasts["date"].n_unique(), "latest": forecasts["date"].max()}
     del data
     report.publish(paths.forecaster, panel, pl.read_parquet(paths.features))
+    out["quality"] = quality.check(root, "derive")  # raises on a broken invariant
     write_status(root, "derive", out)
     return out
 
@@ -443,7 +444,13 @@ PAPER_STRATEGY: tuple[str, dict[str, Any]] = PRODUCTION
 
 
 def paper_task(settings: Settings, dry_run: bool = False) -> dict:
-    """Record the paper account and rebalance it at month ends (``trading.paper``)."""
+    """Record the paper account and rebalance it at month ends (``trading.paper``).
+
+    Refuses to run while the last quality check found a broken invariant (``data.quality``).
+    """
+    last = read_status(settings.data_dir, "quality") or {}
+    if last.get("hard"):
+        raise quality.QualityError("not trading on data that failed: " + "; ".join(last["hard"]))
     name, params = PAPER_STRATEGY
     strategy = _attach_runtime(create(name, **params), settings)
     broker = PaperBroker(settings)

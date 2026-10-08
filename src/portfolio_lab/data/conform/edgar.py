@@ -83,12 +83,19 @@ def filings(facts: pl.DataFrame, sids: pl.DataFrame, workers: int = WORKERS) -> 
     """Conformed filings (trailing twelve months) from the facts, keyed by primary sid."""
     states = filing_states(facts, workers)
     keep = [c for c in states.columns if c in schemas.FILINGS and c != "sid"]
+    reported = [pl.col(c).is_not_null() for c in keep if c in schemas.CONCEPTS]
     return (
         states.join(sids, on="cik")
         .select("sid", *keep)
         .with_columns(pl.lit("ttm").alias("period"))
         .filter(pl.col("period_end").is_not_null())
-    )
+        # Two filings the same day for the same period (a report and its amendment): keep
+        # the more complete, as the reader does between sources.
+        .with_columns(pl.sum_horizontal(reported).alias("_complete"))
+        .sort("_complete", descending=True)
+        .unique(list(schemas.KEYS["filings"]), keep="first", maintain_order=True)
+        .drop("_complete")
+    )  # fmt: skip
 
 
 def build(root: Path, zip_path: Path | None = None, workers: int = WORKERS) -> dict:

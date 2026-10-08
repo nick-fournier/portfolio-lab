@@ -42,9 +42,15 @@ def build(root: Path, store: Path) -> dict:
         ids.save(paths.ids)
         found = ids_.lookup(ids, symbols.with_columns(pl.col("last_seen").alias("date")))
         log.info("nasdaq: %d new ids", new.height)
-    rows = found.drop_nulls("sid").select(
-        "sid", pl.col("first_seen").alias("from"),
-        pl.when(pl.col("last_seen") < latest).then(pl.col("last_seen")).alias("to"),
-        "exchange", "category",
+    # A company's warrant or unit can resolve to the company itself: keep the common stock.
+    rows = (
+        found.drop_nulls("sid")
+        .sort(pl.col("category") != "common")
+        .unique(["sid", "first_seen"], keep="first", maintain_order=True)
+        .select(
+            "sid", pl.col("first_seen").alias("from"),
+            pl.when(pl.col("last_seen") < latest).then(pl.col("last_seen")).alias("to"),
+            "exchange", "category",
+        )
     )  # fmt: skip
     return {"listings": reader.write(root, SOURCE, "listings", rows), "new_ids": new.height}
