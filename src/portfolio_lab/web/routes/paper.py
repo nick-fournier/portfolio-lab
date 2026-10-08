@@ -7,10 +7,12 @@ import polars as pl
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
+from portfolio_lab.backtest.engine import label as strategy_label
 from portfolio_lab.backtest.results import list_runs, load_run
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.data import ids, reader
-from portfolio_lab.jobs.tasks import PAPER_STRATEGY
+from portfolio_lab.jobs.tasks import PAPER_STRATEGY, run_label
+from portfolio_lab.strategies.base import create
 from portfolio_lab.web.charts import growth_figure
 
 router = APIRouter()
@@ -22,11 +24,10 @@ def _read(path: Path) -> pl.DataFrame:
 
 def _backtest(data_dir: Path) -> pl.DataFrame:
     """Daily returns of the latest backtest of the paper strategy (empty if none)."""
-    name, params = PAPER_STRATEGY
-    for run in list_runs(data_dir, latest_only=True):
-        meta = run["meta"]
-        if meta["strategy"] == name and all(meta["params"].get(k) == v for k, v in params.items()):
-            return load_run(data_dir, meta["run_id"]).daily.select("date", "ret")
+    wanted = strategy_label(create(PAPER_STRATEGY[0], **PAPER_STRATEGY[1]))
+    for run in list_runs(data_dir, latest_only=True):  # newest first
+        if run_label(run["meta"]) == wanted:
+            return load_run(data_dir, run["meta"]["run_id"]).daily.select("date", "ret")
     return pl.DataFrame()
 
 

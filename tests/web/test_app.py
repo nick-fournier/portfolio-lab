@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from portfolio_lab.backtest.results import RunResult, save_run
 from portfolio_lab.core.store import write_status
 from portfolio_lab.jobs.taxes import publish_runs
+from portfolio_lab.web import series
 from portfolio_lab.web.app import create_app
 from portfolio_lab.web.routes.status import data_freshness
 
@@ -332,3 +333,12 @@ def test_forecasts_page(client, tmp_path):
                      'id="grinold"', 'id="trailing"', 'id="tenths"'):  # fmt: skip
         assert expected in page, expected
     assert "revious" not in page
+
+
+def test_pages_link_assets_by_path_whatever_host_asked_first(client):
+    """A cached page once kept its first visitor's host in every later visitor's links."""
+    client.get("/compare", headers={"host": "localhost:8100"})
+    page = client.get("/compare", headers={"host": "portfolio.example.com"}).text
+    assert 'href="/static/style.css"' in page and "localhost" not in page
+    cached = [value for _, value in series._CACHE.values() if isinstance(value, dict)]
+    assert cached and all("request" not in value for value in cached)

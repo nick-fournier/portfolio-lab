@@ -48,5 +48,6 @@ def page_context(data_dir: Path) -> dict:
 @router.get("/forecasts", response_class=HTMLResponse)
 def forecasts(request: Request) -> HTMLResponse:
     """How the forecaster works and how it has done."""
-    context = page_context(request.app.state.data_dir)
+    # a copy: rendering adds the request to the context, which must not reach the cache
+    context = {**page_context(request.app.state.data_dir)}
     return request.app.state.templates.TemplateResponse(request, "forecasts.html", context)
