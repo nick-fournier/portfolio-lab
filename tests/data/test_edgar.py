@@ -127,7 +127,12 @@ def test_fetch_profiles_reads_industry_and_skips_unknown():
     assert profiles.rows() == [(1, "SVB", 6022, "Banks", "1231")]
 
 
-def test_long_term_debt_includes_operating_leases_as_sharadar_does():
-    states = pl.DataFrame({"lt_debt": [100.0, None, 50.0], "op_lease_nc": [20.0, 30.0, None]})
+def test_debt_and_capex_as_sharadar_defines_them():
+    """Debt includes operating leases; capex is net of asset sales."""
+    states = pl.DataFrame({
+        "lt_debt": [100.0, None, 50.0], "op_lease_nc": [20.0, 30.0, None],
+        "capex": [40.0, 10.0, None], "capex_proceeds": [5.0, None, 3.0],
+    })  # fmt: skip
     out = sharadar_definitions(states)
     assert out["lt_debt"].to_list() == [120.0, 30.0, 50.0]
+    assert out["capex"].to_list() == [35.0, 10.0, None]
