@@ -42,5 +42,6 @@ def page_context(data_dir: Path) -> dict:
 @router.get("/compare", response_class=HTMLResponse)
 def compare(request: Request) -> HTMLResponse:
     """One chart and one table: our strategies and every fund, over 1, 5, 10, 20 years and max."""
-    context = page_context(request.app.state.data_dir)
+    # a copy: rendering adds the request to the context, which must not reach the cache
+    context = {**page_context(request.app.state.data_dir)}
     return request.app.state.templates.TemplateResponse(request, "compare.html", context)
