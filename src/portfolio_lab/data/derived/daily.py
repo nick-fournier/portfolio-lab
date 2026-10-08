@@ -96,10 +96,14 @@ def _fell_to_otc(root: Path, securities: pl.DataFrame) -> list[str]:
 
 
 def _names(ids: ids_.Ids, sids: list[int]) -> dict[str, str]:
-    """Each sid's current ticker (its last dated name), for orders and results."""
+    """Each sid's current ticker, for orders and results.
+
+    The open-ended name if there is one, else the one used last (dated before inferred).
+    """
+    far = date(2999, 12, 31)
     latest = (
         ids.tickers.filter(pl.col("sid").is_in(sids))
-        .sort("dated", "from", descending=[False, False])
+        .sort("dated", pl.col("to").fill_null(far), "from")
         .group_by("sid").agg(pl.col("ticker").last())
     )  # fmt: skip
     return {str(s): t for s, t in latest.rows()}

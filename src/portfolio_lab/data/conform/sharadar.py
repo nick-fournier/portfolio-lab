@@ -163,7 +163,9 @@ def filings(raw: Path, sids: pl.DataFrame, splits: pl.DataFrame) -> pl.DataFrame
 
 
 def build(root: Path, raw: Path | None = None) -> dict:
-    """Seed the ids and write every conformed table from the bulk zips.
+    """Seed (or refresh) the ids and write every conformed table from the bulk zips.
+
+    Existing ids are refreshed, never re-seeded, so no sid changes (``ids.refresh``).
 
     Args:
         root: The data directory; the zips are read from ``<root>/sharadar/raw`` unless
@@ -175,7 +177,10 @@ def build(root: Path, raw: Path | None = None) -> dict:
     paths = DataPaths(root)
     raw = raw or paths.raw(SOURCE)
     tickers = read(raw, "tickers")
-    ids = ids_.from_sharadar(tickers, read(raw, "actions"))
+    if (paths.ids / "securities.parquet").exists():
+        ids = ids_.refresh(ids_.Ids.load(paths.ids), tickers, read(raw, "actions"))
+    else:
+        ids = ids_.from_sharadar(tickers, read(raw, "actions"))
     ids.save(paths.ids)
     current = (
         tickers.filter(pl.col("table").is_in(["SEP", "SFP"]))
