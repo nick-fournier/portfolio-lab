@@ -114,6 +114,8 @@
     drawPlot("tenths", {{ tenths | safe }});
   });
 </script>
+{% elif outdated %}
+<p class="muted">The forecasts are being rebuilt; back after tonight's update.</p>
 {% else %}
 <p class="muted">No forecasts yet: the nightly derive step writes them.</p>
 {% endif %}
