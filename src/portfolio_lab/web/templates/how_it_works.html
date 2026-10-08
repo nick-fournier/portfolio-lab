@@ -65,14 +65,13 @@
     daily prices.</li>
   <li><b>Forecaster</b> (class 2): each stock's expected return comes from the
     <a href="/forecasts">forecaster</a>, nine terms fitted on all earlier months, rescaled
-    by Grinold's rule; risk averages three covariances (prices, the forecaster's factors,
-    its errors).</li>
+    by Grinold's rule; its risk is the same shrunk covariance of a year of daily prices.</li>
 </ul>
 <table>
   <thead><tr><th>January 2004 to September 2026</th><th class="num">Per year</th><th class="num">Sharpe</th><th class="num">Worst drop</th></tr></thead>
   <tbody>
     <tr><td>Piotroski health (class 1, production)</td><td class="num">26.2%</td><td class="num">0.84</td><td class="num">−41%</td></tr>
-    <tr><td>Forecaster (class 2)</td><td class="num">27.4%</td><td class="num">0.87</td><td class="num">−39%</td></tr>
+    <tr><td>Forecaster (class 2)</td><td class="num">27.6%</td><td class="num">0.88</td><td class="num">−39%</td></tr>
   </tbody>
 </table>
 <p>Before tax, after modeled trading costs. The <a href="/">overview</a> and

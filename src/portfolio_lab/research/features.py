@@ -192,7 +192,7 @@ def _fundamental_features() -> list[pl.Expr]:
         (ratio(c("assets"), c("prior_assets")) - 1).alias("asset_growth"),
         (ratio(c("revenue"), c("prior_revenue")) - 1).alias("sales_growth"),
         mv.log().alias("log_size"),
-        ratio(c("rnd"), mv).alias("rd_mve"),
+        ratio(c("rnd").fill_null(0.0), mv).alias("rd_mve"),  # none reported: none spent
     ]
 
 
