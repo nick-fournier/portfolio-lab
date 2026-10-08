@@ -54,6 +54,7 @@ class Job:
 JOBS: tuple[Job, ...] = (
     # Fetch, then rewrite every source into the hive and rebuild the derived tables.
     Job("daily_ingest", tasks.daily_ingest_task, "session"),
+    Job("sharadar_ingest", tasks.sharadar_ingest_task, "session"),
     Job("conform", tasks.conform_task, "session"),
     Job("derive", tasks.derive_task, "session"),
     # After the day's data: record the paper account, rebalance at month ends, and keep

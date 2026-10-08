@@ -26,7 +26,7 @@ from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import read_status, write_parquet_atomic, write_status
 from portfolio_lab.data import ids as ids_
 from portfolio_lab.data import quality, reader
-from portfolio_lab.data.conform import alpaca, edgar, fred, nasdaq, tiingo
+from portfolio_lab.data.conform import alpaca, edgar, fred, nasdaq, sharadar, tiingo
 from portfolio_lab.data.derived import daily, fundamentals, monthly
 from portfolio_lab.data.ingest.delisted import ingest_delisted
 from portfolio_lab.data.ingest.fundamentals import ingest_fundamentals
@@ -34,6 +34,7 @@ from portfolio_lab.data.ingest.macro import ingest_macro
 from portfolio_lab.data.ingest.prices import update_prices, verify_prices
 from portfolio_lab.data.ingest.rates import ingest_rates
 from portfolio_lab.data.ingest.universe import current_symbols, ingest_universe
+from portfolio_lab.data.sources import sharadar as sharadar_api
 from portfolio_lab.data.sources.alpaca import make_client
 from portfolio_lab.data.sources.tiingo import fetch_fund_history
 from portfolio_lab.research.conditions import caution_dial, conditional_ic
@@ -182,6 +183,16 @@ def daily_ingest_task(settings: Settings, full: bool = False) -> dict:
     }
 
 
+def sharadar_ingest_task(settings: Settings) -> dict:
+    """Pull tonight's Sharadar updates into its raw folder (``data.sources.sharadar``)."""
+    raw, key = DataPaths(settings.data_dir).raw(sharadar.SOURCE), settings.sharadar_api_key
+    if key is None or not (raw / "fundamentals.zip").exists():
+        return {"skipped": "no Sharadar key or bulk download"}
+    out = sharadar_api.fetch(key.get_secret_value(), raw, date.today())
+    write_status(settings.data_dir, "sharadar", out)
+    return out
+
+
 #: FRED's API allows 120 requests a minute.
 FRED_REQUESTS_PER_MINUTE = 100
 
@@ -211,7 +222,9 @@ def fundamentals_task(settings: Settings, force: bool = False) -> dict:
 def conform_task(settings: Settings) -> dict:
     """Rewrite every fetched source into the hive's conformed tables (``data.conform``)."""
     root, store = settings.data_dir, settings.for_ingest().data_dir
-    out = {m.SOURCE: m.build(root, store) for m in (alpaca, nasdaq, tiingo, fred)}
+    has_sharadar = (DataPaths(root).raw(sharadar.SOURCE) / "tickers.zip").exists()
+    out = {sharadar.SOURCE: sharadar.update(root)} if has_sharadar else {}  # first: adds ids
+    out |= {m.SOURCE: m.build(root, store) for m in (alpaca, nasdaq, tiingo, fred)}
     zip_path = DataPaths(store).edgar_bulk
     if zip_path.exists():
         out[edgar.SOURCE] = edgar.build(root, zip_path)

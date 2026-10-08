@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     edgar_user_agent: str = "portfolio-lab nichfournier@gmail.com"
     fred_api_key: SecretStr | None = None
     tiingo_api_key: SecretStr | None = None
+    #: Sharadar (licensed): nightly updates of its tables (``data.sources.sharadar``).
+    sharadar_api_key: SecretStr | None = None
     benchmark_symbols: tuple[str, ...] = ("SPY", "QQQ", "IWM")
     log_level: str = "INFO"
     #: Push alerts (``core.notify``): an ntfy topic, kept secret since anyone who knows it
