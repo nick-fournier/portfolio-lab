@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from portfolio_lab.web import series
 from portfolio_lab.web.charts import series_figure
@@ -61,7 +61,13 @@ def overview(request: Request) -> HTMLResponse:
     )
 
 
-@router.get("/about", response_class=HTMLResponse)
-def about(request: Request) -> HTMLResponse:
-    """How the lab works: data, backtests, strategies, caveats and roadmap."""
-    return request.app.state.templates.TemplateResponse(request, "about.html", {})
+@router.get("/how-it-works", response_class=HTMLResponse)
+def how_it_works(request: Request) -> HTMLResponse:
+    """How the lab works: data, universe, backtests, the two strategies, caveats."""
+    return request.app.state.templates.TemplateResponse(request, "how_it_works.html", {})
+
+
+@router.get("/about")
+def about() -> RedirectResponse:
+    """The page's old address."""
+    return RedirectResponse("/how-it-works", status_code=301)
