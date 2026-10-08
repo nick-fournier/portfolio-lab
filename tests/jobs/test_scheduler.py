@@ -55,3 +55,27 @@ def test_run_once_records_state_and_isolates_failures(settings):
 
     # Ten minutes later nothing is due: the failure is backing off, daily is done.
     assert run_once(settings, MON_NIGHT + timedelta(minutes=10), jobs) == []
+
+
+def test_failures_alert_once_then_recovery_and_flags_alert(settings, monkeypatch):
+    sent = []
+
+    def record(_settings, title, _message, priority):
+        sent.append((title, priority))
+
+    monkeypatch.setattr("portfolio_lab.jobs.scheduler.notify", record)
+    outcome = {"fail": True}
+
+    def flaky(_settings):
+        if outcome["fail"]:
+            raise RuntimeError("provider down")
+        return {"quality": {"flags": ["prices.rows: below its range"]}}
+
+    jobs = (Job("flaky", flaky, "weekly"),)
+    run_once(settings, MON_NIGHT, jobs)
+    run_once(settings, MON_NIGHT + timedelta(minutes=45), jobs)  # same error again: no alert
+    assert sent == [("portfolio: flaky failed", 4)]
+    outcome["fail"] = False
+    run_once(settings, MON_NIGHT + timedelta(minutes=90), jobs)
+    assert [t for t, _ in sent[1:]] == ["portfolio: flaky recovered",
+                                        "portfolio: 1 data quality flags"]  # fmt: skip

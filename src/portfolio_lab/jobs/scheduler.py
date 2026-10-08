@@ -19,7 +19,9 @@ from typing import Any
 
 from portfolio_lab.core.calendar import PRICE_UPDATE_DELAY, last_complete_session
 from portfolio_lab.core.config import Settings
+from portfolio_lab.core.notify import HIGH, LOW, URGENT, notify
 from portfolio_lab.core.store import write_status
+from portfolio_lab.data.quality import QualityError
 from portfolio_lab.jobs import tasks
 
 log = logging.getLogger(__name__)
@@ -115,21 +117,36 @@ def run_once(
         entry = state.get(job.name, {})
         if not is_due(job, entry, now):
             continue
+        previous = entry.get("last_error")
         entry = {**entry, "last_attempt": now.isoformat()}
         try:
             log.info("running %s", job.name)
-            job.run(settings)
+            result = job.run(settings)
             entry |= {"last_success": now.isoformat(), "last_error": None}
             if job.cadence == "session":
                 session = last_complete_session(now, buffer=INGEST_BUFFER)
                 entry["last_session"] = session.isoformat()
+            _alert_success(settings, job, result, previous)
         except Exception as exc:  # one failing job must not stop the loop
             log.exception("%s failed", job.name)
             entry["last_error"] = f"{type(exc).__name__}: {exc}"
+            if entry["last_error"] != previous:  # once per new failure, not every retry
+                urgent = isinstance(exc, QualityError)
+                notify(settings, f"portfolio: {job.name} failed", entry["last_error"][:1000],
+                       URGENT if urgent else HIGH)  # fmt: skip
         state[job.name] = entry
         write_status(settings.data_dir, STATE_JOB, state)
         ran.append(job.name)
     return ran
+
+
+def _alert_success(settings: Settings, job: Job, result: Any, previous: str | None) -> None:
+    """A recovery after a failure, and any soft quality flags the job reports."""
+    if previous:
+        notify(settings, f"portfolio: {job.name} recovered", f"was: {previous[:500]}", LOW)
+    flags = (result or {}).get("quality", {}).get("flags") if isinstance(result, dict) else None
+    if flags:
+        notify(settings, f"portfolio: {len(flags)} data quality flags", "\n".join(flags), LOW)
 
 
 def run_forever(settings: Settings, tick_seconds: int = TICK_SECONDS) -> None:

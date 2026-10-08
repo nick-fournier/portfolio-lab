@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     tiingo_api_key: SecretStr | None = None
     benchmark_symbols: tuple[str, ...] = ("SPY", "QQQ", "IWM")
     log_level: str = "INFO"
+    #: Push alerts (``core.notify``): an ntfy topic, kept secret since anyone who knows it
+    #: can read the alerts; unset sends nothing.
+    ntfy_topic: SecretStr | None = None
+    ntfy_url: str = "https://ntfy.sh"
 
     def for_ingest(self) -> "Settings":
         """These settings with ``data_dir`` pointed at the fetchers' store."""
