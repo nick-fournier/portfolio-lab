@@ -24,15 +24,6 @@ dependencies = [
 [project.scripts]
 plab = "portfolio_lab.cli:app"
 
-[project.optional-dependencies]
-# The next-month forecaster (`plab forecast run`): not in the production image.
-forecaster = [
-    "xgboost>=3.0",
-]
-nets = [
-    "torch>=2.4",
-]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

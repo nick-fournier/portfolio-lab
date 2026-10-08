@@ -5,9 +5,10 @@
 <h1>Forecasts</h1>
 {% if s %}
 {% set f = s.pieces.forecast %}
-<p class="lede">Next month's return over the T-bill for every stock. Refit every month on all
-  earlier months, and graded only on months it had not seen ({{ s.start[:7] }} to
-  {{ s.end[:7] }}).</p>
+<p class="lede">Class 2's forecast: next month's return over the T-bill for every stock,
+  refit every month on all earlier months and graded only on months it had not seen
+  ({{ s.start[:7] }} to {{ s.end[:7] }}), against production's (class 1) expected return,
+  each stock's trailing one-year return.</p>
 <div class="cards">
   <div class="card"><div class="label">Top 30 of the 400 most liquid</div><div class="value">{{ f.top_yr | pct(1) }}/yr</div></div>
   <div class="card"><div class="label">Ranking (IC), 400 most liquid</div><div class="value">{{ "%.3f" | format(f.liquid_ic) }}</div></div>
@@ -18,8 +19,9 @@
 <div class="prose">
 <h2>How it works</h2>
 <p><b>What it predicts.</b> Each stock's return from one month end to the next, minus that
-  month's T-bill: what the stock is expected to earn over cash. It is built to be the
-  optimizer's expected return; production still uses each stock's trailing one-year return.</p>
+  month's T-bill: what the stock is expected to earn over cash. Class 2 hands it to the
+  optimizer as each stock's expected return; class 1 (production) uses the stock's trailing
+  one-year return instead.</p>
 <p><b>Nine terms</b>, as known at each month end:</p>
 <ul>
   <li><b>Momentum:</b> the stock's return over the last year and over the last six months.</li>
@@ -33,8 +35,14 @@
   that month's stocks. A missing input counts as average.</p>
 <math display="block"><mrow><mtext>forecast</mtext><mo>=</mo><mi>a</mi><mo>+</mo><munderover><mo>∑</mo><mrow><mi>k</mi><mo>=</mo><mn>1</mn></mrow><mn>7</mn></munderover><msub><mi>b</mi><mi>k</mi></msub><msub><mi>x</mi><mi>k</mi></msub><mo>+</mo><msub><mi>c</mi><mn>1</mn></msub><mtext>mom12</mtext><mo>·</mo><mtext>SPY12</mtext><mo>+</mo><msub><mi>c</mi><mn>2</mn></msub><mtext>mom6</mtext><mo>·</mo><mtext>SPY12</mtext></mrow></math>
 <p><b>Fitting.</b> Ordinary least squares on every stock (price at least $1, at least
-  $100k traded a day) in every earlier month, about 3,400 a month. No trees, no nets, no
-  penalties: a straight line on terms that each earned their place one at a time.</p>
+  $100k traded a day) in every earlier month, about 3,500 a month, refit every night. No
+  trees, no nets, no penalties: a straight line on terms that each earned their place one
+  at a time.</p>
+<p><b>Into the optimizer: Grinold's rule.</b> A forecast is mostly noise, so class 2 doesn't
+  use its size directly. Among the candidates it standardizes the forecasts (z), multiplies
+  by each stock's volatility and scales the result to the spread a simple AR(1) model of
+  the stock's daily returns would give: the T-bill plus <i>k</i> · volatility · z. The
+  ranking stays the forecast's; the size becomes one the optimizer can use.</p>
 </div>
 
 <h2>Results</h2>
@@ -46,7 +54,7 @@
     <td>{{ p.tenth_yr | pct(1) }}</td><td>{% for v in p.ic_by_size.values() %}{{ "%.3f" | format(v) }}{% if not loop.last %} / {% endif %}{% endfor %}</td></tr>
   {% endfor %}
 </table></div>
-<p class="muted">All rows graded on the same stock-months: those all three forecasts cover.
+<p class="muted">Both rows graded on the same stock-months: those both forecasts cover.
   Top 30 of 400: each month, the 30 best-forecast stocks among the 400 most liquid, held in
   equal weights for the month, compounded; before trading costs, without the health screen
   and without the optimizer, so it grades the forecast alone, not the strategy.
@@ -55,24 +63,29 @@
   forecast shows up on average (1 = right-sized). R²: against forecasting the average for
   every stock. Tenth: return of the best-forecast tenth minus the worst, across all stocks.</p>
 
-<h3>Forecast vs outcome</h3>
+<h3>Forecast vs outcome, as fitted</h3>
 <div id="fit" class="chart"></div>
-<p class="muted">Each month the stocks are split into 20 groups by forecast; dots are each group's
-  average over all months, with a 90% margin. Flatter than the dotted line means forecasts are
-  too big.</p>
+<p class="muted">Every stock, each month split into 20 groups by forecast; dots are each
+  group's average over all months, with a 90% margin. Flatter than the dotted line means the
+  forecasts are too big (slope {{ "%.2f" | format(f.slope) }}).</p>
+
+<h3>Forecast vs outcome, after Grinold's rule</h3>
+<div id="grinold" class="chart"></div>
+<p class="muted">The forecasts as class 2 hands them to the optimizer, for the 400 most liquid
+  stocks each month (where it picks): grouped and averaged the same way, both over the
+  T-bill. On the dotted line the sizes are right; slope {{ "%.2f" | format(s.grinold_slope) }}.</p>
 
 <h3>What its picks actually returned</h3>
 <div id="tenths" class="chart"></div>
 <p class="muted">Each month, the tenth of stocks with the highest forecast and the tenth with the
   lowest, across all stocks; their actual return over the next month relative to the average
-  stock, compounded as growth of $1. Solid: this forecast. Dashed: the previous forecaster.
-  Dotted: production's forecast. The portfolio only buys stocks, so it can't bet against the
+  stock, compounded as growth of $1. Solid: class 2's forecast. Dotted: production's. The portfolio only buys stocks, so it can't bet against the
   bottom tenth, only avoid it. Before trading costs.</p>
 
-<h3>Ranking by year, against the previous forecaster and production's</h3>
+<h3>Ranking by year, against production's</h3>
 <div id="years" class="chart"></div>
 <p class="muted">Higher is better; 0 is no better than chance. Bars show a 90% margin.</p>
-<h3>Twelve-month average, against the previous forecaster and production's</h3>
+<h3>Twelve-month average, against production's</h3>
 <div id="trailing" class="chart short"></div>
 <p class="muted">IC: how well each month's forecast ranked the stocks by what they actually did
   (0 = no better than chance, higher = better). Each line is a model graded against actual
@@ -81,14 +94,10 @@
 <div class="prose">
 <h2>Limits</h2>
 <ul>
-  <li>Across all stocks the previous forecaster ranks better, almost all of it in the smallest
-    third, which the strategy never buys. Among the 400 most liquid, where it picks, this
-    forecast ranks better and its top 30 earned more.</li>
   <li>A year's IC moves by about ±{{ "%.3f" | format(s.yearly_noise) }} by chance alone: good
     and bad years are mostly luck.</li>
-  <li>Forecasts are too big (slope {{ "%.2f" | format(f.slope) }}). The strategy being tested
-    with it rescales them to each stock's volatility before weighing them, so it uses their
-    ranking, not their size.</li>
+  <li>As fitted, the forecasts are too big (slope {{ "%.2f" | format(f.slope) }}); class 2
+    uses their ranking and takes their size from Grinold's rule instead (chart above).</li>
   <li>The nine terms were chosen on the same 2004–2026 history they are graded on, one at a
     time and only if they helped in both halves of it; anything chosen that way looks a little
     better here than it will in the future.</li>
@@ -99,12 +108,13 @@
 <script>
   document.addEventListener("DOMContentLoaded", () => {
     drawPlot("fit", {{ fit | safe }});
+    drawPlot("grinold", {{ grinold | safe }});
     drawPlot("years", {{ years | safe }});
     drawPlot("trailing", {{ trailing | safe }});
     drawPlot("tenths", {{ tenths | safe }});
   });
 </script>
 {% else %}
-<p class="muted">No forecasts published yet (<code>plab forecast publish</code>).</p>
+<p class="muted">No forecasts yet: the nightly derive step writes them.</p>
 {% endif %}
 {% endblock %}

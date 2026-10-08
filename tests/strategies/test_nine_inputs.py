@@ -6,12 +6,8 @@ import polars as pl
 import pytest
 
 from portfolio_lab.research.forecaster import nine
-from portfolio_lab.strategies.meanvar.nine import (
-    MIN_SLOPE_MONTHS,
-    NineInputs,
-    ar1_annual,
-    ar1_forecast_sum,
-)
+from portfolio_lab.research.forecaster.nine import ar1_annual, ar1_forecast_sum
+from portfolio_lab.strategies.meanvar.nine import MIN_SLOPE_MONTHS, NineInputs
 
 SYMBOLS = [f"S{k}" for k in range(6)]
 

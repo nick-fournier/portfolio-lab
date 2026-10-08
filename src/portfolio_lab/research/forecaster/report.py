@@ -1,13 +1,14 @@
-"""Summary of the forecaster for the Forecasts page (``plab forecast publish``).
+"""Summary of the forecaster for the Forecasts page, rebuilt with the forecasts nightly.
 
-Graded on unseen months from ``walk.FIRST_GRADED``, on the stock-months all three forecasts
-cover: the forecaster (``nine``), the previous forecaster (``walk``: linear + trees averaged
-with the nets) and production's (``baseline``: trailing one-year return). Headline grades of
+Graded on unseen months from :data:`FIRST_GRADED`, on the stock-months both forecasts
+cover: the nine-term forecaster (``nine``) and production's expected return
+(``baseline``: the trailing one-year return). Outcomes are each stock's return relative to
+the month's average stock, so the two are graded on the same footing. Headline grades of
 each; IC by year and 12-month trailing IC; forecast against outcome by forecast group; the
-best and worst forecast tenths. Outcomes are each stock's return relative to the month's
-average stock, so the three are graded on the same footing. Also graded where the strategy
-picks: among the month's :data:`LIQUID` most liquid stocks, the IC and the compounded return
-of the :data:`TOP` best-forecast stocks held in equal weights.
+best and worst forecast tenths. Also graded where the strategies pick, among the month's
+:data:`LIQUID` most liquid stocks: the IC, the compounded return of the :data:`TOP`
+best-forecast stocks held in equal weights, and forecast against outcome after Grinold's
+rule (the forecasts as class 2 hands them to the optimizer, ``strategies.meanvar.nine``).
 """
 
 import json
@@ -16,87 +17,70 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import polars as pl
 
-from portfolio_lab.research.forecaster import baseline, grade, nine, walk
+from portfolio_lab.research.forecaster import baseline, grade, nine
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.scoreboard import forward_returns
 
 SUMMARY = "summary.json"
-#: The forecast and its pieces, as graded on the page.
+#: First year graded (the forecaster needs earlier months to learn from).
+FIRST_GRADED = 2009
+#: The two forecasts, as graded on the page.
 PIECES = {
-    "forecast": "Forecast: least squares on nine terms",
-    "previous": "Previous forecaster: linear + trees, averaged with the nets",
-    "production": "Production's forecast: trailing one-year return",
+    "forecast": "Class 2: least squares on nine terms",
+    "production": "Class 1 (production): trailing one-year return",
 }
 TRAILING = 12
-#: The strategy's candidates: this many most liquid stocks each month.
+#: The strategies' candidates: this many most liquid stocks each month.
 LIQUID = 400
 #: Stocks held in the equal-weight grade.
 TOP = 30
+#: Sessions of prices behind Grinold's volatility and AR(1) spread (the strategies' window).
+WINDOW = 252
+MIN_COVERAGE = 0.95
+GRADES = ("ic", "ic_t", "months_right", "years_right", "years", "slope", "r2", "tenth_yr",
+          "ic_by_size")  # fmt: skip
 
 
-def build(
-    forecasts: pl.DataFrame,
-    previous: pl.DataFrame,
-    production: pl.DataFrame,
-    liquid: pl.DataFrame | None = None,
-) -> dict[str, Any]:
+def build(combined: pl.DataFrame, liquid: pl.DataFrame, grinold: pl.DataFrame) -> dict[str, Any]:
     """The page's summary.
 
     Args:
-        forecasts: The forecaster's forecasts (``nine.walk``'s output).
-        previous: The previous forecaster's saved forecasts (``walk.run``'s output).
-        production: Production's expected return (``baseline.trailing``).
+        combined: date, symbol, ``actual`` (next month relative to the average stock),
+            ``size`` (market value's percentile, centered on 0), ``forecast`` and
+            ``production``; from :data:`FIRST_GRADED`.
         liquid: date, symbol, ``liquidity`` (higher = more liquid) and ``r`` (next month's
-            return) for grading among the most liquid stocks; ``None`` leaves that out.
+            return), for grading among the most liquid stocks.
+        grinold: date, symbol, ``forecast`` (monthly, over the T-bill, in Grinold's form)
+            and ``actual`` (next month over the T-bill), for the most liquid stocks.
     """
-    combined = (
-        walk.combine(previous)
-        .select("date", "symbol", "actual", "size", pl.col("forecast").alias("previous"))
-        .filter(pl.col("date").dt.year() >= walk.FIRST_GRADED)
-        .join(forecasts.select("date", "symbol", "forecast"), on=["date", "symbol"])
-        .join(production, on=["date", "symbol"])
-    )
-    keys = (
-        "ic",
-        "ic_t",
-        "months_right",
-        "years_right",
-        "years",
-        "slope",
-        "r2",
-        "tenth_yr",
-        "ic_by_size",
-    )
     pieces = {}
     for col, label in PIECES.items():
         r = grade.report(combined.with_columns(pl.col(col).alias("forecast")))
-        pieces[col] = {"label": label, **{k: r[k] for k in keys}}
-        if liquid is not None:
-            pieces[col].update(_liquid_grades(combined, liquid, col))
+        pieces[col] = {"label": label, **{k: r[k] for k in GRADES},
+                       **_liquid_grades(combined, liquid, col)}  # fmt: skip
     head = grade.report(combined)
-    refs = {"old": "production", "prev": "previous"}
-    by_year = {key: {r["year"]: r["ic"] for r in pieces_yearly(combined, col)}
-               for key, col in refs.items()}  # fmt: skip
-    yearly = [{**r, **{key: by_year[key].get(r["year"]) for key in refs}} for r in head["yearly"]]
-    trailing = _trailing(combined, "forecast", "ic")
-    for key, col in refs.items():
-        trailing = trailing.join(_trailing(combined, col, key), on="date")
-    tenths = _tenths(combined, "forecast")
-    for prefix, col in (("p_", "production"), ("q_", "previous")):
-        tenths = tenths.join(
-            _tenths(combined, col).rename({"top": f"{prefix}top", "bottom": f"{prefix}bottom"}),
-            on="date",
-        )
-    cols = ("top", "bottom", "p_top", "p_bottom", "q_top", "q_bottom")
+    old = {r["year"]: r["ic"] for r in grade.report(
+        combined.with_columns(pl.col("production").alias("forecast")))["yearly"]}  # fmt: skip
+    yearly = [{**r, "old": old.get(r["year"])} for r in head["yearly"]]
+    trailing = _trailing(combined, "forecast", "ic").join(
+        _trailing(combined, "production", "old"), on="date"
+    )
+    tenths = _tenths(combined, "forecast").join(
+        _tenths(combined, "production").rename({"top": "p_top", "bottom": "p_bottom"}), on="date"
+    )
+    cols = ("top", "bottom", "p_top", "p_bottom")
     growth = tenths.sort("date").with_columns((1 + pl.col(c)).cum_prod().alias(c) for c in cols)
-    months = grade.grade_months(combined)
+    after = grade.fit_bins(grinold)
+    x, a = after["forecast"].to_numpy(), after["actual"].to_numpy()
     return {
         "start": str(head["first"]), "end": str(head["last"]), "months": head["months"],
         # how much a year's IC moves by chance
-        "yearly_noise": months["ic"].std() / 12**0.5,
+        "yearly_noise": grade.grade_months(combined)["ic"].std() / 12**0.5,
         "pieces": pieces, "yearly": yearly, "bins": head["bins"],
+        "grinold_bins": after.to_dicts(), "grinold_slope": float(np.polyfit(x, a, 1)[0]),
         "trailing": trailing.drop_nulls().sort("date").to_dicts(),
         "tenths": growth.with_columns(pl.col("date").cast(pl.String)).to_dicts(),
     }  # fmt: skip
@@ -139,11 +123,6 @@ def _tenths(combined: pl.DataFrame, col: str) -> pl.DataFrame:
     )
 
 
-def pieces_yearly(combined: pl.DataFrame, col: str) -> list[dict]:
-    """IC by year of one piece."""
-    return grade.report(combined.with_columns(pl.col(col).alias("forecast")))["yearly"]
-
-
 def liquid_returns(panel: Panel, month_ends: list) -> pl.DataFrame:
     """date, symbol, ``liquidity`` (trailing dollar volume) and ``r`` (next month's return)."""
     frames = []
@@ -151,19 +130,71 @@ def liquid_returns(panel: Panel, month_ends: list) -> pl.DataFrame:
         i, j = panel.date_index[day], panel.date_index[nxt]
         frames.append(pl.DataFrame({
             "date": [day] * len(panel.symbols), "symbol": panel.symbols,
-            "liquidity": panel.field("adv")[i], "r": forward_returns(panel, i, j - i),
+            "liquidity": panel.field("adv")[i].astype(np.float64),
+            "r": forward_returns(panel, i, j - i).astype(np.float64),
         }))  # fmt: skip
     return pl.concat(frames).with_columns(pl.col("liquidity", "r").fill_nan(None))
 
 
-def publish(source: Path, dest: Path, panel: Panel) -> Path:
-    """Write :func:`build`'s summary of ``source``'s forecasts into the ``dest`` folder."""
-    dest.mkdir(parents=True, exist_ok=True)
-    path = dest / SUMMARY
-    forecasts = pl.read_parquet(source / nine.FILE)
-    previous = pl.read_parquet(source / "forecasts.parquet")
+def grinold_form(panel: Panel, forecasts: pl.DataFrame, liquid: pl.DataFrame) -> pl.DataFrame:
+    """The :data:`LIQUID` most liquid stocks' forecasts in Grinold's form, each month.
+
+    As class 2 builds them for its candidates: ``k x volatility x z``, with ``z`` the
+    forecast standardized across the stocks, volatility over the last :data:`WINDOW`
+    sessions and ``k`` matching the spread of their AR(1) expected returns
+    (``nine.ar1_annual``); monthly, over the T-bill.
+    """
+    rank = pl.col("liquidity").rank("ordinal", descending=True).over("date")
+    pool = forecasts.join(liquid.select("date", "symbol", "liquidity"), on=["date", "symbol"])
+    pool = pool.filter(rank <= LIQUID).drop_nulls(["forecast", "actual"])
+    rets = panel.field("ret_cc")
+    frames = []
+    for (day,), month in pool.group_by("date"):
+        i = panel.date_index[day]
+        if i < WINDOW:
+            continue
+        cols = [panel.symbol_index[s] for s in month["symbol"]]
+        window = rets[i - WINDOW + 1 : i + 1][:, cols].astype(np.float64)
+        ok = np.isfinite(window).mean(axis=0) >= MIN_COVERAGE
+        prices = pd.DataFrame(np.cumprod(1 + np.nan_to_num(window[:, ok]), axis=0),
+                              columns=np.asarray(month["symbol"])[ok])  # fmt: skip
+        reference = nine.ar1_annual(prices)
+        f = pd.Series(month["forecast"].to_numpy(), index=month["symbol"]).reindex(reference.index)
+        if len(f) < 2 or f.std() == 0:
+            continue
+        vol = prices[reference.index].pct_change().std() * nine.TRADING_DAYS**0.5
+        raw = (f - f.mean()) / f.std() * vol
+        k = float(reference.std() / raw.std()) if raw.std() > 0 else 1.0
+        actual = dict(zip(month["symbol"], month["actual"], strict=True))
+        frames.append(pl.DataFrame({
+            "date": [day] * len(raw), "symbol": list(raw.index),
+            "forecast": (k * raw / 12).to_numpy(), "actual": [actual[s] for s in raw.index],
+        }))  # fmt: skip
+    return pl.concat(frames)
+
+
+def publish(folder: Path, panel: Panel, monthly: pl.DataFrame) -> Path:
+    """Write :func:`build`'s summary of ``folder``'s forecasts (``nine.FILE``) into it.
+
+    Args:
+        folder: The forecaster's results (``DataPaths.forecaster``).
+        panel: Prices, for production's forecast, liquidity and outcomes.
+        monthly: The monthly stock inputs, for each stock's size.
+    """
+    forecasts = pl.read_parquet(folder / nine.FILE).filter(pl.col("date").dt.year() >= FIRST_GRADED)
     months = sorted(forecasts["date"].unique().to_list())
-    production = baseline.trailing(panel, months)
-    summary = build(forecasts, previous, production, liquid_returns(panel, months))
+    size = monthly.select(
+        "date", "symbol",
+        (pl.col("market_value").rank().over("date") / pl.len().over("date") - 0.5).alias("size"),
+    )  # fmt: skip
+    combined = (
+        forecasts.select("date", "symbol", "forecast",
+                         (pl.col("actual") - pl.col("actual").mean().over("date")).alias("actual"))
+        .join(baseline.trailing(panel, months), on=["date", "symbol"])
+        .join(size, on=["date", "symbol"], how="left")
+    )  # fmt: skip
+    liquid = liquid_returns(panel, months)
+    summary = build(combined, liquid, grinold_form(panel, forecasts, liquid))
+    path = folder / SUMMARY
     path.write_text(json.dumps(summary, indent=1, default=str))
     return path

@@ -129,11 +129,6 @@ class DataPaths:
         return self.root / "derived" / "fundamentals.parquet"
 
     @property
-    def characteristics(self) -> Path:
-        """Extra monthly stock inputs from Sharadar (``research.characteristics``)."""
-        return self.root / "features" / "characteristics.parquet"
-
-    @property
     def forecaster(self) -> Path:
         """The next-month forecaster's data, forecasts and grades (``research.forecaster``)."""
         return self.root / "results" / "forecaster"
