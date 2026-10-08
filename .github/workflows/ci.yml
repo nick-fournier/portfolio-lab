@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# A newer push cancels an older run still in progress, so an older build can never
+# finish last and overwrite :latest (two merges 21 s apart did, 2026-10-08).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     runs-on: ubuntu-latest
