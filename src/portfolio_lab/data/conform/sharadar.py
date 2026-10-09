@@ -183,6 +183,9 @@ def filings(raw: Path, ids: ids_.Ids, sids: pl.DataFrame, actions: pl.DataFrame)
         )
         .rename(CONCEPTS | {"sharesbas": "shares_out"})
         .with_columns(pl.col(c).abs() for c in OUTFLOWS)
+        # a renamed company's filings come back under its new ticker: one version per sid
+        .sort("lastupdated", "asof")
+        .unique(["sid", "filed", "period_end", "period"], keep="last", maintain_order=True)
         .with_row_index("_r")
     )  # fmt: skip
     splits = actions.filter(pl.col("action") == "split").select(

@@ -9,7 +9,7 @@ import pytest
 
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.data import ids as ids_
-from portfolio_lab.data import reader
+from portfolio_lab.data import quality, reader
 from portfolio_lab.data.conform import sharadar
 from portfolio_lab.data.sources.sharadar import MAPS, UPDATES, keep_ticker_map
 from tests.data.test_hive import ACTIONS, TICKERS
@@ -82,6 +82,24 @@ def test_a_ticker_renamed_after_the_bulk_download_keeps_its_history(root):
         [_fund("MN", "2022-02-15", "2021-12-31", 50, 10, "2022-07-01")]))  # fmt: skip
     sharadar.update(root)
     assert reader.read(root, "filings")["sid"].to_list() == [200]
+
+
+def test_a_renamed_ticker_restating_a_filing_does_not_duplicate_it(root):
+    """The bulk rows say NEW; after a rename, the nightly update sends the same filing as NEWER."""
+    raw = DataPaths(root).raw(sharadar.SOURCE)
+    (raw / MAPS).mkdir()
+    pl.DataFrame({"ticker": ["NEWER"], "permaticker": ["200"]}).write_parquet(
+        raw / MAPS / "20261008.parquet"
+    )
+    (raw / UPDATES).mkdir()
+    pl.DataFrame([_fund("NEWER", "2022-02-15", "2021-12-31", 200, 11, "2026-10-08")]).write_csv(
+        raw / UPDATES / "20261008.csv"
+    )
+    sharadar.update(root)
+    f = reader.read(root, "filings").sort("filed")
+    assert f["sid"].to_list() == [200, 200]
+    assert f["net_income"].to_list() == [11.0, 12.0]  # the newer version wins
+    assert quality.invariants(root) == []  # no duplicate keys in the stored table
 
 
 def test_the_ticker_map_is_kept_only_when_it_changes(root):
