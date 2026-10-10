@@ -1,4 +1,4 @@
-"""``plab forecast ...``: the next-month forecaster (``research.forecaster``).
+"""``plab forecast ...``: the next-month forecaster (``forecasters``).
 
 The nightly derive step runs both (``jobs.tasks.derive_task``); these are for running them
 by hand: ``nine`` fits the forecaster month by month and ``publish`` writes the Forecasts
@@ -11,7 +11,7 @@ import typer
 from portfolio_lab.core.config import get_settings
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
-from portfolio_lab.research.forecaster import nine, report
+from portfolio_lab.forecasters import nine, report
 from portfolio_lab.research.panel import Panel
 
 forecast_app = typer.Typer(help="Next-month stock forecaster.")
@@ -19,7 +19,7 @@ forecast_app = typer.Typer(help="Next-month stock forecaster.")
 
 @forecast_app.command("nine")
 def nine_cmd() -> None:
-    """Fit the forecaster month by month and save its forecasts (research.forecaster.nine)."""
+    """Fit the forecaster month by month and save its forecasts (forecasters.nine)."""
     from portfolio_lab.jobs.tasks import RESEARCH_RULES  # noqa: PLC0415 - avoids a cycle
 
     data_dir = get_settings().data_dir
@@ -33,7 +33,7 @@ def nine_cmd() -> None:
 
 @forecast_app.command("publish")
 def publish_cmd() -> None:
-    """Write the Forecasts page's summary (research.forecaster.report)."""
+    """Write the Forecasts page's summary (forecasters.report)."""
     data_dir = get_settings().data_dir
     paths = DataPaths(data_dir)
     path = report.publish(paths.forecaster, Panel.load(data_dir), pl.read_parquet(paths.features))

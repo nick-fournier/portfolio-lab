@@ -37,10 +37,10 @@ from portfolio_lab.data.ingest.universe import current_symbols, ingest_universe
 from portfolio_lab.data.sources import sharadar as sharadar_api
 from portfolio_lab.data.sources.alpaca import make_client
 from portfolio_lab.data.sources.tiingo import fetch_fund_history
+from portfolio_lab.forecasters import nine, report
 from portfolio_lab.research.conditions import caution_dial, conditional_ic
 from portfolio_lab.research.context import STOCK_FEATURES
 from portfolio_lab.research.features import FEATURES
-from portfolio_lab.research.forecaster import nine, report
 from portfolio_lab.research.funds import FUNDS, compare
 from portfolio_lab.research.panel import EligibilityRules, Panel
 from portfolio_lab.research.scoreboard import HORIZON, evaluate, summarize
@@ -64,7 +64,7 @@ PRODUCTION: tuple[str, dict[str, Any]] = (
 )  # fmt: skip
 #: "Forecaster" (class 2): the same pool, Kelly and bear switch as :data:`PRODUCTION`, with
 #: the nine-term forecasts in Grinold's form (T-bill + sqrt(12) x IC x volatility x z, honest
-#: expected returns) and the price covariance, no rebound switch (``strategies.meanvar.nine``).
+#: expected returns) and the price covariance, no rebound switch (``forecasters.grinold``).
 #: Kelly bets 16x as hard as full Kelly (risk aversion 1/16), the best of 1 .. 1/64 and 0 on
 #: the scratch hive 2005-2026 (22.9% at 1, 28.9% at 1/16) and a monthly walk-forward pick (#74).
 CLASS_2: tuple[str, dict[str, Any]] = (

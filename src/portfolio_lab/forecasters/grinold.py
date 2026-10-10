@@ -1,7 +1,7 @@
 """Class 2's expected returns: the nine-term forecasts in Grinold's form.
 
 **Expected returns** (:meth:`NineInputs.expected`). The forecast for each candidate
-(``research.forecaster.nine``, next month over the T-bill) is put in Grinold's form,
+(``forecasters.nine``, next month over the T-bill) is put in Grinold's form,
 ``T-bill + sqrt(12) x IC x volatility x z``: ``z`` is the forecast standardized across the
 candidates, volatility the stock's annual volatility over the price window, and IC the
 forecast's skill, its average monthly rank correlation with outcomes over every month whose
@@ -17,7 +17,7 @@ from pathlib import Path
 import pandas as pd
 import polars as pl
 
-from portfolio_lab.research.forecaster import grade, nine
+from portfolio_lab.forecasters import grade, nine
 
 TRADING_DAYS = 252
 MIN_IC_MONTHS = nine.MIN_IC_MONTHS

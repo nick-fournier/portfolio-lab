@@ -1,6 +1,6 @@
 # Forecaster log
 
-What was tried for the next-month stock forecaster (`research.forecaster`), and why each
+What was tried for the next-month stock forecaster (`forecasters`), and why each
 variant is or is not the front runner. Newest decisions first within each section.
 
 ## How variants are judged
@@ -23,7 +23,7 @@ portfolio yardstick described in its section.
 
 ## Front runner (since 2026-10-07): least squares on nine terms
 
-`research.forecaster.nine`, run with `plab forecast nine`. Rebuilt from scratch after the
+`forecasters.nine`, run with `plab forecast nine`. Rebuilt from scratch after the
 previous forecaster (below) lost to plain momentum inside the portfolio: it gave momentum one
 small vote among 103 inputs, so its top picks among the liquid stocks earned less than the
 trailing-return ranking it was meant to beat.

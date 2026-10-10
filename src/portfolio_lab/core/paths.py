@@ -130,7 +130,7 @@ class DataPaths:
 
     @property
     def forecaster(self) -> Path:
-        """The next-month forecaster's data, forecasts and grades (``research.forecaster``)."""
+        """The next-month forecaster's data, forecasts and grades (``forecasters``)."""
         return self.root / "results" / "forecaster"
 
     @property

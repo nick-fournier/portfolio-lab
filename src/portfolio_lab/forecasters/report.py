@@ -8,7 +8,7 @@ each; IC by year and 12-month trailing IC; forecast against outcome by forecast 
 best and worst forecast tenths. Also graded where the strategies pick, among the month's
 :data:`LIQUID` most liquid stocks: the IC, the compounded return of the :data:`TOP`
 best-forecast stocks held in equal weights, and forecast against outcome after Grinold's
-rule (the forecasts as class 2 hands them to the optimizer, ``strategies.meanvar.nine``).
+rule (the forecasts as class 2 hands them to the optimizer, ``forecasters.grinold``).
 """
 
 import json
@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from portfolio_lab.research.forecaster import baseline, grade, nine
+from portfolio_lab.forecasters import baseline, grade, nine
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.scoreboard import forward_returns
 

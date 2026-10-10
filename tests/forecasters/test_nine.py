@@ -4,7 +4,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from portfolio_lab.research.forecaster import nine, report
+from portfolio_lab.forecasters import nine, report
 
 
 def _month_end(k: int) -> date:

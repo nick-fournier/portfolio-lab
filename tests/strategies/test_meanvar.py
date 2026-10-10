@@ -7,10 +7,10 @@ import pandas as pd
 import pytest
 
 from portfolio_lab.backtest.engine import BacktestConfig, _params, describe, label, run
+from portfolio_lab.forecasters import trailing as forecast_mod
+from portfolio_lab.forecasters.trailing import Forecaster, ForecastSpec, forecast_one
 from portfolio_lab.research.dataview import DataView
 from portfolio_lab.strategies.base import create
-from portfolio_lab.strategies.meanvar import forecast as forecast_mod
-from portfolio_lab.strategies.meanvar.forecast import Forecaster, ForecastSpec, forecast_one
 from portfolio_lab.strategies.meanvar.optimize import _within_bounds, optimize
 
 GROWTH = 0.0004  # daily

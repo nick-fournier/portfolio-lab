@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from portfolio_lab.research.forecaster import nine
+from portfolio_lab.forecasters import nine
+from portfolio_lab.forecasters.grinold import NineInputs
 from portfolio_lab.strategies.base import create
-from portfolio_lab.strategies.meanvar.nine import NineInputs
 
 SYMBOLS = [f"S{k}" for k in range(6)]
 

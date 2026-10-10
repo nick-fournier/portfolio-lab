@@ -8,19 +8,19 @@ from typing import ClassVar
 import pandas as pd
 
 from portfolio_lab.core.calendar import Frequency
-from portfolio_lab.research import regimes, stress
-from portfolio_lab.research.dataview import DataView
-from portfolio_lab.research.piotroski import PIOTROSKI, health_scores
-from portfolio_lab.strategies import explain
-from portfolio_lab.strategies.base import Weights, register
-from portfolio_lab.strategies.meanvar.forecast import (
+from portfolio_lab.forecasters.grinold import NineInputs
+from portfolio_lab.forecasters.trailing import (
     MU_BOUNDS,
     TRADING_DAYS,
     Forecaster,
     ForecastSpec,
     price_windows,
 )
-from portfolio_lab.strategies.meanvar.nine import NineInputs
+from portfolio_lab.research import regimes, stress
+from portfolio_lab.research.dataview import DataView
+from portfolio_lab.research.piotroski import PIOTROSKI, health_scores
+from portfolio_lab.strategies import explain
+from portfolio_lab.strategies.base import Weights, register
 from portfolio_lab.strategies.meanvar.optimize import optimize
 from portfolio_lab.strategies.meanvar.soft import SoftSelector
 
@@ -95,7 +95,7 @@ class MeanVar:
             (``strategies.meanvar.soft``): ``average`` over several pool and list sizes,
             ``taper`` weight caps near the edges, or ``sticky`` (easy in, slow out).
         expected: Expected returns: ``trailing`` (``model``'s, production) or ``nine`` (the
-            nine-term forecasts in Grinold's form, ``strategies.meanvar.nine``; class 2).
+            nine-term forecasts in Grinold's form, ``forecasters.grinold``; class 2).
         bear_defense: In a bear market (``research.regimes.market_state``) hold the
             minimum-variance portfolio instead of max Sharpe.
         rebound: In a rebound (panic easing after a deep fall), when past losers tend to beat
