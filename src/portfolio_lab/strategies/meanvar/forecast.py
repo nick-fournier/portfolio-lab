@@ -9,8 +9,7 @@ forecasts with an annual risk-free rate):
   it is fitted by least squares; this matches statsmodels' maximum-likelihood fit (checked
   to 3 decimals on the coefficients) without its occasional convergence failures.
 - ``historical_mean`` (default): trailing geometric mean return, the textbook input with no
-  forecast. An AR(1) on daily log returns used to be the default; daily returns have almost
-  no memory, so it ranked stocks like the trailing mean and held the same portfolios (#52).
+  forecast.
 
 Fits run in a process pool and are cached per (symbol, decision date), so re-running a
 backtest or refreshing it weekly only fits new dates. Failed fits are cached as NaN so

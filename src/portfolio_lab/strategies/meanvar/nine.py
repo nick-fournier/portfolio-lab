@@ -4,9 +4,10 @@
 (``research.forecaster.nine``, next month over the T-bill) is put in Grinold's form,
 ``T-bill + k x volatility x z``: ``z`` is the forecast standardized across the candidates,
 volatility the stock's annual volatility over the price window, and ``k`` makes the
-spread of the result match the spread of an AR(1) model's expected returns over the same
-window (:func:`ar1_annual`), so the optimizer sees returns of a familiar size. Candidates
-without a forecast, or whose AR(1) fails, are left out.
+spread of the result match the spread of production's expected returns (each candidate's
+trailing annual return over the same window, :func:`trailing_annual`), so the optimizer sees
+returns of the size production gives it. Candidates without a forecast, or too short a price
+history, are left out.
 
 **Covariance** (:meth:`NineInputs.covariance`): the average of three estimates, each
 annual:
@@ -33,7 +34,7 @@ import polars as pl
 from sklearn.covariance import LedoitWolf
 
 from portfolio_lab.research.forecaster import nine
-from portfolio_lab.research.forecaster.nine import ar1_annual
+from portfolio_lab.research.forecaster.nine import trailing_annual
 
 TRADING_DAYS = 252
 #: Forecasts this old or newer count for a rebalance.
@@ -97,7 +98,7 @@ class NineInputs:
             risk_free: Annual T-bill rate.
         """
         forecast = self.forecasts(asof)
-        reference = ar1_annual(prices)
+        reference = trailing_annual(prices)
         names = [s for s in reference.index if s in forecast]
         f = pd.Series({s: forecast[s] for s in names}, dtype=float)
         if len(f) < 2 or f.std() == 0:

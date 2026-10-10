@@ -6,7 +6,7 @@ import polars as pl
 import pytest
 
 from portfolio_lab.research.forecaster import nine
-from portfolio_lab.research.forecaster.nine import ar1_annual, ar1_forecast_sum
+from portfolio_lab.research.forecaster.nine import trailing_annual
 from portfolio_lab.strategies.base import create
 from portfolio_lab.strategies.meanvar.nine import MIN_SLOPE_MONTHS, NineInputs
 
@@ -39,11 +39,11 @@ def _prices(seed=1, days=260):
                         index=index, columns=SYMBOLS)  # fmt: skip
 
 
-def test_expected_returns_keep_the_forecasts_order_with_the_ar1_spread(tmp_path):
+def test_expected_returns_keep_the_forecasts_order_with_productions_spread(tmp_path):
     inputs = _inputs(tmp_path)
     asof = _month(30) + timedelta(days=2)
     mu = inputs.expected(asof, _prices(), risk_free=0.03)
-    assert mu.std() == pytest.approx(ar1_annual(_prices()).std())
+    assert mu.std() == pytest.approx(trailing_annual(_prices()).std())
     forecast = pd.Series(inputs.forecasts(asof))
     vol = _prices().pct_change().std() * 252**0.5
     raw = ((forecast - forecast.mean()) / forecast.std() * vol).reindex(mu.index)
@@ -51,17 +51,11 @@ def test_expected_returns_keep_the_forecasts_order_with_the_ar1_spread(tmp_path)
     assert inputs.expected(_month(30) + timedelta(days=20), _prices(), 0.03).empty
 
 
-def test_ar1_sum_matches_iterating_the_fitted_recursion():
-    rng = np.random.default_rng(4)
-    r = np.zeros(500)
-    for t in range(1, 500):
-        r[t] = 0.0004 + 0.3 * r[t - 1] + rng.normal(0, 0.01)
-    phi, c = np.polyfit(r[:-1], r[1:], 1)
-    path, last = [], r[-1]
-    for _ in range(21):
-        last = c + phi * last
-        path.append(last)
-    assert ar1_forecast_sum(r, 21) == pytest.approx(sum(path))
+def test_trailing_annual_is_productions_expected_return():
+    prices = _prices()
+    p = prices["S0"].to_numpy()
+    expected = (p[-1] / p[0]) ** (252 / (len(p) - 1)) - 1
+    assert trailing_annual(prices)["S0"] == pytest.approx(expected)
 
 
 def test_covariance_is_symmetric_positive_and_uses_only_known_months(tmp_path):

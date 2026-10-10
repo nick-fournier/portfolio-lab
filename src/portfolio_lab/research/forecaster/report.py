@@ -37,7 +37,7 @@ TRAILING = 12
 LIQUID = 400
 #: Stocks held in the equal-weight grade.
 TOP = 30
-#: Sessions of prices behind Grinold's volatility and AR(1) spread (the strategies' window).
+#: Sessions of prices behind Grinold's volatility and scale (the strategies' window).
 WINDOW = 252
 MIN_COVERAGE = 0.95
 GRADES = ("ic", "ic_t", "months_right", "years_right", "years", "slope", "r2", "tenth_yr",
@@ -141,8 +141,8 @@ def grinold_form(panel: Panel, forecasts: pl.DataFrame, liquid: pl.DataFrame) ->
 
     As class 2 builds them for its candidates: ``k x volatility x z``, with ``z`` the
     forecast standardized across the stocks, volatility over the last :data:`WINDOW`
-    sessions and ``k`` matching the spread of their AR(1) expected returns
-    (``nine.ar1_annual``); monthly, over the T-bill.
+    sessions and ``k`` matching the spread of their trailing annual returns
+    (``nine.trailing_annual``, production's expected returns); monthly, over the T-bill.
     """
     rank = pl.col("liquidity").rank("ordinal", descending=True).over("date")
     pool = forecasts.join(liquid.select("date", "symbol", "liquidity"), on=["date", "symbol"])
@@ -158,7 +158,7 @@ def grinold_form(panel: Panel, forecasts: pl.DataFrame, liquid: pl.DataFrame) ->
         ok = np.isfinite(window).mean(axis=0) >= MIN_COVERAGE
         prices = pd.DataFrame(np.cumprod(1 + np.nan_to_num(window[:, ok]), axis=0),
                               columns=np.asarray(month["symbol"])[ok])  # fmt: skip
-        reference = nine.ar1_annual(prices)
+        reference = nine.trailing_annual(prices)
         f = pd.Series(month["forecast"].to_numpy(), index=month["symbol"]).reindex(reference.index)
         if len(f) < 2 or f.std() == 0:
             continue
