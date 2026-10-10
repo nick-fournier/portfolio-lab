@@ -27,7 +27,6 @@ def nine_cmd() -> None:
     data = nine.table(Panel.load(data_dir, rules=RESEARCH_RULES), pl.read_parquet(paths.features))
     forecasts = nine.walk(data)
     write_parquet_atomic(forecasts, paths.forecaster / nine.FILE)
-    write_parquet_atomic(nine.slopes(data), paths.forecaster / nine.SLOPES)
     typer.echo(f"{forecasts.height:,} forecasts, {forecasts['date'].n_unique()} months "
                f"({forecasts['date'].min()} to {forecasts['date'].max()})")  # fmt: skip
 
