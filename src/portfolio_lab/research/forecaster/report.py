@@ -139,17 +139,21 @@ def liquid_returns(panel: Panel, month_ends: list) -> pl.DataFrame:
 def grinold_form(panel: Panel, forecasts: pl.DataFrame, liquid: pl.DataFrame) -> pl.DataFrame:
     """The :data:`LIQUID` most liquid stocks' forecasts in Grinold's form, each month.
 
-    As class 2 builds them for its candidates: ``k x volatility x z``, with ``z`` the
-    forecast standardized across the stocks, volatility over the last :data:`WINDOW`
-    sessions and ``k`` matching the spread of their trailing annual returns
-    (``nine.trailing_annual``, production's expected returns); monthly, over the T-bill.
+    As class 2 builds them for its candidates: ``sqrt(12) x IC x volatility x z``, with ``z``
+    the forecast standardized across the stocks, volatility over the last :data:`WINDOW`
+    sessions and IC the forecast's average monthly rank IC over every earlier month (at least
+    ``nine.MIN_IC_MONTHS``); monthly, over the T-bill.
     """
     rank = pl.col("liquidity").rank("ordinal", descending=True).over("date")
     pool = forecasts.join(liquid.select("date", "symbol", "liquidity"), on=["date", "symbol"])
     pool = pool.filter(rank <= LIQUID).drop_nulls(["forecast", "actual"])
     rets = panel.field("ret_cc")
+    ics = grade.grade_months(forecasts.select("date", "symbol", "forecast", "actual"))
     frames = []
     for (day,), month in pool.group_by("date"):
+        past = ics.filter(pl.col("date") < day)["ic"]
+        if past.len() < nine.MIN_IC_MONTHS:
+            continue
         i = panel.date_index[day]
         if i < WINDOW:
             continue
@@ -158,13 +162,12 @@ def grinold_form(panel: Panel, forecasts: pl.DataFrame, liquid: pl.DataFrame) ->
         ok = np.isfinite(window).mean(axis=0) >= MIN_COVERAGE
         prices = pd.DataFrame(np.cumprod(1 + np.nan_to_num(window[:, ok]), axis=0),
                               columns=np.asarray(month["symbol"])[ok])  # fmt: skip
-        reference = nine.trailing_annual(prices)
-        f = pd.Series(month["forecast"].to_numpy(), index=month["symbol"]).reindex(reference.index)
+        f = pd.Series(month["forecast"].to_numpy(), index=month["symbol"]).reindex(prices.columns)
         if len(f) < 2 or f.std() == 0:
             continue
-        vol = prices[reference.index].pct_change().std() * nine.TRADING_DAYS**0.5
+        vol = prices.pct_change().std() * nine.TRADING_DAYS**0.5
         raw = (f - f.mean()) / f.std() * vol
-        k = float(reference.std() / raw.std()) if raw.std() > 0 else 1.0
+        k = 12**0.5 * float(past.mean())
         actual = dict(zip(month["symbol"], month["actual"], strict=True))
         frames.append(pl.DataFrame({
             "date": [day] * len(raw), "symbol": list(raw.index),

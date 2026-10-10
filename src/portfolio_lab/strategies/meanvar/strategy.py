@@ -77,6 +77,8 @@ class MeanVar:
         lookback: Sessions of history for forecasts and covariance.
         horizon: Forecast horizon in sessions.
         max_weight: Cap on any single weight.
+        risk_aversion: How hard ``kelly`` bets: 1 is full Kelly, 1/16 bets 16 times as hard
+            (the same weights as multiplying every expected excess return by 16).
         min_fscore: If set, only stocks with a Piotroski F-score at least this high are
             candidates (the original optimizer's filter), before taking the most liquid.
         healthy_share: If set, only this share of eligible stocks with the highest
@@ -126,6 +128,7 @@ class MeanVar:
     lookback: int = 252
     horizon: int = 21
     max_weight: float = 0.10
+    risk_aversion: float = 1.0
     min_fscore: int | None = None
     healthy_share: float | None = None
     health_schedule: str | None = None
@@ -240,6 +243,9 @@ class MeanVar:
             "variance, the Kelly criterion), which concentrates more and takes more risk than "
             "the maximum-Sharpe mix",
         }[self.objective]
+        if self.objective == "kelly" and self.risk_aversion != 1:
+            objective += (f", betting {1 / self.risk_aversion:g} times as hard as full Kelly "
+                          f"(risk aversion {self.risk_aversion:g})")  # fmt: skip
         signal = (
             "the legacy ARIMA price trend"
             if self.model == "arima320_price"
@@ -293,7 +299,8 @@ class MeanVar:
         caps = None
         if self._caps is not None:
             caps = {s: self.max_weight * self._caps[s] for s in mu.index if s in self._caps}
-        return optimize(mu, prices, rf, objective, self.max_weight, caps=caps, cov=self._cov)
+        return optimize(mu, prices, rf, objective, self.max_weight, self.risk_aversion, caps=caps,
+                        cov=self._cov)  # fmt: skip
 
     def first_decision(self) -> date | None:
         """The first rebalance with inputs: the first forecast for ``expected="nine"``.

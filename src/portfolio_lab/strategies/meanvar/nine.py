@@ -2,12 +2,12 @@
 
 **Expected returns** (:meth:`NineInputs.expected`). The forecast for each candidate
 (``research.forecaster.nine``, next month over the T-bill) is put in Grinold's form,
-``T-bill + k x volatility x z``: ``z`` is the forecast standardized across the candidates,
-volatility the stock's annual volatility over the price window, and ``k`` makes the
-spread of the result match the spread of production's expected returns (each candidate's
-trailing annual return over the same window, :func:`trailing_annual`), so the optimizer sees
-returns of the size production gives it. Candidates without a forecast, or too short a price
-history, are left out.
+``T-bill + sqrt(12) x IC x volatility x z``: ``z`` is the forecast standardized across the
+candidates, volatility the stock's annual volatility over the price window, and IC the
+forecast's skill, its average monthly rank correlation with outcomes over every month whose
+outcome was known by the decision date (at least :data:`MIN_IC_MONTHS`). These are honest
+expected returns; how hard to bet on them is the optimizer's risk aversion
+(``risk_aversion``), not a scale on the forecasts. Candidates without a forecast are left out.
 
 **Covariance** (:meth:`NineInputs.covariance`): the average of three estimates, each
 annual:
@@ -33,10 +33,10 @@ import pandas as pd
 import polars as pl
 from sklearn.covariance import LedoitWolf
 
-from portfolio_lab.research.forecaster import nine
-from portfolio_lab.research.forecaster.nine import trailing_annual
+from portfolio_lab.research.forecaster import grade, nine
 
 TRADING_DAYS = 252
+MIN_IC_MONTHS = nine.MIN_IC_MONTHS
 #: Forecasts this old or newer count for a rebalance.
 MAX_AGE = timedelta(days=7)
 #: Months of payoffs needed for the factor covariance (else price only).
@@ -72,6 +72,8 @@ class NineInputs:
         self._forecasts = f.with_columns((pl.col("actual") - pl.col("forecast")).alias("err"))
         self._slopes = pl.read_parquet(self.folder / nine.SLOPES).sort("date")
         self._dates = sorted(f["date"].unique().to_list())
+        # month m's IC is known once its outcome is, at the next month's forecast
+        self._ic = grade.grade_months(f.select("date", "symbol", "forecast", "actual"))
 
     def first(self) -> date:
         """The first month with forecasts."""
@@ -90,23 +92,23 @@ class NineInputs:
         return dict(zip(month["symbol"], month["forecast"], strict=True))
 
     def expected(self, asof: date, prices: pd.DataFrame, risk_free: float) -> pd.Series:
-        """Annual expected returns in Grinold's form (module docs).
+        """Annual expected returns by Grinold's rule (module docs).
 
         Args:
             asof: The decision date.
             prices: The candidates' price window.
             risk_free: Annual T-bill rate.
         """
-        forecast = self.forecasts(asof)
-        reference = trailing_annual(prices)
-        names = [s for s in reference.index if s in forecast]
+        forecast, made = self.forecasts(asof), self._made(asof)
+        names = [s for s in prices.columns if s in forecast]
+        past = self._ic.filter(pl.col("date") < made)["ic"] if made else pl.Series([])
+        if len(names) < 2 or past.len() < MIN_IC_MONTHS:
+            return pd.Series(dtype=float)
         f = pd.Series({s: forecast[s] for s in names}, dtype=float)
-        if len(f) < 2 or f.std() == 0:
+        if f.std() == 0:
             return pd.Series(dtype=float)
         vol = prices[names].pct_change().std() * TRADING_DAYS**0.5
-        raw = (f - f.mean()) / f.std() * vol.reindex(names).fillna(0.0)
-        k = float(reference.reindex(names).std() / raw.std()) if raw.std() > 0 else 1.0
-        return risk_free + k * raw
+        return risk_free + 12**0.5 * float(past.mean()) * vol * (f - f.mean()) / f.std()
 
     def covariance(self, asof: date, prices: pd.DataFrame) -> pd.DataFrame:
         """The average of the price, factor and residual covariances (module docs)."""

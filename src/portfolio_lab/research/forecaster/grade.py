@@ -35,7 +35,8 @@ def grade_months(forecasts: pl.DataFrame, min_stocks: int = 50) -> pl.DataFrame:
         order = np.argsort(f)
         spread = float(a[order[-tenth:]].mean() - a[order[:tenth]].mean())
         rows.append({"date": day, "stocks": len(f), "ic": ic, "spread": spread})
-    return pl.DataFrame(rows).sort("date")
+    schema = {"date": pl.Date, "stocks": pl.Int64, "ic": pl.Float64, "spread": pl.Float64}
+    return pl.DataFrame(rows, schema=schema).sort("date")
 
 
 def fit_bins(forecasts: pl.DataFrame) -> pl.DataFrame:
