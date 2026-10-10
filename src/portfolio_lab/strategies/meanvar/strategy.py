@@ -96,8 +96,6 @@ class MeanVar:
             ``taper`` weight caps near the edges, or ``sticky`` (easy in, slow out).
         expected: Expected returns: ``trailing`` (``model``'s, production) or ``nine`` (the
             nine-term forecasts in Grinold's form, ``strategies.meanvar.nine``; class 2).
-        covariance: ``price`` (the prices' shrunk sample covariance) or ``thirds`` (the
-            average of price, factor and residual covariances, ``strategies.meanvar.nine``).
         bear_defense: In a bear market (``research.regimes.market_state``) hold the
             minimum-variance portfolio instead of max Sharpe.
         rebound: In a rebound (panic easing after a deep fall), when past losers tend to beat
@@ -135,7 +133,6 @@ class MeanVar:
     health_rank_pool: int | None = None
     soften: str | None = None
     expected: str = "trailing"
-    covariance: str = "price"
     bear_defense: bool = False
     rebound: str | None = None
     rebound_lookback: int = 21
@@ -171,7 +168,6 @@ class MeanVar:
         self._state: tuple[date, str] | None = None  # market state, once per rebalance
         self._held: dict[str, float] = {}
         self._nine: NineInputs | None = None
-        self._cov: pd.DataFrame | None = None  # covariance of the set being weighed
 
     example_columns: ClassVar[dict[str, str]] = {
         "Expected return (annual)": "pct",
@@ -299,8 +295,7 @@ class MeanVar:
         caps = None
         if self._caps is not None:
             caps = {s: self.max_weight * self._caps[s] for s in mu.index if s in self._caps}
-        return optimize(mu, prices, rf, objective, self.max_weight, self.risk_aversion, caps=caps,
-                        cov=self._cov)  # fmt: skip
+        return optimize(mu, prices, rf, objective, self.max_weight, self.risk_aversion, caps=caps)
 
     def first_decision(self) -> date | None:
         """The first rebalance with inputs: the first forecast for ``expected="nine"``.
@@ -442,9 +437,6 @@ class MeanVar:
             prices = prices[[s for s in prices.columns if s in mu.index]]
             if prices.shape[1] < 2:
                 return {}, pd.Series(dtype=float), pd.Series(dtype=float)
-        self._cov = None
-        if self.covariance == "thirds":
-            self._cov = self._nine_inputs().covariance(view.asof, prices)
         weights = self._optimize(mu, prices, view.risk_free(), self.objective)
         if self.risk_gauge and weights:
             weights = self._tilt(view, mu, prices, weights)

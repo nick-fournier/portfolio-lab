@@ -70,7 +70,7 @@ PRODUCTION: tuple[str, dict[str, Any]] = (
 CLASS_2: tuple[str, dict[str, Any]] = (
     "meanvar",
     {"health_rank_pool": 400, "soften": "taper", "bear_defense": True, "objective": "kelly",
-     "expected": "nine", "covariance": "price", "risk_aversion": 1 / 16, "title": "Forecaster"},
+     "expected": "nine", "risk_aversion": 1 / 16, "title": "Forecaster"},
 )  # fmt: skip
 #: The production models, drawn on the Overview and Compare charts against SPY and the best
 #: funds (every other strategy is listed in their tables but starts hidden on the chart).
@@ -250,7 +250,6 @@ def derive_task(settings: Settings) -> dict:
     data = nine.table(panel, pl.read_parquet(paths.features))
     forecasts = nine.walk(data)
     write_parquet_atomic(forecasts, paths.forecaster / nine.FILE)
-    write_parquet_atomic(nine.slopes(data), paths.forecaster / nine.SLOPES)
     out["forecasts"] = {"months": forecasts["date"].n_unique(), "latest": forecasts["date"].max()}
     del data
     report.publish(paths.forecaster, panel, pl.read_parquet(paths.features))

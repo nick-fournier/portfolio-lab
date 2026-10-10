@@ -3,11 +3,10 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 import polars as pl
-import pytest
 
 from portfolio_lab.research.forecaster import nine
 from portfolio_lab.strategies.base import create
-from portfolio_lab.strategies.meanvar.nine import MIN_SLOPE_MONTHS, NineInputs
+from portfolio_lab.strategies.meanvar.nine import NineInputs
 
 SYMBOLS = [f"S{k}" for k in range(6)]
 
@@ -25,9 +24,6 @@ def _inputs(tmp_path, months=40, seed=0) -> NineInputs:
                          "forecast": rng.normal(0, 0.01), "spy12": 0.1,
                          **{t: rng.normal() for t in nine.TERMS}})  # fmt: skip
     pl.DataFrame(rows).write_parquet(tmp_path / nine.FILE)
-    slopes = [{"date": _month(m), **{t: rng.normal(0, 0.01) for t in nine.TERMS}, "center": 0.08}
-              for m in range(months)]  # fmt: skip
-    pl.DataFrame(slopes).write_parquet(tmp_path / nine.SLOPES)
     return NineInputs(tmp_path)
 
 
@@ -52,23 +48,6 @@ def test_expected_returns_follow_grinolds_rule_with_the_ic_known_by_then(tmp_pat
     assert inputs.expected(_month(30) + timedelta(days=20), _prices(), 0.03).empty  # stale forecast
     inputs._ic = inputs._ic.head(5)
     assert inputs.expected(asof, _prices(), 0.03).empty  # too few graded months
-
-
-def test_covariance_is_symmetric_positive_and_uses_only_known_months(tmp_path):
-    inputs = _inputs(tmp_path)
-    prices = _prices()
-    cov = inputs.covariance(_month(35), prices)
-    assert list(cov.index) == SYMBOLS and np.allclose(cov, cov.T)
-    assert np.linalg.eigvalsh(cov.to_numpy()).min() > 0
-    early = inputs.covariance(_month(MIN_SLOPE_MONTHS - 2), prices)  # too few payoffs: price only
-    log_returns = np.log(prices).diff().dropna()
-    assert np.diag(early) == pytest.approx(log_returns.var().to_numpy() * 252, rel=0.2)
-    # rewriting months on or after the decision date changes nothing
-    changed = pl.read_parquet(tmp_path / nine.FILE).with_columns(
-        pl.when(pl.col("date") >= _month(35)).then(9.9).otherwise(pl.col("actual")).alias("actual")
-    )
-    changed.write_parquet(tmp_path / nine.FILE)
-    assert np.allclose(NineInputs(tmp_path).covariance(_month(35), prices), cov)
 
 
 def test_the_forecaster_starts_at_its_first_forecast(tmp_path):
