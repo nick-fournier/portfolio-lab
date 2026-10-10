@@ -1,6 +1,6 @@
-"""Forecasts page: next month's return for every stock (``research.forecaster``).
+"""Forecasts page: next month's return for every stock (``forecasters``).
 
-Reads the summary the nightly derive step writes (``research.forecaster.report``).
+Reads the summary the nightly derive step writes (``forecasters.report``).
 """
 
 import json
@@ -20,7 +20,7 @@ from portfolio_lab.web.charts import (
 )
 
 router = APIRouter()
-#: Written by ``research.forecaster.report`` (not imported: the site loads no model code).
+#: Written by ``forecasters.report`` (not imported: the site loads no model code).
 SUMMARY = "summary.json"
 #: Keys the page needs; an older summary lacks some until the nightly rebuild.
 REQUIRED = {"pieces", "yearly", "bins", "grinold_bins", "trailing", "tenths"}

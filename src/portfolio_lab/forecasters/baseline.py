@@ -1,6 +1,6 @@
 """Production's expected return, for comparison: each stock's trailing one-year return.
 
-The same model mean-variance uses (``strategies.meanvar.forecast``, ``historical_mean``): at
+The same model mean-variance uses (``forecasters.trailing``, ``historical_mean``): at
 each month end, the stock's growth over the last :data:`LOOKBACK` daily prices, as a pace
 per :data:`HORIZON` sessions. Stocks with bars on fewer than :data:`MIN_COVERAGE` of the
 window are left out; missing days count as no change (as the production code carries prices

@@ -11,9 +11,9 @@ from pathlib import Path
 
 import numpy as np
 
+from portfolio_lab.forecasters.trailing import Forecaster, ForecastSpec, price_windows
 from portfolio_lab.research.dataview import DataView
 from portfolio_lab.signals.base import Scores, register
-from portfolio_lab.strategies.meanvar.forecast import Forecaster, ForecastSpec, price_windows
 from portfolio_lab.strategies.momentum import momentum_scores
 
 

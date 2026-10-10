@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from portfolio_lab.research.forecaster import nine
+from portfolio_lab.forecasters import linear
+from portfolio_lab.forecasters.grinold import LinearInputs
 from portfolio_lab.strategies.base import create
-from portfolio_lab.strategies.meanvar.nine import NineInputs
 
 SYMBOLS = [f"S{k}" for k in range(6)]
 
@@ -15,16 +15,16 @@ def _month(k: int) -> date:
     return date(2010 + k // 12, k % 12 + 1, 28)
 
 
-def _inputs(tmp_path, months=40, seed=0) -> NineInputs:
+def _inputs(tmp_path, months=40, seed=0) -> LinearInputs:
     rng = np.random.default_rng(seed)
     rows = []
     for m in range(months):
         for s in SYMBOLS:
             rows.append({"date": _month(m), "symbol": s, "actual": rng.normal(0, 0.05),
                          "forecast": rng.normal(0, 0.01), "spy12": 0.1,
-                         **{t: rng.normal() for t in nine.TERMS}})  # fmt: skip
-    pl.DataFrame(rows).write_parquet(tmp_path / nine.FILE)
-    return NineInputs(tmp_path)
+                         **{t: rng.normal() for t in linear.TERMS}})  # fmt: skip
+    pl.DataFrame(rows).write_parquet(tmp_path / linear.FILE)
+    return LinearInputs(tmp_path)
 
 
 def _prices(seed=1, days=260):
@@ -52,6 +52,6 @@ def test_expected_returns_follow_grinolds_rule_with_the_ic_known_by_then(tmp_pat
 
 def test_the_forecaster_starts_at_its_first_forecast(tmp_path):
     _inputs(tmp_path)
-    strategy = create("meanvar", expected="nine", forecaster_dir=tmp_path)
+    strategy = create("meanvar", expected="linear", forecaster_dir=tmp_path)
     assert strategy.first_decision() == _month(0)
     assert create("meanvar").first_decision() is None

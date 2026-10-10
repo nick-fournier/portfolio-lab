@@ -8,19 +8,19 @@ from typing import ClassVar
 import pandas as pd
 
 from portfolio_lab.core.calendar import Frequency
-from portfolio_lab.research import regimes, stress
-from portfolio_lab.research.dataview import DataView
-from portfolio_lab.research.piotroski import PIOTROSKI, health_scores
-from portfolio_lab.strategies import explain
-from portfolio_lab.strategies.base import Weights, register
-from portfolio_lab.strategies.meanvar.forecast import (
+from portfolio_lab.forecasters.grinold import LinearInputs
+from portfolio_lab.forecasters.trailing import (
     MU_BOUNDS,
     TRADING_DAYS,
     Forecaster,
     ForecastSpec,
     price_windows,
 )
-from portfolio_lab.strategies.meanvar.nine import NineInputs
+from portfolio_lab.research import regimes, stress
+from portfolio_lab.research.dataview import DataView
+from portfolio_lab.research.piotroski import PIOTROSKI, health_scores
+from portfolio_lab.strategies import explain
+from portfolio_lab.strategies.base import Weights, register
 from portfolio_lab.strategies.meanvar.optimize import optimize
 from portfolio_lab.strategies.meanvar.soft import SoftSelector
 
@@ -94,8 +94,8 @@ class MeanVar:
         soften: With ``health_rank_pool``, choose candidates without hard cutoffs
             (``strategies.meanvar.soft``): ``average`` over several pool and list sizes,
             ``taper`` weight caps near the edges, or ``sticky`` (easy in, slow out).
-        expected: Expected returns: ``trailing`` (``model``'s, production) or ``nine`` (the
-            nine-term forecasts in Grinold's form, ``strategies.meanvar.nine``; class 2).
+        expected: Expected returns: ``trailing`` (``model``'s, production) or ``linear`` (the
+            nine-term forecasts in Grinold's form, ``forecasters.grinold``; class 2).
         bear_defense: In a bear market (``research.regimes.market_state``) hold the
             minimum-variance portfolio instead of max Sharpe.
         rebound: In a rebound (panic easing after a deep fall), when past losers tend to beat
@@ -167,7 +167,7 @@ class MeanVar:
         self._caps: dict[str, float] | None = None  # per-stock caps of the set being weighed
         self._state: tuple[date, str] | None = None  # market state, once per rebalance
         self._held: dict[str, float] = {}
-        self._nine: NineInputs | None = None
+        self._linear: LinearInputs | None = None
 
     example_columns: ClassVar[dict[str, str]] = {
         "Expected return (annual)": "pct",
@@ -298,19 +298,19 @@ class MeanVar:
         return optimize(mu, prices, rf, objective, self.max_weight, self.risk_aversion, caps=caps)
 
     def first_decision(self) -> date | None:
-        """The first rebalance with inputs: the first forecast for ``expected="nine"``.
+        """The first rebalance with inputs: the first forecast for ``expected="linear"``.
 
         Earlier months would sit in cash, so backtests start here.
         """
-        return self._nine_inputs().first() if self.expected == "nine" else None
+        return self._linear_inputs().first() if self.expected == "linear" else None
 
-    def _nine_inputs(self) -> NineInputs:
+    def _linear_inputs(self) -> LinearInputs:
         """The nine-term forecaster's results, loaded once."""
-        if self._nine is None:
+        if self._linear is None:
             if self.forecaster_dir is None:
-                raise RuntimeError("expected='nine' needs forecaster_dir (set by the runner)")
-            self._nine = NineInputs(self.forecaster_dir)
-        return self._nine
+                raise RuntimeError("expected='linear' needs forecaster_dir (set by the runner)")
+            self._linear = LinearInputs(self.forecaster_dir)
+        return self._linear
 
     def _healthy_set(self, view: DataView, among: list[str] | None) -> list[str]:
         """The healthiest ``healthy_share`` of candidates, refreshed per ``health_schedule``."""
@@ -431,8 +431,8 @@ class MeanVar:
         self._caps = caps
         windows = {s: prices[s].to_numpy() for s in prices.columns}
         mu = pd.Series(self._get_forecaster().forecast(view.asof, windows), dtype=float)
-        if self.expected == "nine":
-            mu = self._nine_inputs().expected(view.asof, prices, view.risk_free())
+        if self.expected == "linear":
+            mu = self._linear_inputs().expected(view.asof, prices, view.risk_free())
             mu = mu.clip(*MU_BOUNDS)
             prices = prices[[s for s in prices.columns if s in mu.index]]
             if prices.shape[1] < 2:

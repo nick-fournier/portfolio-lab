@@ -1,7 +1,7 @@
 """Class 2's expected returns: the nine-term forecasts in Grinold's form.
 
-**Expected returns** (:meth:`NineInputs.expected`). The forecast for each candidate
-(``research.forecaster.nine``, next month over the T-bill) is put in Grinold's form,
+**Expected returns** (:meth:`LinearInputs.expected`). The forecast for each candidate
+(``forecasters.linear``, next month over the T-bill) is put in Grinold's form,
 ``T-bill + sqrt(12) x IC x volatility x z``: ``z`` is the forecast standardized across the
 candidates, volatility the stock's annual volatility over the price window, and IC the
 forecast's skill, its average monthly rank correlation with outcomes over every month whose
@@ -17,20 +17,20 @@ from pathlib import Path
 import pandas as pd
 import polars as pl
 
-from portfolio_lab.research.forecaster import grade, nine
+from portfolio_lab.forecasters import grade, linear
 
 TRADING_DAYS = 252
-MIN_IC_MONTHS = nine.MIN_IC_MONTHS
+MIN_IC_MONTHS = linear.MIN_IC_MONTHS
 #: Forecasts this old or newer count for a rebalance.
 MAX_AGE = timedelta(days=7)
 
 
 @dataclass
-class NineInputs:
+class LinearInputs:
     """The forecasts in ``folder`` (``DataPaths.forecaster``) and their track record, loaded once.
 
     Args:
-        folder: Where ``nine.FILE`` is.
+        folder: Where ``linear.FILE`` is.
     """
 
     folder: Path
@@ -38,7 +38,7 @@ class NineInputs:
     _dates: list[date] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._forecasts = f = pl.read_parquet(self.folder / nine.FILE)
+        self._forecasts = f = pl.read_parquet(self.folder / linear.FILE)
         self._dates = sorted(f["date"].unique().to_list())
         # month m's IC is known once its outcome is, at the next month's forecast
         self._ic = grade.grade_months(f.select("date", "symbol", "forecast", "actual"))

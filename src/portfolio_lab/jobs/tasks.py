@@ -37,10 +37,10 @@ from portfolio_lab.data.ingest.universe import current_symbols, ingest_universe
 from portfolio_lab.data.sources import sharadar as sharadar_api
 from portfolio_lab.data.sources.alpaca import make_client
 from portfolio_lab.data.sources.tiingo import fetch_fund_history
+from portfolio_lab.forecasters import linear, report
 from portfolio_lab.research.conditions import caution_dial, conditional_ic
 from portfolio_lab.research.context import STOCK_FEATURES
 from portfolio_lab.research.features import FEATURES
-from portfolio_lab.research.forecaster import nine, report
 from portfolio_lab.research.funds import FUNDS, compare
 from portfolio_lab.research.panel import EligibilityRules, Panel
 from portfolio_lab.research.scoreboard import HORIZON, evaluate, summarize
@@ -64,13 +64,13 @@ PRODUCTION: tuple[str, dict[str, Any]] = (
 )  # fmt: skip
 #: "Forecaster" (class 2): the same pool, Kelly and bear switch as :data:`PRODUCTION`, with
 #: the nine-term forecasts in Grinold's form (T-bill + sqrt(12) x IC x volatility x z, honest
-#: expected returns) and the price covariance, no rebound switch (``strategies.meanvar.nine``).
+#: expected returns) and the price covariance, no rebound switch (``forecasters.grinold``).
 #: Kelly bets 16x as hard as full Kelly (risk aversion 1/16), the best of 1 .. 1/64 and 0 on
 #: the scratch hive 2005-2026 (22.9% at 1, 28.9% at 1/16) and a monthly walk-forward pick (#74).
 CLASS_2: tuple[str, dict[str, Any]] = (
     "meanvar",
     {"health_rank_pool": 400, "soften": "taper", "bear_defense": True, "objective": "kelly",
-     "expected": "nine", "risk_aversion": 1 / 16, "title": "Forecaster"},
+     "expected": "linear", "risk_aversion": 1 / 16, "title": "Forecaster"},
 )  # fmt: skip
 #: The production models, drawn on the Overview and Compare charts against SPY and the best
 #: funds (every other strategy is listed in their tables but starts hidden on the chart).
@@ -247,9 +247,9 @@ def derive_task(settings: Settings) -> dict:
     panel = Panel.load(root, rules=RESEARCH_RULES)
     out["monthly"] = monthly.build(root, panel=panel)
     paths = DataPaths(root)
-    data = nine.table(panel, pl.read_parquet(paths.features))
-    forecasts = nine.walk(data)
-    write_parquet_atomic(forecasts, paths.forecaster / nine.FILE)
+    data = linear.table(panel, pl.read_parquet(paths.features))
+    forecasts = linear.walk(data)
+    write_parquet_atomic(forecasts, paths.forecaster / linear.FILE)
     out["forecasts"] = {"months": forecasts["date"].n_unique(), "latest": forecasts["date"].max()}
     del data
     report.publish(paths.forecaster, panel, pl.read_parquet(paths.features))

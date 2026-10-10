@@ -1,14 +1,14 @@
 """Summary of the forecaster for the Forecasts page, rebuilt with the forecasts nightly.
 
 Graded on unseen months from :data:`FIRST_GRADED`, on the stock-months both forecasts
-cover: the nine-term forecaster (``nine``) and production's expected return
+cover: the nine-term forecaster (``linear``) and production's expected return
 (``baseline``: the trailing one-year return). Outcomes are each stock's return relative to
 the month's average stock, so the two are graded on the same footing. Headline grades of
 each; IC by year and 12-month trailing IC; forecast against outcome by forecast group; the
 best and worst forecast tenths. Also graded where the strategies pick, among the month's
 :data:`LIQUID` most liquid stocks: the IC, the compounded return of the :data:`TOP`
 best-forecast stocks held in equal weights, and forecast against outcome after Grinold's
-rule (the forecasts as class 2 hands them to the optimizer, ``strategies.meanvar.nine``).
+rule (the forecasts as class 2 hands them to the optimizer, ``forecasters.grinold``).
 """
 
 import json
@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from portfolio_lab.research.forecaster import baseline, grade, nine
+from portfolio_lab.forecasters import baseline, grade, linear
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.scoreboard import forward_returns
 
@@ -142,7 +142,7 @@ def grinold_form(panel: Panel, forecasts: pl.DataFrame, liquid: pl.DataFrame) ->
     As class 2 builds them for its candidates: ``sqrt(12) x IC x volatility x z``, with ``z``
     the forecast standardized across the stocks, volatility over the last :data:`WINDOW`
     sessions and IC the forecast's average monthly rank IC over every earlier month (at least
-    ``nine.MIN_IC_MONTHS``); monthly, over the T-bill.
+    ``linear.MIN_IC_MONTHS``); monthly, over the T-bill.
     """
     rank = pl.col("liquidity").rank("ordinal", descending=True).over("date")
     pool = forecasts.join(liquid.select("date", "symbol", "liquidity"), on=["date", "symbol"])
@@ -152,7 +152,7 @@ def grinold_form(panel: Panel, forecasts: pl.DataFrame, liquid: pl.DataFrame) ->
     frames = []
     for (day,), month in pool.group_by("date"):
         past = ics.filter(pl.col("date") < day)["ic"]
-        if past.len() < nine.MIN_IC_MONTHS:
+        if past.len() < linear.MIN_IC_MONTHS:
             continue
         i = panel.date_index[day]
         if i < WINDOW:
@@ -165,7 +165,7 @@ def grinold_form(panel: Panel, forecasts: pl.DataFrame, liquid: pl.DataFrame) ->
         f = pd.Series(month["forecast"].to_numpy(), index=month["symbol"]).reindex(prices.columns)
         if len(f) < 2 or f.std() == 0:
             continue
-        vol = prices.pct_change().std() * nine.TRADING_DAYS**0.5
+        vol = prices.pct_change().std() * linear.TRADING_DAYS**0.5
         raw = (f - f.mean()) / f.std() * vol
         k = 12**0.5 * float(past.mean())
         actual = dict(zip(month["symbol"], month["actual"], strict=True))
@@ -177,14 +177,16 @@ def grinold_form(panel: Panel, forecasts: pl.DataFrame, liquid: pl.DataFrame) ->
 
 
 def publish(folder: Path, panel: Panel, monthly: pl.DataFrame) -> Path:
-    """Write :func:`build`'s summary of ``folder``'s forecasts (``nine.FILE``) into it.
+    """Write :func:`build`'s summary of ``folder``'s forecasts (``linear.FILE``) into it.
 
     Args:
         folder: The forecaster's results (``DataPaths.forecaster``).
         panel: Prices, for production's forecast, liquidity and outcomes.
         monthly: The monthly stock inputs, for each stock's size.
     """
-    forecasts = pl.read_parquet(folder / nine.FILE).filter(pl.col("date").dt.year() >= FIRST_GRADED)
+    forecasts = pl.read_parquet(folder / linear.FILE).filter(
+        pl.col("date").dt.year() >= FIRST_GRADED
+    )
     months = sorted(forecasts["date"].unique().to_list())
     size = monthly.select(
         "date", "symbol",

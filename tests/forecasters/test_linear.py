@@ -4,7 +4,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from portfolio_lab.research.forecaster import nine, report
+from portfolio_lab.forecasters import linear, report
 
 
 def _month_end(k: int) -> date:
@@ -16,21 +16,21 @@ def _table(months: int = 40, n: int = 200, noise: float = 0.2, seed: int = 0) ->
     rng = np.random.default_rng(seed)
     frames = []
     for m in range(months):
-        x = rng.normal(size=(n, len(nine.TERMS)))
+        x = rng.normal(size=(n, len(linear.TERMS)))
         actual = 0.01 + 0.02 * x[:, 0] - 0.01 * x[:, 2] + 0.005 * x[:, 7] + rng.normal(0, noise, n)
         frames.append(pl.DataFrame({
             "date": [_month_end(m)] * n, "symbol": [f"S{k:03d}" for k in range(n)],
             "actual": actual, "has_momentum": [True] * n, "spy12": [0.1] * n,
-            **{t: x[:, j] for j, t in enumerate(nine.TERMS)},
+            **{t: x[:, j] for j, t in enumerate(linear.TERMS)},
         }))  # fmt: skip
     return pl.concat(frames)
 
 
 def test_walk_starts_after_the_minimum_history_and_recovers_the_signal():
     data = _table()
-    out = nine.walk(data)
+    out = linear.walk(data)
     months = sorted(set(data["date"].to_list()))
-    assert out["date"].min() == months[nine.MIN_MONTHS]
+    assert out["date"].min() == months[linear.MIN_MONTHS]
     last = out.filter(pl.col("date") == months[-1])
     truth = data.filter(pl.col("date") == months[-1])
     signal = 0.02 * truth["mom12"] - 0.01 * truth["cfo_assets"] + 0.005 * truth["mom12_x_spy"]
@@ -44,8 +44,8 @@ def test_walk_never_uses_the_month_it_forecasts_or_later():
     changed = data.with_columns(
         pl.when(pl.col("date") >= cut).then(pl.col("actual") * -5).otherwise(pl.col("actual"))
     )
-    a = nine.walk(data).filter(pl.col("date") <= cut)
-    b = nine.walk(changed).filter(pl.col("date") <= cut)
+    a = linear.walk(data).filter(pl.col("date") <= cut)
+    b = linear.walk(changed).filter(pl.col("date") <= cut)
     assert a["forecast"].to_numpy() == pytest.approx(b["forecast"].to_numpy())
 
 
@@ -55,7 +55,7 @@ def test_walk_fits_only_stocks_with_a_one_year_momentum():
         pl.when(pl.col("symbol") == "S000").then(1e6).otherwise(pl.col("actual")).alias("actual"),
         (pl.col("symbol") != "S000").alias("has_momentum"),
     )
-    a, b = nine.walk(data.filter(pl.col("symbol") != "S000")), nine.walk(bad)
+    a, b = linear.walk(data.filter(pl.col("symbol") != "S000")), linear.walk(bad)
     b = b.filter(pl.col("symbol") != "S000")
     assert a["forecast"].to_numpy() == pytest.approx(b["forecast"].to_numpy())
 
@@ -66,13 +66,13 @@ def test_inputs_are_standardized_within_each_month_and_keep_their_sign():
         "date": [_month_end(k // 500) for k in range(1000)],
         "x": np.r_[rng.standard_t(2, 500) * 50, rng.standard_t(2, 500)],
     })  # fmt: skip
-    out = frame.with_columns(nine._scaled("x", clip=False).alias("z"))
+    out = frame.with_columns(linear._scaled("x", clip=False).alias("z"))
     g = out.group_by("date").agg(pl.col("z").mean().alias("m"), pl.col("z").std().alias("s"))
     assert g["m"].to_numpy() == pytest.approx(0, abs=1e-9)
     assert g["s"].to_numpy() == pytest.approx(1)
     same = out.group_by("date").agg(pl.corr(pl.col("x").rank(), pl.col("z").rank()).alias("r"))
     assert same["r"].to_numpy() == pytest.approx(1)
-    clipped = frame.with_columns(nine._scaled("x", clip=True).alias("z"))
+    clipped = frame.with_columns(linear._scaled("x", clip=True).alias("z"))
     assert clipped["z"].abs().max() < out["z"].abs().max()
 
 
