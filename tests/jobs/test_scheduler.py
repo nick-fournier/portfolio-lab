@@ -79,3 +79,19 @@ def test_failures_alert_once_then_recovery_and_flags_alert(settings, monkeypatch
     run_once(settings, MON_NIGHT + timedelta(minutes=90), jobs)
     assert [t for t, _ in sent[1:]] == ["portfolio: flaky recovered",
                                         "portfolio: 1 data quality flags"]  # fmt: skip
+
+
+def test_a_persistent_failure_repeats_its_alert_every_six_hours(settings, monkeypatch):
+    sent = []
+    monkeypatch.setattr("portfolio_lab.jobs.scheduler.notify",
+                        lambda _s, title, message, _p: sent.append((title, message)))  # fmt: skip
+
+    def broken(_settings):
+        raise RuntimeError("provider down")
+
+    jobs = (Job("broken", broken, "weekly"),)
+    for minutes in range(0, 7 * 60, 30):  # a retry every 30 minutes for 7 hours
+        run_once(settings, MON_NIGHT + timedelta(minutes=minutes), jobs)
+    assert [t for t, _ in sent] == ["portfolio: broken failed", "portfolio: broken still failing"]
+    since = "since 2024-07-09 00:30 UTC, 12 retries: RuntimeError: provider down"
+    assert sent[1][1].startswith(since)

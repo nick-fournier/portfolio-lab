@@ -32,6 +32,8 @@ INGEST_BUFFER = PRICE_UPDATE_DELAY
 WEEKLY = timedelta(days=7)
 #: After a failure, wait this long before trying the job again.
 RETRY_AFTER = timedelta(minutes=30)
+#: While a job keeps failing with the same error, repeat its alert at most this often.
+REALERT_AFTER = timedelta(hours=6)
 #: How often the loop wakes up to check for due jobs.
 TICK_SECONDS = 300
 
@@ -123,7 +125,8 @@ def run_once(
         try:
             log.info("running %s", job.name)
             result = job.run(settings)
-            entry |= {"last_success": now.isoformat(), "last_error": None}
+            entry |= {"last_success": now.isoformat(), "last_error": None,
+                      "failing_since": None, "retries": 0, "last_alert": None}  # fmt: skip
             if job.cadence == "session":
                 session = last_complete_session(now, buffer=INGEST_BUFFER)
                 entry["last_session"] = session.isoformat()
@@ -131,14 +134,42 @@ def run_once(
         except Exception as exc:  # one failing job must not stop the loop
             log.exception("%s failed", job.name)
             entry["last_error"] = f"{type(exc).__name__}: {exc}"
-            if entry["last_error"] != previous:  # once per new failure, not every retry
-                urgent = isinstance(exc, QualityError)
-                notify(settings, f"portfolio: {job.name} failed", entry["last_error"][:1000],
-                       URGENT if urgent else HIGH)  # fmt: skip
+            _alert_failure(settings, job, entry, previous, isinstance(exc, QualityError), now)
         state[job.name] = entry
         write_status(settings.data_dir, STATE_JOB, state)
         ran.append(job.name)
     return ran
+
+
+def _alert_failure(
+    settings: Settings,
+    job: Job,
+    entry: dict[str, Any],
+    previous: str | None,
+    urgent: bool,
+    now: datetime,
+) -> None:
+    """Alert on a failure: a new error at once, a persisting one at most every REALERT_AFTER.
+
+    A stuck job must not go quiet after its first alert, nor send one per retry.
+    """
+    new = entry["last_error"] != previous
+    if new:
+        entry["failing_since"], entry["retries"] = now.isoformat(), 0
+    else:
+        entry["retries"] = entry.get("retries", 0) + 1
+    last_alert = _parse(entry.get("last_alert"))
+    if not new and last_alert is not None and now - last_alert < REALERT_AFTER:
+        return
+    if new:
+        title, body = f"portfolio: {job.name} failed", entry["last_error"]
+    else:
+        since = _parse(entry.get("failing_since")) or now
+        title = f"portfolio: {job.name} still failing"
+        retries = entry["retries"]
+        body = f"since {since:%Y-%m-%d %H:%M} UTC, {retries} retries: {entry['last_error']}"
+    notify(settings, title, body[:1000], URGENT if urgent else HIGH)
+    entry["last_alert"] = now.isoformat()
 
 
 def _alert_success(settings: Settings, job: Job, result: Any, previous: str | None) -> None:
