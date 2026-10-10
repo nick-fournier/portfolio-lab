@@ -63,14 +63,14 @@ PRODUCTION: tuple[str, dict[str, Any]] = (
      "objective": "kelly", "title": "Piotroski health"},
 )  # fmt: skip
 #: "Forecaster" (class 2): the same pool, Kelly and bear switch as :data:`PRODUCTION`, with
-#: the nine-term forecasts (Grinold's form) as expected returns, the price covariance and no
-#: rebound switch (``strategies.meanvar.nine``). 27.6% a year 2004-2026 on the hive, against
-#: production's 26.2%; research's three-way covariance ("thirds") gave 27.7% at three times
-#: the run time.
+#: the nine-term forecasts in Grinold's form (T-bill + sqrt(12) x IC x volatility x z, honest
+#: expected returns) and the price covariance, no rebound switch (``strategies.meanvar.nine``).
+#: Kelly bets 16x as hard as full Kelly (risk aversion 1/16), the best of 1 .. 1/64 and 0 on
+#: the scratch hive 2005-2026 (22.9% at 1, 28.9% at 1/16) and a monthly walk-forward pick (#74).
 CLASS_2: tuple[str, dict[str, Any]] = (
     "meanvar",
     {"health_rank_pool": 400, "soften": "taper", "bear_defense": True, "objective": "kelly",
-     "expected": "nine", "covariance": "price", "title": "Forecaster"},
+     "expected": "nine", "covariance": "price", "risk_aversion": 1 / 16, "title": "Forecaster"},
 )  # fmt: skip
 #: The production models, drawn on the Overview and Compare charts against SPY and the best
 #: funds (every other strategy is listed in their tables but starts hidden on the chart).

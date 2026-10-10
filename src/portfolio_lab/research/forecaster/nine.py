@@ -22,7 +22,6 @@ stocks that have a one-year momentum, from per-month sums; the first forecast co
 """
 
 import numpy as np
-import pandas as pd
 import polars as pl
 
 from portfolio_lab.research.dataview import DataView
@@ -213,20 +212,5 @@ def slopes(data: pl.DataFrame) -> pl.DataFrame:
 
 #: Trading sessions in a year (Grinold's volatility is annualized with it).
 TRADING_DAYS = 252
-
-
-def trailing_annual(prices: pd.DataFrame) -> pd.Series:
-    """Each column's trailing annual return, as production's mean-variance computes it.
-
-    Grinold's scale is set to the spread of these across the candidates, so the forecasts
-    come out at the size of production's expected returns. Columns production cannot
-    forecast (too short, non-positive prices) are left out.
-    """
-    from portfolio_lab.strategies.meanvar.forecast import (  # noqa: PLC0415 - avoids a cycle
-        ForecastSpec,
-        forecast_one,
-    )
-
-    spec = ForecastSpec("historical_mean")
-    out = {s: forecast_one(prices[s].to_numpy(), spec) for s in prices.columns}
-    return pd.Series({s: v for s, v in out.items() if np.isfinite(v)}, dtype=float)
+#: Months of graded forecasts needed before Grinold's IC (and so expected returns) is used.
+MIN_IC_MONTHS = 12

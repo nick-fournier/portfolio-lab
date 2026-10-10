@@ -329,7 +329,7 @@ def test_forecasts_page(client, tmp_path):
     (folder / "summary.json").write_text(json.dumps(summary))
     page = client.get("/forecasts").text
     for expected in ("27.8%", "0.034", "16 of 18", "60%", "production label",
-                     "0.044 / 0.035 / 0.026", "±0.025", "8 times larger", 'id="fit"',
+                     "0.044 / 0.035 / 0.026", "±0.025", "slope 0.12", 'id="fit"',
                      'id="grinold"', 'id="trailing"', 'id="tenths"'):  # fmt: skip
         assert expected in page, expected
     assert "revious" not in page

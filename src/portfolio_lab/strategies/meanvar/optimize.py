@@ -41,7 +41,7 @@ def _solve(ef: EfficientFrontier, objective: str, risk_free: float, risk_aversio
     if objective == "max_sharpe":
         ef.max_sharpe(risk_free_rate=risk_free)
     elif objective == "kelly":
-        ef.max_quadratic_utility(risk_aversion=1.0)
+        ef.max_quadratic_utility(risk_aversion=risk_aversion)  # 1 = full Kelly
     elif objective == "max_quadratic_utility":
         ef.add_objective(objective_functions.L2_reg, gamma=0.1)
         ef.max_quadratic_utility(risk_aversion=risk_aversion)
@@ -67,7 +67,8 @@ def optimize(
         risk_free: Annual risk-free rate.
         objective: One of :data:`OBJECTIVES`.
         max_weight: Cap on any single weight (raised to ``1/n`` if infeasibly low).
-        risk_aversion: Risk aversion for ``max_quadratic_utility``.
+        risk_aversion: Risk aversion for ``kelly`` (1 = full Kelly; below 1 bets harder than the
+            expected returns alone justify) and ``max_quadratic_utility``.
         caps: Per-symbol caps instead of ``max_weight`` (scaled up together if they sum
             to less than 1, so a fully invested portfolio stays feasible).
         cov: Annual covariance to use instead of the prices' shrunk sample covariance.

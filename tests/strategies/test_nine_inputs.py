@@ -6,7 +6,6 @@ import polars as pl
 import pytest
 
 from portfolio_lab.research.forecaster import nine
-from portfolio_lab.research.forecaster.nine import trailing_annual
 from portfolio_lab.strategies.base import create
 from portfolio_lab.strategies.meanvar.nine import MIN_SLOPE_MONTHS, NineInputs
 
@@ -39,23 +38,20 @@ def _prices(seed=1, days=260):
                         index=index, columns=SYMBOLS)  # fmt: skip
 
 
-def test_expected_returns_keep_the_forecasts_order_with_productions_spread(tmp_path):
+def test_expected_returns_follow_grinolds_rule_with_the_ic_known_by_then(tmp_path):
     inputs = _inputs(tmp_path)
+    ics = [0.02 * (m % 5) for m in range(40)]
+    inputs._ic = pl.DataFrame({"date": [_month(m) for m in range(40)], "ic": ics})
     asof = _month(30) + timedelta(days=2)
     mu = inputs.expected(asof, _prices(), risk_free=0.03)
-    assert mu.std() == pytest.approx(trailing_annual(_prices()).std())
+    ic = float(np.mean(ics[:30]))  # months before this forecast's month
     forecast = pd.Series(inputs.forecasts(asof))
     vol = _prices().pct_change().std() * 252**0.5
-    raw = ((forecast - forecast.mean()) / forecast.std() * vol).reindex(mu.index)
-    assert np.allclose((mu - 0.03) / raw, ((mu - 0.03) / raw).iloc[0])  # T-bill + k * raw
-    assert inputs.expected(_month(30) + timedelta(days=20), _prices(), 0.03).empty
-
-
-def test_trailing_annual_is_productions_expected_return():
-    prices = _prices()
-    p = prices["S0"].to_numpy()
-    expected = (p[-1] / p[0]) ** (252 / (len(p) - 1)) - 1
-    assert trailing_annual(prices)["S0"] == pytest.approx(expected)
+    z = (forecast - forecast.mean()) / forecast.std()
+    assert np.allclose(mu, (0.03 + 12**0.5 * ic * vol * z).reindex(mu.index))
+    assert inputs.expected(_month(30) + timedelta(days=20), _prices(), 0.03).empty  # stale forecast
+    inputs._ic = inputs._ic.head(5)
+    assert inputs.expected(asof, _prices(), 0.03).empty  # too few graded months
 
 
 def test_covariance_is_symmetric_positive_and_uses_only_known_months(tmp_path):
