@@ -211,39 +211,22 @@ def slopes(data: pl.DataFrame) -> pl.DataFrame:
     return pl.DataFrame(rows).sort("date").with_columns(pl.lit(center).alias("center"))
 
 
-#: Grinold's scale: the AR(1) behind it (horizon in sessions, return bounds, year).
-HORIZON, MU_BOUNDS, TRADING_DAYS = 21, (-0.99, 5.0), 252
+#: Trading sessions in a year (Grinold's volatility is annualized with it).
+TRADING_DAYS = 252
 
 
-def ar1_forecast_sum(returns: np.ndarray, horizon: int) -> float:
-    """Sum of the next ``horizon`` returns forecast by an AR(1) fitted with least squares.
+def trailing_annual(prices: pd.DataFrame) -> pd.Series:
+    """Each column's trailing annual return, as production's mean-variance computes it.
 
-    Fits ``r[t] = c + phi * r[t-1]``; with long-run mean ``mu = c / (1 - phi)`` the k-step
-    forecast is ``mu + phi**k * (r[-1] - mu)``, so the sum over ``k = 1..horizon`` is
-    ``horizon * mu + (r[-1] - mu) * phi * (1 - phi**horizon) / (1 - phi)``. ``phi`` is
-    clipped to keep the process stationary.
+    Grinold's scale is set to the spread of these across the candidates, so the forecasts
+    come out at the size of production's expected returns. Columns production cannot
+    forecast (too short, non-positive prices) are left out.
     """
-    phi, c = np.polyfit(returns[:-1], returns[1:], 1)
-    phi = float(np.clip(phi, -0.99, 0.99))
-    mu = c / (1 - phi)
-    return float(horizon * mu + (returns[-1] - mu) * phi * (1 - phi**horizon) / (1 - phi))
+    from portfolio_lab.strategies.meanvar.forecast import (  # noqa: PLC0415 - avoids a cycle
+        ForecastSpec,
+        forecast_one,
+    )
 
-
-def ar1_annual(prices: pd.DataFrame) -> pd.Series:
-    """Each column's annual expected return from an AR(1) on its daily log returns.
-
-    Columns with fewer than 30 prices, a non-positive price or a failed fit are left out.
-    """
-    out = {}
-    for symbol in prices.columns:
-        p = prices[symbol].to_numpy()
-        if len(p) < 30 or not np.all(p > 0):
-            continue
-        try:
-            log_return = ar1_forecast_sum(np.diff(np.log(p)), HORIZON)
-        except (ValueError, np.linalg.LinAlgError):
-            continue
-        annual = np.exp(log_return * TRADING_DAYS / HORIZON) - 1
-        if np.isfinite(annual):
-            out[symbol] = float(np.clip(annual, *MU_BOUNDS))
-    return pd.Series(out, dtype=float)
+    spec = ForecastSpec("historical_mean")
+    out = {s: forecast_one(prices[s].to_numpy(), spec) for s in prices.columns}
+    return pd.Series({s: v for s, v in out.items() if np.isfinite(v)}, dtype=float)
