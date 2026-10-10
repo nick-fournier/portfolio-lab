@@ -9,7 +9,7 @@ Forecast every stock's next-month return over the T-bill, like class 2, but let 
 It plugs into the same strategy (health pool, Kelly, 10% cap, bear switch) through Grinold's rule,
 so it is judged exactly like the Forecaster.
 
-**The bar:** the Forecaster's out-of-sample rank IC (about 0.05 in the full pool, 0.034 in the
+**The bar:** the Forecaster's (class 2, `forecasters.linear`) out-of-sample rank IC (about 0.05 in the full pool, 0.034 in the
 400 most liquid) and its backtest (28.7% 2004-2026, Sharpe 0.91). Class 3 is promoted only if it
 beats both, in both halves (2004-15, 2016-26), net of costs.
 
@@ -43,7 +43,7 @@ Same universe as the Forecaster's fit: price >= $1, >= $100k a day.
 
 | Block | What | Transform |
 |---|---|---|
-| Own history (sequence) | monthly log returns, last 24-60 months | each divided by the stock's trailing volatility; missing months masked |
+| Own history (sequence) | monthly log returns, all available months (length is an ablation, below) | each divided by the stock's trailing volatility; missing months masked |
 | Stock characteristics (this month) | the Forecaster's fundamentals (cash flow / assets, FCF yield, sales yield, earnings yield, R&D / market value) plus size, liquidity, volatility | ranked across stocks each month, mapped to [-1, 1] |
 | Market / macro (this month) | SPY 12-month return and the context set | standardized over time; enters only through interactions (a gate or a market token the stocks attend to), never added directly |
 
@@ -64,8 +64,13 @@ Small models only (1-2 layers, a few heads, width 32-64), heavy dropout and weig
 
 ### Training protocol
 
-- Walk-forward, refit every January on all earlier months (expanding), predict the next 12 months.
-  First forecast after 10 years of training data.
+- Walk-forward, refit **every month** on all earlier months (expanding), as the Forecaster does,
+  predicting the next month. First forecast after 10 years of training data. If monthly refits
+  prove too slow, fall back to a full retrain each January plus a short warm-start update each
+  month; measure the refit time in stage 1 before choosing.
+- Rough cost (to be measured): a small model on about 300 months x 3,500 stocks is a few minutes
+  per seed per refit on the cubevm GPU; 264 monthly refits x 3 seeds is about 10-40 GPU-hours per
+  configuration. Attention across one month's ~3,500 stocks is ~12M pairs per head (trivial).
 - Validation: the last 2 years of each training window, for early stopping and the few settings.
   Settings chosen once on 1998-2010 windows and then frozen; never tuned on the test years.
 - Several seeds per refit, averaged (transformers are noisy).
@@ -85,6 +90,10 @@ Small models only (1-2 layers, a few heads, width 32-64), heavy dropout and weig
 - Momentum terms added back as inputs: does attention replace them or add to them?
 - Market block removed: does conditioning help or overfit, as it did for the nets?
 - Average with the Forecaster's forecast (50/50): as with the nets, the blend may be the win.
+- History length: 24 months vs 60 months vs all available. At monthly frequency length costs
+  nothing to compute (attention grows with length squared, and even 300 months is tiny); the
+  question is statistical: older history may add noise and shifting regimes, and stocks with short
+  histories see less. Compute only matters at daily frequency (~5,000 days per stock).
 
 ## Stages and stop rules
 
@@ -100,8 +109,7 @@ Every stage's settings are agreed before running; results go on a page.
 
 ## Open questions
 
-- History length (24 / 36 / 60 months) and whether to include daily-derived features
-  (volatility, max daily return) monthly.
+- Whether to include daily-derived features (volatility, max daily return) monthly.
 - Ranked target vs raw excess return (ranked is more robust; raw keeps size information for Kelly).
 - Whether to add the 132-characteristic style breadth later (we have about 100 stock inputs in the
   hive; most were dead ends for the linear model, but attention may use them differently).
