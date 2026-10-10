@@ -109,7 +109,7 @@ def measured(root: Path) -> list[dict[str, Any]]:
     out += _agreement(root)
     if paths.features.exists():
         out += _monthly(pl.read_parquet(paths.features))
-    forecasts = paths.forecaster / "nine.parquet"
+    forecasts = paths.forecaster / "linear.parquet"
     if forecasts.exists():
         f = pl.read_parquet(forecasts, columns=["date", "forecast"])
         by_month = f.group_by("date").agg(

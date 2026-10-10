@@ -29,7 +29,7 @@ from portfolio_lab.research.panel import Panel
 from portfolio_lab.research.scoreboard import forward_returns
 
 #: Where :func:`walk`'s forecasts (with each stock's terms) are kept, in ``DataPaths.forecaster``.
-FILE = "nine.parquet"
+FILE = "linear.parquet"
 #: Months of history before the first forecast.
 MIN_MONTHS = 24
 #: Daily returns in one-year momentum (and SPY's one-year return).
