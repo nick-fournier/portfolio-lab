@@ -64,16 +64,22 @@ Small models only (1-2 layers, a few heads, width 32-64), heavy dropout and weig
 
 ### Training protocol
 
-- Walk-forward, refit **every month** on all earlier months (expanding), as the Forecaster does,
-  predicting the next month. First forecast after 10 years of training data. If monthly refits
-  prove too slow, fall back to a full retrain each January plus a short warm-start update each
-  month; measure the refit time in stage 1 before choosing.
-- Rough cost (to be measured): a small model on about 300 months x 3,500 stocks is a few minutes
-  per seed per refit on the cubevm GPU; 264 monthly refits x 3 seeds is about 10-40 GPU-hours per
-  configuration. Attention across one month's ~3,500 stocks is ~12M pairs per head (trivial).
+- **Start small, scale on evidence.** Every stage begins with the cheapest version that can show
+  signal (tiny model, one seed, IC only); bigger models, more seeds, the full backtest come only
+  after the small version beats its baseline. No long runs on a guess.
+- Walk-forward over expanding windows, predicting the next month. First forecast after 10 years
+  of training data. **Warm start:** train once on the first window, then each month continue from
+  last month's weights for a few epochs on the window with the new month added (the class 2 nets
+  did this; their full 2009-26 run took about 18 minutes on cubevm).
+- If class 3 earns promotion, production can afford a full retrain (from scratch, more seeds)
+  each month; research doesn't need it.
+- Compute: cubevm's RTX 5060 Ti (16 GB), shared with another use, so runs are bounded and one at
+  a time. The data is small (about 300 months x 3,500 stocks, ~1M rows); one-month attention
+  across ~3,500 stocks is ~12M pairs per head. First run measures the actual time per refit.
 - Validation: the last 2 years of each training window, for early stopping and the few settings.
   Settings chosen once on 1998-2010 windows and then frozen; never tuned on the test years.
-- Several seeds per refit, averaged (transformers are noisy).
+- Seeds: one while screening; several, averaged, once a model shows signal (transformers are
+  noisy, so a gain must beat seed-to-seed spread before it counts).
 - GPU on cubevm; nothing touches the live data (scratch copies only).
 
 ### Grading (same as the Forecaster)
@@ -100,7 +106,8 @@ Small models only (1-2 layers, a few heads, width 32-64), heavy dropout and weig
 | Stage | Work | Continue only if |
 |---|---|---|
 | 0 | Data: monthly arrays (history sequences, ranked characteristics, market block), point-in-time checks | arrays reproduce the Forecaster's inputs on overlapping terms |
-| 1 | Option 1 (cross-stock) vs a linear model on the same inputs | out-of-sample IC beats the linear model in both halves |
+| 1 | Ridge on the same inputs (seconds), then a tiny option 1 (cross-stock), one seed, warm start, IC only | ridge reproduces the Forecaster's IC; the tiny model beats ridge in both halves |
+| 1b | Scale option 1 up (width, layers, seeds) | gains hold or grow beyond seed noise |
 | 2 | Options 2 and 3 | adds to stage 1 beyond seed-to-seed noise |
 | 3 | Best model through the strategy | beats the Forecaster's backtest in both halves |
 | 4 | Weekly / daily | only after stage 3 passes |
