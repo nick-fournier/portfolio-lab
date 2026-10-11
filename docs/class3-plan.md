@@ -1,122 +1,125 @@
-# Class 3 research plan: a transformer forecaster
+# Class 3 research plan: transformers
 
-Status: draft for discussion (2026-10-10). Nothing built. Issue #53.
+Status: draft for discussion (2026-10-11). Nothing built. Issue #53.
 
 ## Goal
 
-Forecast every stock's next-month return over the T-bill, like class 2, but let the model learn
-(a) each stock's own history and (b) how stocks inform each other, instead of hand-built terms.
-It plugs into the same strategy (health pool, Kelly, 10% cap, bear switch) through Grinold's rule,
-so it is judged exactly like the Forecaster.
+Beat the Forecaster (class 2, `forecasters.linear` + Grinold + Kelly) with transformers, along two
+tracks that are built to be combined:
 
-**The bar:** the Forecaster's (class 2, `forecasters.linear`) out-of-sample rank IC (about 0.05 in the full pool, 0.034 in the
-400 most liquid) and its backtest (28.7% 2004-2026, Sharpe 0.91). Class 3 is promoted only if it
-beats both, in both halves (2004-15, 2016-26), net of costs.
+- **Optimizer track:** one model reads every stock's characteristics and outputs the portfolio
+  weights directly, trained to maximize Sharpe. It replaces forecast + Grinold + Kelly.
+- **History track (AR):** attention over each stock's own past months, so the model conditions on
+  what just happened (including recent surprises) every time it runs, without a refit.
+
+**The bar:** the Forecaster's backtest (28.7% a year 2004-2026, Sharpe 0.91), beaten in both halves
+(2004-15, 2016-26), net of costs. Long-only: no shorting.
+
+## The paper this starts from
+
+Kelly, Kuznetsov, Malamud & Xu, "Artificial Intelligence Asset Pricing Models" (NBER w33351, rev.
+June 2026).
+
+- **Inputs:** each month, every stock's 132 characteristics (value, momentum, size, volatility,
+  profitability, ...), ranked across stocks to [-0.5, 0.5], missing = 0. Stock data only, no
+  market data. No sequences: history enters only through characteristics such as 12-month momentum.
+- **Model:** K blocks. Each block: attention across stocks (each stock blends in the stocks it
+  learns to treat as peers), then a per-stock feed-forward layer; residual connections. 1 head
+  (more helped little); width = the 132 inputs; feed-forward 256 wide.
+- **Output:** a weight for every stock (long or short). No forecast.
+- **Loss:** average over training months of (1 - portfolio return)^2. Minimizing it gives the
+  maximum-Sharpe portfolio (Britten-Jones 1999).
+- **Training:** 60-month rolling window, retrained every month, 10 seeds averaged.
+- **Results (Sharpe 1968-2022 / post-2002):** linear weights 3.60 / 2.03; linear attention 3.89 /
+  2.25; deep own-stock network, no attention 4.31 / 3.07; transformer (10 blocks) 4.57 / 3.37.
+  1 block: 3.8. Gains grow with depth.
+- **Lessons:** most of the gain is depth and nonlinearity; attention adds on top, and only when
+  deep. The fair test of attention is the same network with attention removed. Breadth of inputs
+  matters (linear on 132 characteristics: 3.6 vs 1.0 for the six-factor Fama-French model).
+  Attention mostly learned "similar stocks": shared size and liquidity group, industry, patents,
+  return correlation.
+- **Caveats for us:** long-short, all stocks including micro caps, no costs; Sharpe highest in micro
+  caps (mega caps 1.84). The transformer's relative edge is largest in large and mega caps.
 
 ## What we already know (don't relearn)
 
-- Earlier neural nets on these inputs reached IC 0.015-0.030, about level with the linear model;
-  market inputs fed in directly were the main source of overfitting. Market data helped only as
-  interactions with stock data. Averaging nets with the linear model gave the best IC (0.036).
-- The Forecaster's value over plain momentum is about 1.5 points a year, and only inside the
-  volatility-weighted Kelly pipeline; as a plain top-10 ranking it is worse than momentum.
-- Kelly, Kuznetsov, Malamud & Xu (2025, "Artificial Intelligence Asset Pricing Models"): attention
-  **across stocks** at each month on 132 standard characteristics. Out-of-sample Sharpe 3.6 for a
-  linear model, 3.9 with attention added (long-short, all US stocks incl. micro caps, no costs). No
-  attention over time; history enters through the characteristics. So cross-stock attention is the
-  documented gain; attention over time is untested.
+- Earlier own-stock neural nets on our inputs landed level with the linear model (IC 0.015-0.030);
+  market inputs fed in directly overfit. Averaging nets with linear gave the best IC (0.036).
+- A stock's own return history adds little: AR(1) was dead. So the history track uses the full
+  characteristic history, not just past returns.
 
-## Design
+## Shared design
 
-### Frequency
+- **Universe:** the Forecaster's (price >= $1, >= $100k a day).
+- **Inputs:** every stock characteristic in the hive (about 100; counted in stage 0), ranked across
+  stocks each month to [-0.5, 0.5], missing = 0. Momentum and reversal enter as characteristics.
+- **Weights:** long-only, fully invested (a softmax over stocks: positive, summing to 1). The only
+  hard constraint is no shorting. The 10% cap and a cash option are tests, kept only if they help.
+- **Costs:** charged in the backtest; added to the loss if turnover turns out to matter.
+- **Training:** walk-forward. First fit, then a warm start each month (continue from last month's
+  weights for a few epochs). Window: 60-month rolling (paper) vs expanding, tested once.
+  Production can afford full retrains if the model is promoted.
+- **Inference:** one fast pass each rebalance; new data changes the output without retraining.
+- **Start small, scale on evidence:** 1-2 blocks, one seed while screening; deeper, more seeds only
+  after the small version beats its baseline. First run measures the time per refit.
+- **Compute:** cubevm's RTX 5060 Ti (16 GB), shared, so runs are bounded and one at a time.
+  Scratch copies of data only.
 
-Monthly first (decisions, targets and inputs at month ends). Weekly and daily only if monthly
-shows signal beyond the Forecaster.
+## Optimizer track (first)
 
-### Target
+The paper's model on our data, long-only.
 
-Next month's return over the T-bill, ranked or standardized across stocks each month (a
-cross-sectional target, so additive market moves cancel and only relative performance is learned).
-Same universe as the Forecaster's fit: price >= $1, >= $100k a day.
-
-### Inputs (every one normalized; never raw prices)
-
-| Block | What | Transform |
+| Step | Model (same inputs) | Tests |
 |---|---|---|
-| Own history (sequence) | monthly log returns, all available months (length is an ablation, below) | each divided by the stock's trailing volatility; missing months masked |
-| Stock characteristics (this month) | the Forecaster's fundamentals (cash flow / assets, FCF yield, sales yield, earnings yield, R&D / market value) plus size, liquidity, volatility | ranked across stocks each month, mapped to [-1, 1] |
-| Market / macro (this month) | SPY 12-month return and the context set | standardized over time; enters only through interactions (a gate or a market token the stocks attend to), never added directly |
+| O1 | Linear weights: weights from a linear score of each stock (no attention, no depth) | baseline |
+| O2 | Same network as O3 with attention removed (per-stock only) | does depth / nonlinearity help over O1? |
+| O3 | Transformer, 1-2 blocks | does attention help over O2? |
+| O4 | O3 deeper (more blocks), more seeds | does it scale? |
+| O5 | O3/O4 with a cash option, with the 10% cap | do the constraints help? |
 
-Redundancy rule: the hand-built momentum terms (12m, 6m) and the SPY interactions are what
-attention should learn. They are kept only in the baseline and in one ablation (below), so we can
-see whether attention replaces or adds to them.
+Graded by backtest (CAGR, Sharpe, max drawdown, both halves, years won) against each other and the
+Forecaster. About 260 test months, so seeds matter: a gain must beat seed-to-seed spread.
 
-### Architecture options (tested in this order)
+**Deliverable after O3:** a deep, plain-language explanation of how the trained model works (what
+attention learned, which stocks it treats as peers, how inputs map to weights), on a page.
 
-1. **Cross-stock only** (as Kelly et al.): each stock's token = its characteristics plus a summary
-   of its own history (a small per-stock encoder); stocks attend to each other within the month.
-2. **Own history only**: attention over each stock's past months (an autoregressive head), no
-   cross-stock attention. Compare with the momentum terms it should replace.
-3. **Both**: per-stock history encoder, then cross-stock attention.
+## History track (second)
 
-Small models only (1-2 layers, a few heads, width 32-64), heavy dropout and weight decay: about
-3,500 stocks x ~300 months is little data for a transformer.
+| Step | Model | Tests |
+|---|---|---|
+| H1 | AR forecaster: time attention over each stock's past months of characteristics, predicting next month's return (cross-sectionally ranked) | IC vs the Forecaster and ridge |
+| H2 | H1's forecast fed to the optimizer as one more input | does it add to the optimizer? |
 
-### Training protocol
+## Combining the tracks (third)
 
-- **Start small, scale on evidence.** Every stage begins with the cheapest version that can show
-  signal (tiny model, one seed, IC only); bigger models, more seeds, the full backtest come only
-  after the small version beats its baseline. No long runs on a guess.
-- Walk-forward over expanding windows, predicting the next month. First forecast after 10 years
-  of training data. **Warm start:** train once on the first window, then each month continue from
-  last month's weights for a few epochs on the window with the new month added (the class 2 nets
-  did this; their full 2009-26 run took about 18 minutes on cubevm).
-- If class 3 earns promotion, production can afford a full retrain (from scratch, more seeds)
-  each month; research doesn't need it.
-- Compute: cubevm's RTX 5060 Ti (16 GB), shared with another use, so runs are bounded and one at
-  a time. The data is small (about 300 months x 3,500 stocks, ~1M rows); one-month attention
-  across ~3,500 stocks is ~12M pairs per head. First run measures the actual time per refit.
-- Validation: the last 2 years of each training window, for early stopping and the few settings.
-  Settings chosen once on 1998-2010 windows and then frozen; never tuned on the test years.
-- Seeds: one while screening; several, averaged, once a model shows signal (transformers are
-  noisy, so a gain must beat seed-to-seed spread before it counts).
-- GPU on cubevm; nothing touches the live data (scratch copies only).
+From loosest to tightest; each compared with the previous:
 
-### Grading (same as the Forecaster)
+1. **Feed in** (H2): AR forecast as an optimizer input. Each part graded alone.
+2. **End to end:** per-stock time attention -> a summary per stock -> cross-stock attention ->
+   weights, all trained together on the Sharpe loss.
+3. **Fully unified:** every stock-month a token; layers alternate attention across time (within a
+   stock) and across stocks (within a month) ("axial attention"), so history and peers inform each
+   other at every layer.
 
-1. Forecast quality, unseen months: rank IC (full pool and the 400 most liquid), its t-statistic,
-   years with positive IC, forecast-vs-outcome slope, top-minus-bottom tenth.
-2. Backtest through the same strategy (Grinold's rule, Kelly risk aversion 1/16, 10% cap, bear
-   switch), 2004-2026: CAGR, Sharpe, max drawdown, both halves, years won vs the Forecaster.
-
-### Ablations (one change each)
-
-- Cross-stock attention off (each stock alone): is the cross-sectional gain there for us?
-- Own-history attention off: does it add to the momentum terms?
-- Momentum terms added back as inputs: does attention replace them or add to them?
-- Market block removed: does conditioning help or overfit, as it did for the nets?
-- Average with the Forecaster's forecast (50/50): as with the nets, the blend may be the win.
-- History length: 24 months vs 60 months vs all available. At monthly frequency length costs
-  nothing to compute (attention grows with length squared, and even 300 months is tiny); the
-  question is statistical: older history may add noise and shifting regimes, and stocks with short
-  histories see less. Compute only matters at daily frequency (~5,000 days per stock).
+For 2 and 3: train on two losses at once, Sharpe plus a forecast loss on each stock's next-month
+return. The Sharpe loss gets one number per month; the forecast loss gets ~1M stock-months, which
+keeps the history part from overfitting and gives a forecast to grade by IC.
 
 ## Stages and stop rules
 
 | Stage | Work | Continue only if |
 |---|---|---|
-| 0 | Data: monthly arrays (history sequences, ranked characteristics, market block), point-in-time checks | arrays reproduce the Forecaster's inputs on overlapping terms |
-| 1 | Ridge on the same inputs (seconds), then a tiny option 1 (cross-stock), one seed, warm start, IC only | ridge reproduces the Forecaster's IC; the tiny model beats ridge in both halves |
-| 1b | Scale option 1 up (width, layers, seeds) | gains hold or grow beyond seed noise |
-| 2 | Options 2 and 3 | adds to stage 1 beyond seed-to-seed noise |
-| 3 | Best model through the strategy | beats the Forecaster's backtest in both halves |
-| 4 | Weekly / daily | only after stage 3 passes |
+| 0 | Data: monthly arrays (ranked characteristics, history sequences), point-in-time checks | arrays reproduce the Forecaster's inputs on overlapping terms |
+| 1 | Optimizer O1-O3 | O3 beats O2 and O1 in both halves |
+| 2 | Optimizer O4-O5; explanation page | gains hold beyond seed noise |
+| 3 | History H1-H2 | H1 IC beats the Forecaster's, or H2 adds to the optimizer |
+| 4 | Combination 1 -> 2 -> 3 | each beats the previous |
+| 5 | Weekly / daily | only after a monthly model beats the Forecaster |
 
 Every stage's settings are agreed before running; results go on a page.
 
 ## Open questions
 
-- Whether to include daily-derived features (volatility, max daily return) monthly.
-- Ranked target vs raw excess return (ranked is more robust; raw keeps size information for Kelly).
-- Whether to add the 132-characteristic style breadth later (we have about 100 stock inputs in the
-  hive; most were dead ends for the linear model, but attention may use them differently).
+- Window: 60-month rolling vs expanding.
+- Whether to add daily-derived characteristics (volatility, max daily return).
+- Market data: the paper uses none; ours could enter later as interactions (an ablation).
