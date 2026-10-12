@@ -36,6 +36,7 @@ class Settings:
         seed: Random seed (initial weights and month order).
         start: First test month end.
         long_only: Softmax weights instead of the paper's unconstrained ones (model docs).
+        fast_attention: bfloat16 fused attention (model.Block).
     """
 
     model: str
@@ -48,6 +49,7 @@ class Settings:
     seed: int = 0
     start: date = date(2003, 12, 31)
     long_only: bool = False
+    fast_attention: bool = False
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -74,7 +76,7 @@ def walk(
     torch.manual_seed(settings.seed)
     rng = np.random.default_rng(settings.seed)
     model = Optimizer(settings.model, months[0].x.shape[1], settings.blocks, settings.hidden,
-                      settings.long_only)  # fmt: skip
+                      settings.long_only, settings.fast_attention)  # fmt: skip
     model.to(device)
     adam = torch.optim.Adam(model.parameters(), lr=settings.lr)
     data = [_tensors(m, device) for m in months]

@@ -44,11 +44,15 @@ class Block(nn.Module):
         width: Inputs per stock (D); the block keeps this width.
         hidden: Feed-forward hidden width.
         attention: Include the attention sublayer.
+        fast: Compute attention in bfloat16 with torch's fused kernel (about 5x faster on the
+            GPU for ~4,000 stocks; inputs rounded to 8-bit mantissas). Default: float32, the
+            formula written out.
     """
 
-    def __init__(self, width: int, hidden: int, attention: bool):
+    def __init__(self, width: int, hidden: int, attention: bool, fast: bool = False):
         super().__init__()
         self.attention = attention
+        self.fast = fast
         if attention:
             self.q = _normal(width, width, var=1 / width)
             self.k = _normal(width, width, var=1 / width)
@@ -63,20 +67,15 @@ class Block(nn.Module):
         return torch.softmax((y @ self.q) @ (y @ self.k).T, dim=-1)
 
     def forward(self, y: torch.Tensor) -> torch.Tensor:
-        """(candidates x width) -> (candidates x width).
-
-        Attention runs through torch's fused kernel: the same softmax((Y Q)(Y K)^T)(Y V) as
-        :meth:`peers`, with the paper's scale (none, so ``scale=1``), without storing the
-        (candidates x candidates) matrix.
-        """
-        if self.attention:
+        """(candidates x width) -> (candidates x width)."""
+        if self.attention and self.fast:  # same formula, paper's scale (none: scale=1)
             q, k, v = (y @ m for m in (self.q, self.k, self.v))
-            y = (
-                y
-                + nn.functional.scaled_dot_product_attention(q[None], k[None], v[None], scale=1.0)[
-                    0
-                ]
+            mixed = nn.functional.scaled_dot_product_attention(
+                *(t.bfloat16()[None, None] for t in (q, k, v)), scale=1.0
             )
+            y = y + mixed[0, 0].float()
+        elif self.attention:
+            y = y + self.peers(y) @ (y @ self.v)
         return y + torch.relu(y @ self.w1 + self.b1) @ self.w2 + self.b2
 
 
@@ -89,16 +88,25 @@ class Optimizer(nn.Module):
         blocks: Blocks for ``mlp`` and ``transformer`` (ignored for ``linear``).
         hidden: Feed-forward hidden width.
         long_only: Softmax the scores (module docs); default: the scores are the weights.
+        fast_attention: bfloat16 fused attention (:class:`Block`).
     """
 
     def __init__(
-        self, kind: str, width: int, blocks: int = 1, hidden: int = 256, long_only: bool = False
+        self,
+        kind: str,
+        width: int,
+        blocks: int = 1,
+        hidden: int = 256,
+        long_only: bool = False,
+        fast_attention: bool = False,
     ):
         super().__init__()
         if kind not in MODELS:
             raise ValueError(f"unknown model {kind!r}; known: {MODELS}")
         n = 0 if kind == "linear" else blocks
-        self.blocks = nn.ModuleList(Block(width, hidden, kind == "transformer") for _ in range(n))
+        self.blocks = nn.ModuleList(
+            Block(width, hidden, kind == "transformer", fast_attention) for _ in range(n)
+        )
         self.lam = _normal(width, var=1 / width)
         self.long_only = long_only
 
