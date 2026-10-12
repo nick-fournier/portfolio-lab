@@ -49,13 +49,16 @@ def _months(table: Path, pool: int | None) -> list:
     return months
 
 
-def _walk_one(table: Path, out: Path, settings, pool: int, device: str, threads: int) -> str:
+def _walk_one(
+    table: Path, out: Path, settings, pool: int, device: str, threads: int, precision: str
+) -> str:
     """One walk: train, save weights, log, model and settings; return a summary line."""
     import torch  # noqa: PLC0415
 
     from portfolio_lab.research.optimizer import walk  # noqa: PLC0415
 
     torch.set_num_threads(threads)
+    torch.set_float32_matmul_precision(precision)
     weights, log, fitted = walk.walk(_months(table, pool or None), settings, device)
     out.mkdir(parents=True, exist_ok=True)
     weights.write_parquet(out / "weights.parquet")
@@ -97,6 +100,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     start: Annotated[str, typer.Option(help="First test month end.")] = "2003-12-31",
     device: Annotated[str, typer.Option()] = "cuda",
     long_only: Annotated[bool, typer.Option(help="Softmax weights (not the paper's).")] = False,
+    precision: Annotated[
+        str, typer.Option(help="float32 matrix products: highest, or high (TF32, faster).")
+    ] = "highest",
 ) -> None:
     """Walk a model forward, one run per seed, and save each seed's monthly portfolios.
 
@@ -122,7 +128,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 model, blocks, hidden, window or None, first_epochs, warm_epochs, lr, s,
                 date.fromisoformat(start), long_only,
             )  # fmt: skip
-            futures.append(pool_.submit(_walk_one, table, run, settings, pool, device, threads))
+            futures.append(
+                pool_.submit(_walk_one, table, run, settings, pool, device, threads, precision)
+            )
         for f in futures:
             typer.echo(f.result())
     if len(runs) > 1:
