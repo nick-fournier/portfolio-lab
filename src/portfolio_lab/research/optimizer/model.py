@@ -63,9 +63,20 @@ class Block(nn.Module):
         return torch.softmax((y @ self.q) @ (y @ self.k).T, dim=-1)
 
     def forward(self, y: torch.Tensor) -> torch.Tensor:
-        """(candidates x width) -> (candidates x width)."""
+        """(candidates x width) -> (candidates x width).
+
+        Attention runs through torch's fused kernel: the same softmax((Y Q)(Y K)^T)(Y V) as
+        :meth:`peers`, with the paper's scale (none, so ``scale=1``), without storing the
+        (candidates x candidates) matrix.
+        """
         if self.attention:
-            y = y + self.peers(y) @ (y @ self.v)
+            q, k, v = (y @ m for m in (self.q, self.k, self.v))
+            y = (
+                y
+                + nn.functional.scaled_dot_product_attention(q[None], k[None], v[None], scale=1.0)[
+                    0
+                ]
+            )
         return y + torch.relu(y @ self.w1 + self.b1) @ self.w2 + self.b2
 
 

@@ -56,6 +56,17 @@ def test_the_three_models_give_weights_that_are_positive_and_sum_to_one():
     assert len(Optimizer("linear", 4, 2, 8).blocks) == 0
 
 
+def test_fused_attention_matches_the_written_out_formula():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.model import Block  # noqa: PLC0415
+
+    block = Block(width=4, hidden=8, attention=True)
+    y = torch.rand(9, 4) - 0.5
+    written = y + block.peers(y) @ (y @ block.v)
+    written = written + torch.relu(written @ block.w1 + block.b1) @ block.w2 + block.b2
+    assert torch.allclose(block(y), written, atol=1e-6)
+
+
 def test_walk_trains_on_earlier_months_and_learns_to_favor_the_stock_that_keeps_winning():
     pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
