@@ -31,11 +31,24 @@ from portfolio_lab.data import reader
 from portfolio_lab.research.context import environment, sensitivities, tailwinds
 from portfolio_lab.research.dataview import DataView
 from portfolio_lab.research.features import build_features
+from portfolio_lab.research.optimizer.jkp_monthly import month_key
 from portfolio_lab.research.panel import EligibilityRules, Panel
 from portfolio_lab.research.scoreboard import forward_returns
 
 #: Table columns that are not characteristics.
 NOT_INPUTS = ("date", "symbol", "sic2", "nyse", "eligible", "adv", "actual")
+#: The JKP price-based characteristics (``research.optimizer.jkp``).
+JKP_COLUMNS = frozenset((
+    "prc", "age", "beta_60m", "resff3_12_1", "resff3_6_1",
+    *(f"ret_{j}_{i}" for j, i in ((1, 0), (3, 1), (6, 1), (9, 1), (12, 1), (12, 7), (60, 12))),
+    *(f"seas_{s}_{e}{k}" for s, e in ((1, 1), (2, 5), (6, 10), (11, 15), (16, 20))
+      for k in ("an", "na")),
+    "rvol_21d", "rmax1_21d", "rmax5_21d", "rmax5_rvol_21d", "rskew_21d", "ivol_capm_21d",
+    "iskew_capm_21d", "coskew_21d", "ivol_ff3_21d", "iskew_ff3_21d", "beta_dimson_21d",
+    "ivol_capm_252d", "betadown_252d", "corr_1260d", "betabab_1260d", "prc_highprc_252d",
+    "ami_126d", "dolvol_126d", "dolvol_var_126d", "turnover_126d", "turnover_var_126d",
+    "zero_trades_21d", "zero_trades_126d", "zero_trades_252d", "bidaskhl_21d",
+))  # fmt: skip
 #: The paper's universe: every common stock, no price, liquidity or history floor.
 PAPER_RULES = EligibilityRules(min_price=0.0, min_dollar_volume=0.0, min_history=1)
 #: Nano caps (below this percentile of NYSE market values) are left out (paper, sec. 4.1).
@@ -59,9 +72,23 @@ class Month:
     r: np.ndarray
 
 
-def inputs(table: pl.DataFrame) -> list[str]:
-    """The characteristic columns of a :func:`build` table, in table order."""
-    return [c for c in table.columns if c not in NOT_INPUTS]
+def inputs(table: pl.DataFrame, which: str = "all") -> list[str]:
+    """The characteristic columns of a :func:`build` table, in table order.
+
+    Args:
+        table: From :func:`build`.
+        which: ``all``; ``ours`` (the derived monthly table's characteristics); ``jkp`` (the
+            JKP characteristics, ``research.optimizer.jkp``).
+    """
+    every = [c for c in table.columns if c not in NOT_INPUTS]
+    if which == "all":
+        return every
+    jkp_cols = [c for c in every if c in JKP_COLUMNS]
+    if which == "jkp":
+        return jkp_cols
+    if which == "ours":
+        return [c for c in every if c not in JKP_COLUMNS]
+    raise ValueError(f"unknown input set {which!r}: all, ours or jkp")
 
 
 def characteristics(root: Path, panel: Panel) -> pl.DataFrame:
@@ -85,12 +112,15 @@ def characteristics(root: Path, panel: Panel) -> pl.DataFrame:
     return features.join(context, on=["date", "symbol"], how="left")
 
 
-def build(root: Path, rules: EligibilityRules = PAPER_RULES) -> pl.DataFrame:
+def build(
+    root: Path, rules: EligibilityRules = PAPER_RULES, jkp_chars: bool = True
+) -> pl.DataFrame:
     """The stock-month table (module docs).
 
     Args:
         root: The data hive.
         rules: Which stocks get a row (default: the paper's universe).
+        jkp_chars: Add the JKP price-based characteristics (``research.optimizer.jkp``).
 
     Returns:
         The characteristics plus ``nyse`` (listed on the NYSE; current listing, not point in
@@ -99,6 +129,15 @@ def build(root: Path, rules: EligibilityRules = PAPER_RULES) -> pl.DataFrame:
         by date and symbol.
     """
     monthly = characteristics(root, Panel.load(root, rules=rules))
+    if jkp_chars:
+        from portfolio_lab.research.optimizer import jkp  # noqa: PLC0415 - heavy, optional
+
+        extra = jkp.build(root, monthly.select("date", "symbol", "market_value"))
+        monthly = (
+            monthly.with_columns(month_key(pl.col("date")).alias("ym"))
+            .join(extra, on=["symbol", "ym"], how="left")
+            .drop("ym")
+        )
     panel = Panel.load(root)  # production's rules: eligibility, and the same prices
     nyse = panel.ids.securities.select(
         pl.col("sid").cast(pl.String).alias("symbol"), (pl.col("exchange") == "NYSE").alias("nyse")

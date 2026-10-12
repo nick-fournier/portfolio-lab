@@ -37,20 +37,28 @@ def data_cmd(out: Annotated[Path, typer.Option(help="Parquet file to write.")]) 
                f"{len(data.inputs(table))} characteristics -> {out}")  # fmt: skip
 
 
-def _months(table: Path, pool: int | None) -> list:
+def _months(table: Path, pool: int | None, inputs: str = "all") -> list:
     """``data.months`` of a table, cached next to it (ranking every month takes a while)."""
     from portfolio_lab.research.optimizer import data  # noqa: PLC0415
 
-    cache = table.with_name(f"{table.stem}.months-{pool or 'paper'}.pkl")
+    cache = table.with_name(f"{table.stem}.months-{pool or 'paper'}-{inputs}.pkl")
     if cache.exists() and cache.stat().st_mtime > table.stat().st_mtime:
         return pickle.loads(cache.read_bytes())
-    months = data.months(pl.read_parquet(table), pool)
+    frame = pl.read_parquet(table)
+    months = data.months(frame, pool, data.inputs(frame, inputs))
     cache.write_bytes(pickle.dumps(months))
     return months
 
 
 def _walk_one(
-    table: Path, out: Path, settings, pool: int, device: str, threads: int, precision: str
+    table: Path,
+    out: Path,
+    settings,
+    pool: int,
+    device: str,
+    threads: int,
+    precision: str,
+    inputs: str,
 ) -> str:
     """One walk: train, save weights, log, model and settings; return a summary line."""
     import torch  # noqa: PLC0415
@@ -59,12 +67,15 @@ def _walk_one(
 
     torch.set_num_threads(threads)
     torch.set_float32_matmul_precision(precision)
-    weights, log, fitted = walk.walk(_months(table, pool or None), settings, device)
+    weights, log, fitted = walk.walk(_months(table, pool or None, inputs), settings, device)
     out.mkdir(parents=True, exist_ok=True)
     weights.write_parquet(out / "weights.parquet")
     log.write_parquet(out / "log.parquet")
     torch.save(fitted.state_dict(), out / "model.pt")
-    meta = asdict(replace(settings, start=settings.start.isoformat())) | {"pool": pool}
+    meta = asdict(replace(settings, start=settings.start.isoformat())) | {
+        "pool": pool,
+        "inputs": inputs,
+    }
     (out / "settings.json").write_text(json.dumps(meta, indent=2))
     graded = log.filter(pl.col("ret").is_not_null())
     return (f"{settings.model} seed {settings.seed}: {graded.height} months, Sharpe "
@@ -112,6 +123,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         bool, typer.Option(help="bfloat16 fused attention (~5x faster transformer).")
     ] = False,
     clip: Annotated[float, typer.Option(help="Gradient clipping (0: none).")] = 1.0,
+    inputs: Annotated[str, typer.Option(help="Characteristics: all, ours or jkp.")] = "all",
     precision: Annotated[
         str, typer.Option(help="float32 matrix products: highest, or high (TF32, faster).")
     ] = "highest",
@@ -129,7 +141,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     from portfolio_lab.research.optimizer import walk  # noqa: PLC0415
 
     picked = _seeds(seeds)
-    _months(table, pool or None)  # build the cache once, before the workers read it
+    _months(table, pool or None, inputs)  # build the cache once, before the workers read it
     runs = [out / f"seed-{s}" for s in picked]
     threads = max(1, (os.cpu_count() or 1) // min(jobs, len(picked)))
     with ProcessPoolExecutor(min(jobs, len(picked)), initializer=_die_with_parent,
@@ -141,7 +153,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 date.fromisoformat(start), long_only, fast_attention, clip or None,
             )  # fmt: skip
             futures.append(
-                pool_.submit(_walk_one, table, run, settings, pool, device, threads, precision)
+                pool_.submit(
+                    _walk_one, table, run, settings, pool, device, threads, precision, inputs
+                )
             )
         for f in futures:
             typer.echo(f.result())
