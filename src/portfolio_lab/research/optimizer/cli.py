@@ -86,7 +86,8 @@ def _walk_one(  # noqa: PLR0913, PLR0917 - one walk's pieces
     return (f"{settings.model} seed {settings.seed}: {graded.height} months, Sharpe "
             f"{_halves(graded['date'].to_list(), graded['ret'].to_numpy())}; "
             f"median long {graded['long'].median():.2f}, short {graded['short'].median():.2f}, "
-            f"largest {graded['largest'].median():.1%} of gross; "
+            f"largest {graded['largest'].median() or 0:.1%} of gross; "
+            f"{(log['m'] == 0).sum()} months all cash; "
             f"{log['seconds'].sum() / 60:.1f} min")  # fmt: skip
 
 

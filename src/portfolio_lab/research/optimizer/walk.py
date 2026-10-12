@@ -54,7 +54,7 @@ class Settings:
             loss, one month per step).
         batch: Consecutive months per step with an ``objective``.
         gamma: The objective's risk appetite (``None``: ``objectives.GAMMA``).
-        relu: Long-only weights = max(score, 0), size free (model.Optimizer); saved as the mix
+        relu: Long-only weights = max(score, 0) / N, size free (model.Optimizer); saved as the mix
             like ``scale``, the total logged as m.
     """
 

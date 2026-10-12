@@ -33,9 +33,12 @@ weights), so the model learns only the ranking.
 
 Every softmax variant collapsed onto one stock whatever the objective (run15, 2026-10-12): a
 softmax weight's gradient is w (1 - w), so stocks already held learn fastest and the rest
-freeze. ``relu`` instead keeps the paper's output and zeroes the negatives, w = max(Y lam, 0):
-long-only, any total size (the paper's loss sizes it), and the same gradient, 1, for every
-stock held. Softplus would not do: at the replication's typical weight, ~0.01, it is exp.
+freeze. ``relu`` instead keeps the paper's output and zeroes the negatives,
+w = max(Y lam, 0) / N for the month's N candidates: long-only, any total size (the paper's
+loss sizes it), and the same gradient for every stock held. Softplus would not do: at the
+replication's typical weight, ~0.01, it is exp. Without the 1 / N the first portfolio is ~1,500
+times invested (half of ~3,900 stocks at ~0.4), the first steps push every score below 0, and
+with no stock held the gradient is 0 for good (run16, 2026-10-12); with it, ~0.4 times.
 """
 
 import torch
@@ -140,7 +143,8 @@ class Optimizer(nn.Module):
             and aims at the best long-only Sharpe rather than the best return at full size.
         cap: With ``long_only``, the largest weight in any stock (:func:`capped_softmax`).
         names: With ``long_only``, the effective names held (:func:`spread_softmax`).
-        relu: With ``long_only``, weights = max(score, 0) instead of a softmax (module docs).
+        relu: With ``long_only``, weights = max(score, 0) / N instead of a softmax (module
+            docs).
     """
 
     def __init__(  # noqa: PLR0913, PLR0917 - one argument per setting
@@ -182,7 +186,7 @@ class Optimizer(nn.Module):
         if not self.long_only:
             return scores
         if self.relu:
-            return torch.relu(scores)
+            return torch.relu(scores) / len(scores)
         if self.names:
             scores = spread_softmax(scores, self.names)
         w = capped_softmax(scores, self.cap) if self.cap else torch.softmax(scores, dim=0)

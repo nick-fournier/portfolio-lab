@@ -195,7 +195,7 @@ def test_relu_long_only_zeroes_negative_scores_and_the_walk_saves_the_mix():
     with torch.no_grad():
         model.lam.copy_(torch.tensor([1.0, 0.0]))
     w = model.weights(torch.tensor([[0.3, 0.0], [-0.2, 0.0], [0.1, 0.0]]))
-    assert w.tolist() == pytest.approx([0.3, 0.0, 0.1])  # the score where positive, else 0
+    assert w.tolist() == pytest.approx([0.1, 0.0, 0.1 / 3])  # positive scores / N, else 0
     rng = np.random.default_rng(2)
     months = []
     for k in range(30):
