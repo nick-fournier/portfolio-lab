@@ -7,7 +7,8 @@ next month's return over the T-bill (the same definition as the Forecaster's tar
 missing bars earn zero, a stock that fell to OTC takes the delisting return).
 
 :func:`months` turns that table into what one training step sees: for each month end, the
-candidates (the ``pool`` most liquid stocks eligible under production's rules), their
+candidates (the ``pool`` most liquid stocks eligible under production's rules, among those
+missing at most a third of the characteristics, as in the paper), their
 characteristics ranked across the candidates into [-0.5, 0.5] (missing = 0, the middle), and
 their next-month excess returns.
 """
@@ -97,20 +98,29 @@ def _ranked(values: np.ndarray) -> np.ndarray:
     return out
 
 
-def months(table: pl.DataFrame, pool: int, columns: list[str] | None = None) -> list[Month]:
+def months(
+    table: pl.DataFrame, pool: int, columns: list[str] | None = None, max_missing: float = 1 / 3
+) -> list[Month]:
     """Per-month candidates and their ranked characteristics (module docs).
 
     Args:
         table: From :func:`build`.
         pool: Candidates per month: the most liquid stocks eligible under production's rules.
         columns: Characteristics to use (default: all of :func:`inputs`).
+        max_missing: Stocks missing more than this share of the characteristics are left out
+            before the most liquid are picked (the paper's filter, sec. 4.1).
 
     Returns:
         One :class:`Month` per month end, ascending.
     """
     columns = columns or inputs(table)
     out = []
-    usable = table.filter(pl.col("eligible") & pl.col("adv").is_not_null())
+    missing = pl.sum_horizontal(
+        pl.col(c).cast(pl.Float64).is_nan().fill_null(True) for c in columns
+    )
+    usable = table.filter(
+        pl.col("eligible") & pl.col("adv").is_not_null() & (missing <= max_missing * len(columns))
+    )
     for (day,), month in usable.group_by("date", maintain_order=True):
         g = month.sort("adv", descending=True).head(pool)
         x = g.select(pl.col(c).cast(pl.Float64) for c in columns).to_numpy()

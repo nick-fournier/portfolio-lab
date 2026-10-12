@@ -1,8 +1,9 @@
 """The three models compared, as in the paper (Kelly, Kuznetsov, Malamud & Xu 2026, sec. 3).
 
-Every model maps one month's candidates, ``x`` (candidates x inputs), to a score per stock;
-the weights are the softmax of the scores over the month's candidates (positive, summing to 1:
-long-only, fully invested).
+Every model maps one month's candidates, ``x`` (candidates x inputs), to a score per stock.
+As in the paper, the scores are the portfolio weights (w = Y lam): long or short, any total
+size. ``long_only`` instead takes the softmax of the scores over the month's candidates
+(positive, summing to 1), a departure from the paper kept for later.
 
 - ``linear`` (O1): score = x @ lam. Each stock judged on its own inputs, no depth.
 - ``mlp`` (O2): ``blocks`` feed-forward blocks, then x @ lam. Depth and nonlinearity, each stock
@@ -20,8 +21,10 @@ Initialization as in the paper (sec. 4.3): Q, K, V ~ N(0, 1/D); W1 ~ N(0, 1/hidd
 W2 ~ N(0, 1/D), biases 0; lam ~ N(0, 1/D).
 
 Loss for one month (paper eq. 9 without the penalty): (1 - w . r)^2, w the weights and r next
-month's returns over the T-bill. With the weights summing to 1 this equals
-1 - 2 (w.r - (w.r)^2 / 2): minimizing it maximizes Kelly's growth approximation.
+month's returns over the T-bill. Over many months, with the weights free in size, minimizing it
+gives the maximum-Sharpe portfolio. With long-only weights summing to 1 it instead equals
+1 - 2 (w.r - (w.r)^2 / 2): Kelly's growth approximation with no cap, which puts everything on
+one stock (stage 1, 2026-10-11).
 """
 
 import torch
@@ -74,15 +77,19 @@ class Optimizer(nn.Module):
         width: Inputs per stock (D).
         blocks: Blocks for ``mlp`` and ``transformer`` (ignored for ``linear``).
         hidden: Feed-forward hidden width.
+        long_only: Softmax the scores (module docs); default: the scores are the weights.
     """
 
-    def __init__(self, kind: str, width: int, blocks: int = 1, hidden: int = 256):
+    def __init__(
+        self, kind: str, width: int, blocks: int = 1, hidden: int = 256, long_only: bool = False
+    ):
         super().__init__()
         if kind not in MODELS:
             raise ValueError(f"unknown model {kind!r}; known: {MODELS}")
         n = 0 if kind == "linear" else blocks
         self.blocks = nn.ModuleList(Block(width, hidden, kind == "transformer") for _ in range(n))
         self.lam = _normal(width, var=1 / width)
+        self.long_only = long_only
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(candidates x width) -> a score per candidate."""
@@ -91,8 +98,9 @@ class Optimizer(nn.Module):
         return x @ self.lam
 
     def weights(self, x: torch.Tensor) -> torch.Tensor:
-        """Portfolio weights over the candidates: softmax of the scores."""
-        return torch.softmax(self(x), dim=0)
+        """Portfolio weights over the candidates: the scores, or their softmax if long-only."""
+        scores = self(x)
+        return torch.softmax(scores, dim=0) if self.long_only else scores
 
 
 def loss(model: Optimizer, x: torch.Tensor, r: torch.Tensor) -> torch.Tensor:

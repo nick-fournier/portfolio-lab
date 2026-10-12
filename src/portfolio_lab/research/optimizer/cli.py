@@ -20,8 +20,8 @@ from portfolio_lab.core.config import get_settings
 optimizer_app = typer.Typer(help="Class 3 optimizer track (research).")
 
 
-def _cagr(monthly: np.ndarray) -> float:
-    return float(np.prod(1 + monthly) ** (12 / len(monthly)) - 1) if len(monthly) else float("nan")
+def _sharpe(monthly: np.ndarray) -> float:
+    return float(monthly.mean() / monthly.std() * 12**0.5) if len(monthly) > 1 else float("nan")
 
 
 @optimizer_app.command("data")
@@ -51,6 +51,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     seed: Annotated[int, typer.Option()] = 0,
     start: Annotated[str, typer.Option(help="First test month end.")] = "2003-12-31",
     device: Annotated[str, typer.Option()] = "cuda",
+    long_only: Annotated[bool, typer.Option(help="Softmax weights (not the paper's).")] = False,
 ) -> None:
     """Walk one model forward and save its monthly portfolios."""
     import torch  # noqa: PLC0415
@@ -58,7 +59,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     from portfolio_lab.research.optimizer import data, walk  # noqa: PLC0415
 
     settings = walk.Settings(model, blocks, hidden, window or None, first_epochs, warm_epochs,
-                             lr, seed, date.fromisoformat(start))  # fmt: skip
+                             lr, seed, date.fromisoformat(start), long_only)  # fmt: skip
     months = data.months(pl.read_parquet(table), pool)
     weights, log, fitted = walk.walk(months, settings, device)
     out.mkdir(parents=True, exist_ok=True)
@@ -70,10 +71,11 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     graded = log.filter(pl.col("ret").is_not_null())
     r, d = graded["ret"].to_numpy(), graded["date"].to_list()
     half = next((k for k, x in enumerate(d) if x >= date(2015, 12, 31)), len(d))
-    typer.echo(f"{model}: {len(r)} months, before costs over T-bill: {_cagr(r):.1%}/yr "
-               f"(to 2015 {_cagr(r[:half]):.1%}, after {_cagr(r[half:]):.1%}); "
-               f"median holdings {graded['holdings'].median():.0f}, "
-               f"median largest {graded['largest'].median():.1%}, "
+    typer.echo(f"{model}: {len(r)} months, Sharpe (monthly returns over T-bill, annualized) "
+               f"{_sharpe(r):.2f} (to 2015 {_sharpe(r[:half]):.2f}, "
+               f"after {_sharpe(r[half:]):.2f}); "
+               f"median long {graded['long'].median():.2f}, short {graded['short'].median():.2f}, "
+               f"largest {graded['largest'].median():.1%} of gross; "
                f"{log['seconds'].sum() / 60:.1f} min")  # fmt: skip
 
 

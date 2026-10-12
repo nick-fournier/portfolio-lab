@@ -35,6 +35,7 @@ class Settings:
         lr: Adam's learning rate.
         seed: Random seed (initial weights and month order).
         start: First test month end.
+        long_only: Softmax weights instead of the paper's unconstrained ones (model docs).
     """
 
     model: str
@@ -46,6 +47,7 @@ class Settings:
     lr: float = 1e-3
     seed: int = 0
     start: date = date(2003, 12, 31)
+    long_only: bool = False
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -64,13 +66,15 @@ def walk(
 
     Returns:
         ``weights`` (date, symbol, weight) for every test month; ``log`` (date, ret = the
-        portfolio's next-month return over the T-bill before costs, effective number of
-        holdings = 1 / sum of squared weights, largest weight, mean training loss over the
-        last pass, seconds); and the final model.
+        portfolio's next-month return over the T-bill before costs, ``long`` and ``short`` =
+        the sums of the positive and negative weights, ``largest`` = the largest absolute
+        weight's share of the sum of absolute weights, mean training loss over the last pass,
+        seconds); and the final model.
     """
     torch.manual_seed(settings.seed)
     rng = np.random.default_rng(settings.seed)
-    model = Optimizer(settings.model, months[0].x.shape[1], settings.blocks, settings.hidden)
+    model = Optimizer(settings.model, months[0].x.shape[1], settings.blocks, settings.hidden,
+                      settings.long_only)  # fmt: skip
     model.to(device)
     adam = torch.optim.Adam(model.parameters(), lr=settings.lr)
     data = [_tensors(m, device) for m in months]
@@ -97,7 +101,9 @@ def walk(
         ret = float(w @ month.r) if known[t] else None
         weights.append(pl.DataFrame({"date": [month.date] * len(w), "symbol": month.symbols,
                                      "weight": w}))  # fmt: skip
-        log.append({"date": month.date, "ret": ret, "holdings": float(1 / (w**2).sum()),
-                    "largest": float(w.max()), "loss": float(np.mean(losses)),
+        gross = float(np.abs(w).sum())
+        log.append({"date": month.date, "ret": ret, "long": float(w[w > 0].sum()),
+                    "short": float(w[w < 0].sum()), "largest": float(np.abs(w).max()) / gross,
+                    "loss": float(np.mean(losses)),
                     "seconds": time.perf_counter() - clock})  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model

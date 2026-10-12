@@ -39,7 +39,7 @@ def test_the_three_models_give_weights_that_are_positive_and_sum_to_one():
     x = torch.rand(7, 4) - 0.5
     r = torch.rand(7) * 0.1
     for kind in MODELS:
-        model = Optimizer(kind, width=4, blocks=2, hidden=8)
+        model = Optimizer(kind, width=4, blocks=2, hidden=8, long_only=True)
         w = model.weights(x)
         assert w.shape == (7,)
         assert float(w.sum()) == pytest.approx(1.0, abs=1e-6)
@@ -60,7 +60,7 @@ def test_walk_trains_on_earlier_months_and_learns_to_favor_the_stock_that_keeps_
         r = np.where(x[:, 0] > 0.2, 0.05, -0.01).astype(np.float32)  # input 0 predicts return
         months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDE"), x, r))
     settings = Settings("linear", window=12, first_epochs=200, warm_epochs=5, lr=0.05,
-                        start=date(2000, 1, 1))  # fmt: skip
+                        start=date(2000, 1, 1), long_only=True)  # fmt: skip
     weights, log, _ = walk(months, settings)
     assert log["date"].to_list() == [m.date for m in months[12:]]  # needs 12 earlier months
     assert weights.group_by("date").agg(pl.col("weight").sum())["weight"].to_list() == (
