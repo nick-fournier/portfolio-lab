@@ -1,7 +1,7 @@
 """Summary of the forecaster for the Forecasts page, rebuilt with the forecasts nightly.
 
 Graded on unseen months from :data:`FIRST_GRADED`, on the stock-months both forecasts
-cover: the nine-term forecaster (``linear``) and production's expected return
+cover: the nine-term forecaster (``linear``, class 2) and class 1's expected return
 (``baseline``: the trailing one-year return). Outcomes are each stock's return relative to
 the month's average stock, so the two are graded on the same footing. Headline grades of
 each; IC by year and 12-month trailing IC; forecast against outcome by forecast group; the
@@ -30,7 +30,7 @@ FIRST_GRADED = 2009
 #: The two forecasts, as graded on the page.
 PIECES = {
     "forecast": "Class 2: least squares on nine terms",
-    "production": "Class 1 (production): trailing one-year return",
+    "production": "Class 1 (momentum + health filter): trailing one-year return",
 }
 TRAILING = 12
 #: The strategies' candidates: this many most liquid stocks each month.
@@ -181,7 +181,7 @@ def publish(folder: Path, panel: Panel, monthly: pl.DataFrame) -> Path:
 
     Args:
         folder: The forecaster's results (``DataPaths.forecaster``).
-        panel: Prices, for production's forecast, liquidity and outcomes.
+        panel: Prices, for class 1's forecast, liquidity and outcomes.
         monthly: The monthly stock inputs, for each stock's size.
     """
     forecasts = pl.read_parquet(folder / linear.FILE).filter(

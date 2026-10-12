@@ -7,7 +7,7 @@
 {% set f = s.pieces.forecast %}
 <p class="lede">Class 2's forecast: next month's return over the T-bill for every stock,
   refit every month on all earlier months and graded only on months it had not seen
-  ({{ s.start[:7] }} to {{ s.end[:7] }}), against production's (class 1) expected return,
+  ({{ s.start[:7] }} to {{ s.end[:7] }}), against class 1's expected return,
   each stock's trailing one-year return.</p>
 <div class="cards">
   <div class="card"><div class="label">Top 30 of the 400 most liquid</div><div class="value">{{ f.top_yr | pct(1) }}/yr</div></div>
@@ -20,7 +20,7 @@
 <h2>How it works</h2>
 <p><b>What it predicts.</b> Each stock's return from one month end to the next, minus that
   month's T-bill: what the stock is expected to earn over cash. Class 2 hands it to the
-  optimizer as each stock's expected return; class 1 (production) uses the stock's trailing
+  optimizer as each stock's expected return; class 1 (momentum + health filter) uses the stock's trailing
   one-year return instead.</p>
 <p><b>Nine terms</b>, as known at each month end:</p>
 <ul>
@@ -73,7 +73,7 @@
 
 <h3>After Grinold's rule: the order the optimizer acts on</h3>
 <div id="grinold" class="chart"></div>
-<p class="muted">The forecasts as the Forecaster hands them to the optimizer, for the 400 most
+<p class="muted">The forecasts as the linear model hands them to the optimizer, for the 400 most
   liquid stocks each month (where it picks), split into 20 groups; bars are each group's
   average outcome against the average of the 400, with a 90% margin. Rising bars mean the
   ranking holds up.</p>
@@ -86,13 +86,13 @@
 <div id="tenths" class="chart"></div>
 <p class="muted">Each month, the tenth of stocks with the highest forecast and the tenth with the
   lowest, across all stocks; their actual return over the next month relative to the average
-  stock, compounded as growth of $1. Solid: class 2's forecast. Dotted: production's. The portfolio only buys stocks, so it can't bet against the
+  stock, compounded as growth of $1. Solid: class 2's forecast. Dotted: class 1's. The portfolio only buys stocks, so it can't bet against the
   bottom tenth, only avoid it. Before trading costs.</p>
 
-<h3>Ranking by year, against production's</h3>
+<h3>Ranking by year, against class 1's</h3>
 <div id="years" class="chart"></div>
 <p class="muted">Higher is better; 0 is no better than chance. Bars show a 90% margin.</p>
-<h3>Twelve-month average, against production's</h3>
+<h3>Twelve-month average, against class 1's</h3>
 <div id="trailing" class="chart short"></div>
 <p class="muted">IC: how well each month's forecast ranked the stocks by what they actually did
   (0 = no better than chance, higher = better). Each line is a model graded against actual
