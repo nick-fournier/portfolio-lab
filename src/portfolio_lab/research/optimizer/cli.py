@@ -110,3 +110,78 @@ def backtest_cmd(
                f"2004-15 {cagr(r[:half]):.1%}  2016-26 {cagr(r[half:]):.1%}  "
                f"turnover/yr {daily['turnover'].sum() / years:.1f}x  "
                f"cost {daily['cost'].sum() / years:.2%}/yr")  # fmt: skip
+
+
+def _halves(dates: list[date], r: np.ndarray) -> str:
+    half = next((k for k, x in enumerate(dates) if x >= date(2015, 12, 31)), len(dates))
+    return f"{_sharpe(r):.2f} (to 2015 {_sharpe(r[:half]):.2f}, after {_sharpe(r[half:]):.2f})"
+
+
+@optimizer_app.command("average")
+def average_cmd(runs: Annotated[list[Path], typer.Argument(help="Walk folders (one per seed).")]):
+    """Average several seeds' portfolios (the paper's 10-seed average) and report Sharpe.
+
+    The averaged weights' monthly return is the average of the seeds' returns.
+    """
+    logs = [pl.read_parquet(r / "log.parquet").select("date", pl.col("ret").alias(r.name))
+            for r in runs]  # fmt: skip
+    joined = logs[0]
+    for log in logs[1:]:
+        joined = joined.join(log, on="date")
+    joined = joined.drop_nulls().sort("date")
+    names = [r.name for r in runs]
+    each = [_sharpe(joined[n].to_numpy()) for n in names]
+    mean = joined.select(pl.mean_horizontal(names)).to_series().to_numpy()
+    typer.echo(f"{len(runs)} seeds, each: min {min(each):.2f} median {np.median(each):.2f} "
+               f"max {max(each):.2f}; "
+               f"average portfolio: {_halves(joined['date'].to_list(), mean)}")  # fmt: skip
+
+
+@optimizer_app.command("ridge")
+def ridge_cmd(
+    table: Annotated[Path, typer.Option(help="The table from `plab optimizer data`.")],
+    start: Annotated[str, typer.Option(help="First test month end.")] = "2003-12-31",
+) -> None:
+    """The paper's linear benchmark: ridge in closed form, penalty picked two ways."""
+    from portfolio_lab.research.optimizer import data, ridge  # noqa: PLC0415
+
+    months = data.months(pl.read_parquet(table))
+    first = next(k for k, m in enumerate(months) if m.date >= date.fromisoformat(start))
+    out = ridge.walk(months, start_index=first)
+    best = ridge.GRID.index(out["best_z"])
+    typer.echo("Sharpe by penalty: " + ", ".join(
+        f"{z:.0e} {s:.2f}" for z, s in zip(ridge.GRID, out["sharpe"], strict=True)))  # fmt: skip
+    typer.echo(f"best penalty {out['best_z']:.0e} (looks ahead, as the paper's BSV): "
+               f"{_halves(out['dates'], out['returns'][:, best])}")  # fmt: skip
+    typer.echo(f"leave-one-out each month (no look-ahead): {_halves(out['dates'], out['loo'])}; "
+               f"median penalty {np.median(out['loo_z']):.0e}")  # fmt: skip
+
+
+@optimizer_app.command("signal")
+def signal_cmd(
+    table: Annotated[Path, typer.Option(help="The table from `plab optimizer data`.")],
+    forecasts: Annotated[Path, typer.Option(help="Parquet with date, symbol, forecast.")],
+    start: Annotated[str, typer.Option(help="First month end.")] = "2003-12-31",
+) -> None:
+    """Sharpe of a forecast traded the same long-short way, on the same candidates.
+
+    Each month: the candidates that have a forecast, weights = the forecast's rank across
+    them in [-0.5, 0.5] (a characteristic-managed portfolio, like each input's factor).
+    """
+    from portfolio_lab.research.optimizer import data  # noqa: PLC0415
+
+    f = pl.read_parquet(forecasts).select("date", "symbol", "forecast")
+    months = [m for m in data.months(pl.read_parquet(table))
+              if m.date >= date.fromisoformat(start) and np.isfinite(m.r).all()]  # fmt: skip
+    dates, rets, counts = [], [], []
+    for m in months:
+        got = dict(f.filter(pl.col("date") == m.date).select("symbol", "forecast").iter_rows())
+        keep = [k for k, s in enumerate(m.symbols) if s in got]
+        if len(keep) < 100:
+            continue
+        w = data._ranked(np.array([[got[m.symbols[k]]] for k in keep]))[:, 0]
+        dates.append(m.date)
+        rets.append(float(w @ m.r[keep]))
+        counts.append(len(keep))
+    typer.echo(f"{len(dates)} months, median {int(np.median(counts))} stocks with a forecast: "
+               f"Sharpe {_halves(dates, np.array(rets))}")  # fmt: skip
