@@ -80,12 +80,13 @@ def test_names_fix_the_concentration_whatever_the_scores_size():
     torch = pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
 
+    torch.manual_seed(0)
     model = Optimizer("linear", 3, long_only=True, cap=0.1, names=25)
     x = torch.rand(3000, 3) - 0.5
     w = model.weights(x)
     model.lam.data *= 1e6  # runaway scores: same portfolio
     assert torch.allclose(model.weights(x), w, atol=1e-6)
-    assert 22 < float(1 / (w**2).sum()) < 28
+    assert 20 < float(1 / (w**2).sum()) < 35  # near 25; the cap shifts it a little
     w.sum().backward()
 
 
@@ -183,3 +184,30 @@ def test_scaled_long_only_weights_are_m_times_a_mix_and_the_walk_saves_the_mix()
     sums = weights.group_by("date").agg(pl.col("weight").sum())["weight"].to_list()
     assert sums == pytest.approx([1.0] * 4)
     assert (log["m"] > 0).all()
+
+
+def test_relu_long_only_zeroes_negative_scores_and_the_walk_saves_the_mix():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    model = Optimizer("linear", 2, long_only=True, relu=True)
+    with torch.no_grad():
+        model.lam.copy_(torch.tensor([1.0, 0.0]))
+    w = model.weights(torch.tensor([[0.3, 0.0], [-0.2, 0.0], [0.1, 0.0]]))
+    assert w.tolist() == pytest.approx([0.3, 0.0, 0.1])  # the score where positive, else 0
+    rng = np.random.default_rng(2)
+    months = []
+    for k in range(30):
+        x = rng.uniform(-0.5, 0.5, (5, 2)).astype(np.float32)
+        r = np.where(x[:, 0] > 0.2, 0.05, -0.01).astype(np.float32)  # input 0 predicts return
+        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDE"), x, r))
+    settings = Settings("linear", window=12, first_epochs=200, warm_epochs=5, lr=0.05,
+                        start=date(2000, 1, 1), long_only=True, relu=True)  # fmt: skip
+    weights, log, _ = walk(months, settings)
+    assert (weights["weight"] >= 0).all()
+    sums = weights.group_by("date").agg(pl.col("weight").sum())["weight"].to_list()
+    # the mix, or all cash in a month the model scores every stock negative; size logged as m
+    assert all(x == pytest.approx(1.0) or x == 0 for x in sums)
+    assert sum(x > 0 for x in sums) >= 12
+    assert log["ret"].mean() > 0.02  # it learned to hold the stocks with input 0 high

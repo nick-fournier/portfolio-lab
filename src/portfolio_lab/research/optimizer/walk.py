@@ -54,6 +54,8 @@ class Settings:
             loss, one month per step).
         batch: Consecutive months per step with an ``objective``.
         gamma: The objective's risk appetite (``None``: ``objectives.GAMMA``).
+        relu: Long-only weights = max(score, 0), size free (model.Optimizer); saved as the mix
+            like ``scale``, the total logged as m.
     """
 
     model: str
@@ -74,6 +76,7 @@ class Settings:
     objective: str | None = None
     batch: int = 12
     gamma: float | None = None
+    relu: bool = False
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -111,7 +114,7 @@ def walk(
     rng = np.random.default_rng(settings.seed)
     model = Optimizer(settings.model, months[0].x.shape[1], settings.blocks, settings.hidden,
                       settings.long_only, settings.fast_attention, settings.scale,
-                      settings.cap, settings.names)  # fmt: skip
+                      settings.cap, settings.names, settings.relu)  # fmt: skip
     model.to(device)
     adam = torch.optim.Adam(model.parameters(), lr=settings.lr)
     data = [_tensors(m, device) for m in months]
@@ -141,16 +144,18 @@ def walk(
         trained = True
         with torch.no_grad():
             w = model.weights(data[t][0]).cpu().numpy().astype(np.float64)
-        m = float(w.sum()) if settings.scale else 1.0
-        if settings.scale:
+        sized = settings.scale or (settings.relu and settings.long_only)
+        m = float(w.sum()) if sized else 1.0
+        if sized and m > 0:
             w = w / m  # hold the mix fully invested; m is the model's sizing
         ret = float(w @ month.r) if known[t] else None
         weights.append(pl.DataFrame({"date": [month.date] * len(w), "symbol": month.symbols,
                                      "weight": w}))  # fmt: skip
-        gross = float(np.abs(w).sum())
+        gross = float(np.abs(w).sum())  # 0 only if relu zeroed every stock: all cash
         log.append({"date": month.date, "ret": ret, "long": float(w[w > 0].sum()),
-                    "short": float(w[w < 0].sum()), "largest": float(np.abs(w).max()) / gross,
+                    "short": float(w[w < 0].sum()),
+                    "largest": float(np.abs(w).max()) / gross if gross else None,
                     "loss": float(torch.stack(losses).mean()), "m": m,
-                    "holdings": float(1 / (w**2).sum()) if settings.long_only else None,
+                    "holdings": float(1 / (w**2).sum()) if settings.long_only and gross else None,
                     "seconds": time.perf_counter() - clock})  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model

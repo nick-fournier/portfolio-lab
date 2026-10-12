@@ -30,6 +30,12 @@ until ten names sit at the cap and the gradient is exactly zero (run13, 2026-10-
 ``names`` fixes the concentration instead (:func:`spread_softmax`): each month the softmax
 temperature is set so the portfolio holds that many effective names (1 / sum of squared
 weights), so the model learns only the ranking.
+
+Every softmax variant collapsed onto one stock whatever the objective (run15, 2026-10-12): a
+softmax weight's gradient is w (1 - w), so stocks already held learn fastest and the rest
+freeze. ``relu`` instead keeps the paper's output and zeroes the negatives, w = max(Y lam, 0):
+long-only, any total size (the paper's loss sizes it), and the same gradient, 1, for every
+stock held. Softplus would not do: at the replication's typical weight, ~0.01, it is exp.
 """
 
 import torch
@@ -134,6 +140,7 @@ class Optimizer(nn.Module):
             and aims at the best long-only Sharpe rather than the best return at full size.
         cap: With ``long_only``, the largest weight in any stock (:func:`capped_softmax`).
         names: With ``long_only``, the effective names held (:func:`spread_softmax`).
+        relu: With ``long_only``, weights = max(score, 0) instead of a softmax (module docs).
     """
 
     def __init__(  # noqa: PLR0913, PLR0917 - one argument per setting
@@ -147,6 +154,7 @@ class Optimizer(nn.Module):
         scale: bool = False,
         cap: float | None = None,
         names: float | None = None,
+        relu: bool = False,
     ):
         super().__init__()
         if kind not in MODELS:
@@ -159,6 +167,7 @@ class Optimizer(nn.Module):
         self.long_only = long_only
         self.cap = cap
         self.names = names
+        self.relu = relu
         self.log_m = nn.Parameter(torch.zeros(())) if (long_only and scale) else None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -168,10 +177,12 @@ class Optimizer(nn.Module):
         return x @ self.lam
 
     def weights(self, x: torch.Tensor) -> torch.Tensor:
-        """Portfolio weights: the scores, their softmax if long-only, times m if scaled."""
+        """Portfolio weights: the scores; if long-only, their relu or softmax (times m)."""
         scores = self(x)
         if not self.long_only:
             return scores
+        if self.relu:
+            return torch.relu(scores)
         if self.names:
             scores = spread_softmax(scores, self.names)
         w = capped_softmax(scores, self.cap) if self.cap else torch.softmax(scores, dim=0)
