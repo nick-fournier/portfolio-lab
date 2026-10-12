@@ -11,7 +11,7 @@ from portfolio_lab.web.routes.status import data_freshness, read_job
 
 router = APIRouter()
 
-#: Market references on the overview, drawn with the production models; every other
+#: Market references on the overview, drawn with the class 1 and 2 models; every other
 #: strategy is listed but starts hidden on the chart (shown from the legend).
 MARKET = ("SPY", "QQQ")
 
@@ -38,7 +38,7 @@ def page_context(data_dir: Path) -> dict:
         shown = [s for s in everything.values() if s.category == "ours"]
         shown += [everything[k] for k in MARKET if k in everything]
         rows = series.table(shown)
-        visible = {*MARKET, *series.production_keys()}
+        visible = {*MARKET, *series.model_keys()}
         return {"rows": rows, "chart": series_figure(shown, visible),
                 "since": series.first_date(shown) if shown else None}  # fmt: skip
 

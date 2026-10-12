@@ -141,7 +141,7 @@ def run(
 
     Args:
         data_dir: The data directory (prices, features, and where records are kept).
-        strategy: The strategy object (production, ``jobs.tasks.PRODUCTION``).
+        strategy: The strategy object (``jobs.tasks.PAPER_STRATEGY``).
         broker: The paper account.
         refresh: Called before computing targets on a rebalance day (rebuilds the monthly
             features so the month just closed is included); skipped in a dry run.
