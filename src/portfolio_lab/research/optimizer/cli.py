@@ -49,10 +49,41 @@ def _months(table: Path, pool: int | None) -> list:
     return months
 
 
+def _walk_one(table: Path, out: Path, settings, pool: int, device: str, threads: int) -> str:
+    """One walk: train, save weights, log, model and settings; return a summary line."""
+    import torch  # noqa: PLC0415
+
+    from portfolio_lab.research.optimizer import walk  # noqa: PLC0415
+
+    torch.set_num_threads(threads)
+    weights, log, fitted = walk.walk(_months(table, pool or None), settings, device)
+    out.mkdir(parents=True, exist_ok=True)
+    weights.write_parquet(out / "weights.parquet")
+    log.write_parquet(out / "log.parquet")
+    torch.save(fitted.state_dict(), out / "model.pt")
+    meta = asdict(replace(settings, start=settings.start.isoformat())) | {"pool": pool}
+    (out / "settings.json").write_text(json.dumps(meta, indent=2))
+    graded = log.filter(pl.col("ret").is_not_null())
+    return (f"{settings.model} seed {settings.seed}: {graded.height} months, Sharpe "
+            f"{_halves(graded['date'].to_list(), graded['ret'].to_numpy())}; "
+            f"median long {graded['long'].median():.2f}, short {graded['short'].median():.2f}, "
+            f"largest {graded['largest'].median():.1%} of gross; "
+            f"{log['seconds'].sum() / 60:.1f} min")  # fmt: skip
+
+
+def _seeds(text: str) -> list[int]:
+    """``"3"`` -> [3]; ``"0-9"`` -> [0, ..., 9]; ``"1,4,7"`` -> [1, 4, 7]."""
+    out = []
+    for part in text.split(","):
+        lo, _, hi = part.partition("-")
+        out += list(range(int(lo), int(hi or lo) + 1))
+    return out
+
+
 @optimizer_app.command("walk")
 def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     table: Annotated[Path, typer.Option(help="The table from `plab optimizer data`.")],
-    out: Annotated[Path, typer.Option(help="Folder for weights, log, model and settings.")],
+    out: Annotated[Path, typer.Option(help="Folder for the walk (one subfolder per seed).")],
     model: Annotated[str, typer.Option(help="linear, mlp or transformer.")],
     pool: Annotated[int, typer.Option(help="0: the paper's universe; N: N most liquid.")] = 0,
     blocks: Annotated[int, typer.Option()] = 1,
@@ -61,35 +92,41 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     first_epochs: Annotated[int, typer.Option()] = 100,
     warm_epochs: Annotated[int, typer.Option()] = 5,
     lr: Annotated[float, typer.Option()] = 1e-3,
-    seed: Annotated[int, typer.Option()] = 0,
+    seeds: Annotated[str, typer.Option(help='Seeds: "0", "0-9" or "1,4,7".')] = "0",
+    jobs: Annotated[int, typer.Option(help="Seeds trained at once (processes on the GPU).")] = 4,
     start: Annotated[str, typer.Option(help="First test month end.")] = "2003-12-31",
     device: Annotated[str, typer.Option()] = "cuda",
     long_only: Annotated[bool, typer.Option(help="Softmax weights (not the paper's).")] = False,
 ) -> None:
-    """Walk one model forward and save its monthly portfolios."""
-    import torch  # noqa: PLC0415
+    """Walk a model forward, one run per seed, and save each seed's monthly portfolios.
+
+    Seeds run ``jobs`` at a time in separate processes: one walk takes small steps (one month
+    each) and leaves the GPU mostly idle, so several share it. With more than one seed the
+    seeds' portfolios are also averaged (the paper's 10-seed average).
+    """
+    import multiprocessing  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    from concurrent.futures import ProcessPoolExecutor  # noqa: PLC0415
 
     from portfolio_lab.research.optimizer import walk  # noqa: PLC0415
 
-    settings = walk.Settings(model, blocks, hidden, window or None, first_epochs, warm_epochs,
-                             lr, seed, date.fromisoformat(start), long_only)  # fmt: skip
-    months = _months(table, pool or None)
-    weights, log, fitted = walk.walk(months, settings, device)
-    out.mkdir(parents=True, exist_ok=True)
-    weights.write_parquet(out / "weights.parquet")
-    log.write_parquet(out / "log.parquet")
-    torch.save(fitted.state_dict(), out / "model.pt")
-    meta = asdict(replace(settings, start=settings.start.isoformat())) | {"pool": pool}
-    (out / "settings.json").write_text(json.dumps(meta, indent=2))
-    graded = log.filter(pl.col("ret").is_not_null())
-    r, d = graded["ret"].to_numpy(), graded["date"].to_list()
-    half = next((k for k, x in enumerate(d) if x >= date(2015, 12, 31)), len(d))
-    typer.echo(f"{model}: {len(r)} months, Sharpe (monthly returns over T-bill, annualized) "
-               f"{_sharpe(r):.2f} (to 2015 {_sharpe(r[:half]):.2f}, "
-               f"after {_sharpe(r[half:]):.2f}); "
-               f"median long {graded['long'].median():.2f}, short {graded['short'].median():.2f}, "
-               f"largest {graded['largest'].median():.1%} of gross; "
-               f"{log['seconds'].sum() / 60:.1f} min")  # fmt: skip
+    picked = _seeds(seeds)
+    _months(table, pool or None)  # build the cache once, before the workers read it
+    runs = [out / f"seed-{s}" for s in picked]
+    threads = max(1, (os.cpu_count() or 1) // min(jobs, len(picked)))
+    with ProcessPoolExecutor(min(jobs, len(picked)),
+                             mp_context=multiprocessing.get_context("spawn")) as pool_:  # fmt: skip
+        futures = []
+        for s, run in zip(picked, runs, strict=True):
+            settings = walk.Settings(
+                model, blocks, hidden, window or None, first_epochs, warm_epochs, lr, s,
+                date.fromisoformat(start), long_only,
+            )  # fmt: skip
+            futures.append(pool_.submit(_walk_one, table, run, settings, pool, device, threads))
+        for f in futures:
+            typer.echo(f.result())
+    if len(runs) > 1:
+        typer.echo(_average(runs))
 
 
 @optimizer_app.command("backtest")
@@ -132,7 +169,12 @@ def _halves(dates: list[date], r: np.ndarray) -> str:
 
 @optimizer_app.command("average")
 def average_cmd(runs: Annotated[list[Path], typer.Argument(help="Walk folders (one per seed).")]):
-    """Average several seeds' portfolios (the paper's 10-seed average) and report Sharpe.
+    """Average several seeds' portfolios (the paper's 10-seed average) and report Sharpe."""
+    typer.echo(_average(runs))
+
+
+def _average(runs: list[Path]) -> str:
+    """The seeds' Sharpe spread and their averaged portfolio's Sharpe.
 
     The averaged weights' monthly return is the average of the seeds' returns.
     """
@@ -145,9 +187,9 @@ def average_cmd(runs: Annotated[list[Path], typer.Argument(help="Walk folders (o
     names = [r.name for r in runs]
     each = [_sharpe(joined[n].to_numpy()) for n in names]
     mean = joined.select(pl.mean_horizontal(names)).to_series().to_numpy()
-    typer.echo(f"{len(runs)} seeds, each: min {min(each):.2f} median {np.median(each):.2f} "
-               f"max {max(each):.2f}; "
-               f"average portfolio: {_halves(joined['date'].to_list(), mean)}")  # fmt: skip
+    return (f"{len(runs)} seeds, each: min {min(each):.2f} median {np.median(each):.2f} "
+            f"max {max(each):.2f}; "
+            f"average portfolio: {_halves(joined['date'].to_list(), mean)}")  # fmt: skip
 
 
 @optimizer_app.command("ridge")
