@@ -87,3 +87,40 @@ def test_walk_trains_on_earlier_months_and_learns_to_favor_the_stock_that_keeps_
         pytest.approx([1.0] * 18)
     )
     assert log["ret"].mean() > 0.02  # it learned to hold the stocks with input 0 high
+
+
+def test_scaled_long_only_weights_are_m_times_a_mix_and_the_walk_saves_the_mix():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    model = Optimizer("mlp", 3, 1, 8, long_only=True, scale=True)
+    with torch.no_grad():
+        model.log_m.fill_(np.log(0.5))
+    w = model.weights(torch.rand(6, 3) - 0.5)
+    assert float(w.sum()) == pytest.approx(0.5, abs=1e-6)
+    assert bool((w > 0).all())
+    rng = np.random.default_rng(1)
+    months = [
+        data.Month(
+            date(2000 + k // 12, k % 12 + 1, 1),
+            list("ABCDE"),
+            rng.uniform(-0.5, 0.5, (5, 2)).astype(np.float32),
+            rng.normal(0.01, 0.05, 5).astype(np.float32),
+        )
+        for k in range(16)
+    ]
+    settings = Settings(
+        "linear",
+        window=12,
+        first_epochs=20,
+        warm_epochs=2,
+        lr=0.05,
+        start=date(2000, 1, 1),
+        long_only=True,
+        scale=True,
+    )
+    weights, log, _ = walk(months, settings)
+    sums = weights.group_by("date").agg(pl.col("weight").sum())["weight"].to_list()
+    assert sums == pytest.approx([1.0] * 4)
+    assert (log["m"] > 0).all()

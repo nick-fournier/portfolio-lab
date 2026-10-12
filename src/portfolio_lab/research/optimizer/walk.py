@@ -37,6 +37,8 @@ class Settings:
         start: First test month end.
         long_only: Softmax weights instead of the paper's unconstrained ones (model docs).
         fast_attention: bfloat16 fused attention (model.Block).
+        scale: Long-only with a learned overall size m (model.Optimizer); the saved weights are
+            the mix (summing to 1), and m is logged.
         clip: Largest total gradient size per step (``None``: no clipping). Not in the paper;
             added after deeper models diverged (2026-10-11).
     """
@@ -53,6 +55,7 @@ class Settings:
     long_only: bool = False
     fast_attention: bool = False
     clip: float | None = 1.0
+    scale: bool = False
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -79,7 +82,7 @@ def walk(
     torch.manual_seed(settings.seed)
     rng = np.random.default_rng(settings.seed)
     model = Optimizer(settings.model, months[0].x.shape[1], settings.blocks, settings.hidden,
-                      settings.long_only, settings.fast_attention)  # fmt: skip
+                      settings.long_only, settings.fast_attention, settings.scale)  # fmt: skip
     model.to(device)
     adam = torch.optim.Adam(model.parameters(), lr=settings.lr)
     data = [_tensors(m, device) for m in months]
@@ -105,12 +108,16 @@ def walk(
         trained = True
         with torch.no_grad():
             w = model.weights(data[t][0]).cpu().numpy().astype(np.float64)
+        m = float(w.sum()) if settings.scale else 1.0
+        if settings.scale:
+            w = w / m  # hold the mix fully invested; m is the model's sizing
         ret = float(w @ month.r) if known[t] else None
         weights.append(pl.DataFrame({"date": [month.date] * len(w), "symbol": month.symbols,
                                      "weight": w}))  # fmt: skip
         gross = float(np.abs(w).sum())
         log.append({"date": month.date, "ret": ret, "long": float(w[w > 0].sum()),
                     "short": float(w[w < 0].sum()), "largest": float(np.abs(w).max()) / gross,
-                    "loss": float(torch.stack(losses).mean()),
+                    "loss": float(torch.stack(losses).mean()), "m": m,
+                    "holdings": float(1 / (w**2).sum()) if settings.long_only else None,
                     "seconds": time.perf_counter() - clock})  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model

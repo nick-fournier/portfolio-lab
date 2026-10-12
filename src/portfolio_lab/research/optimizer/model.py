@@ -89,6 +89,9 @@ class Optimizer(nn.Module):
         hidden: Feed-forward hidden width.
         long_only: Softmax the scores (module docs); default: the scores are the weights.
         fast_attention: bfloat16 fused attention (:class:`Block`).
+        scale: With ``long_only``, multiply the softmax by one learned positive number m
+            (``exp`` of a parameter, starting at 1), so the loss can size the portfolio freely
+            and aims at the best long-only Sharpe rather than the best return at full size.
     """
 
     def __init__(
@@ -99,6 +102,7 @@ class Optimizer(nn.Module):
         hidden: int = 256,
         long_only: bool = False,
         fast_attention: bool = False,
+        scale: bool = False,
     ):
         super().__init__()
         if kind not in MODELS:
@@ -109,6 +113,7 @@ class Optimizer(nn.Module):
         )
         self.lam = _normal(width, var=1 / width)
         self.long_only = long_only
+        self.log_m = nn.Parameter(torch.zeros(())) if (long_only and scale) else None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(candidates x width) -> a score per candidate."""
@@ -117,9 +122,12 @@ class Optimizer(nn.Module):
         return x @ self.lam
 
     def weights(self, x: torch.Tensor) -> torch.Tensor:
-        """Portfolio weights over the candidates: the scores, or their softmax if long-only."""
+        """Portfolio weights: the scores, their softmax if long-only, times m if scaled."""
         scores = self(x)
-        return torch.softmax(scores, dim=0) if self.long_only else scores
+        if not self.long_only:
+            return scores
+        w = torch.softmax(scores, dim=0)
+        return w * self.log_m.exp() if self.log_m is not None else w
 
 
 def loss(model: Optimizer, x: torch.Tensor, r: torch.Tensor) -> torch.Tensor:

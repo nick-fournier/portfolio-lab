@@ -124,6 +124,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     start: Annotated[str, typer.Option(help="First test month end.")] = "2003-12-31",
     device: Annotated[str, typer.Option()] = "cuda",
     long_only: Annotated[bool, typer.Option(help="Softmax weights (not the paper's).")] = False,
+    scale: Annotated[bool, typer.Option(help="Long-only with a learned overall size m.")] = False,
     fast_attention: Annotated[
         bool, typer.Option(help="bfloat16 fused attention (~5x faster transformer).")
     ] = False,
@@ -157,7 +158,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         for s, run in zip(picked, runs, strict=True):
             settings = walk.Settings(
                 model, blocks, hidden, window or None, first_epochs, warm_epochs, lr, s,
-                date.fromisoformat(start), long_only, fast_attention, clip or None,
+                date.fromisoformat(start), long_only, fast_attention, clip or None, scale,
             )  # fmt: skip
             futures.append(
                 pool_.submit(
