@@ -54,4 +54,8 @@ def build(root: Path, market_value: pl.DataFrame, chunks: int = 8) -> pl.DataFra
         )
         del daily, d
     out = jkp_daily.zero_trades(pl.concat(frames, how="diagonal_relaxed"))
-    return out.with_columns(pl.col("sid").cast(pl.String).alias("symbol")).drop("sid")
+    # NaN (numpy regressions, 0/0) means missing; rvol_252d is only a helper (betabab, rmax5_rvol)
+    return out.with_columns(
+        pl.col(pl.Float64, pl.Float32).fill_nan(None),
+        pl.col("sid").cast(pl.String).alias("symbol"),
+    ).drop("sid", "rvol_252d")
