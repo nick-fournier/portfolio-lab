@@ -7,16 +7,23 @@ training months; every later month continues from the previous month's model (an
 state) for ``warm_epochs`` passes over its own training months. Each pass visits the training
 months in a shuffled order and takes one Adam step per month (paper, Algorithm 2). Then the
 model's weights for month t's candidates are the portfolio held over the next month.
+
+With an ``objective`` (``objectives``) a step grades a batch of ``batch`` consecutive training
+months instead of one: each pass splits the training months into such blocks from a random
+offset and visits them in shuffled order, so every month still goes through the model once per
+pass.
 """
 
 import time
 from dataclasses import dataclass
 from datetime import date
+from itertools import pairwise
 
 import numpy as np
 import polars as pl
 import torch
 
+from portfolio_lab.research.optimizer import objectives
 from portfolio_lab.research.optimizer.data import Month
 from portfolio_lab.research.optimizer.model import Optimizer, loss
 
@@ -43,6 +50,10 @@ class Settings:
             added after deeper models diverged (2026-10-11).
         cap: Long-only's largest weight in any stock (``None``: no cap; model.capped_softmax).
         names: Long-only's effective names held (model.spread_softmax).
+        objective: Grade batches of months with this (``objectives``; ``None``: the paper's
+            loss, one month per step).
+        batch: Consecutive months per step with an ``objective``.
+        gamma: The objective's risk appetite (``None``: ``objectives.GAMMA``).
     """
 
     model: str
@@ -60,10 +71,23 @@ class Settings:
     scale: bool = False
     cap: float | None = None
     names: float | None = None
+    objective: str | None = None
+    batch: int = 12
+    gamma: float | None = None
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
     return torch.from_numpy(m.x).to(device), torch.from_numpy(m.r).to(device)
+
+
+def _steps(train: list[int], settings: Settings, rng: np.random.Generator) -> list[list[int]]:
+    """One pass's training steps: single months (paper) or blocks of consecutive months."""
+    if settings.objective is None:
+        return [[int(k)] for k in rng.permutation(train)]
+    offset = int(rng.integers(settings.batch)) if len(train) > settings.batch else 0
+    cuts = [0, *range(offset or settings.batch, len(train), settings.batch), len(train)]
+    blocks = [train[a:b] for a, b in pairwise(cuts) if b - a >= 3]
+    return [blocks[i] for i in rng.permutation(len(blocks))]
 
 
 def walk(
@@ -102,9 +126,13 @@ def walk(
         losses = []
         for _ in range(settings.warm_epochs if trained else settings.first_epochs):
             losses = []  # kept on the device: reading each one would wait for the GPU
-            for k in rng.permutation(train):
+            for step in _steps(train, settings, rng):
                 adam.zero_grad()
-                value = loss(model, *data[k])
+                if settings.objective is None:
+                    value = loss(model, *data[step[0]])
+                else:
+                    r = torch.stack([model.weights(data[k][0]) @ data[k][1] for k in step])
+                    value = objectives.grade(settings.objective, r, settings.gamma)
                 value.backward()
                 if settings.clip:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), settings.clip)

@@ -89,6 +89,32 @@ def test_names_fix_the_concentration_whatever_the_scores_size():
     w.sum().backward()
 
 
+def test_objectives_prefer_the_steadier_of_two_equal_return_streams():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import objectives  # noqa: PLC0415
+
+    steady = torch.tensor([0.01, 0.012, 0.008, 0.011, 0.009, 0.01])
+    wild = torch.tensor([0.10, -0.08, 0.09, -0.07, 0.08, -0.06])  # same mean, deep losses
+    for name in objectives.OBJECTIVES:
+        assert objectives.grade(name, steady) < objectives.grade(name, wild), name
+    with pytest.raises(ValueError, match="unknown objective"):
+        objectives.grade("nope", steady)
+
+
+def test_batch_steps_cover_every_training_month_once_in_consecutive_blocks():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.walk import Settings, _steps  # noqa: PLC0415
+
+    train = list(range(10, 70))
+    steps = _steps(train, Settings("linear", objective="sharpe", batch=12),
+                   np.random.default_rng(3))  # fmt: skip
+    covered = sorted(k for s in steps for k in s)
+    assert set(covered) <= set(train) and len(covered) == len(set(covered)) >= 55
+    assert all(s == list(range(s[0], s[0] + len(s))) and 3 <= len(s) <= 12 for s in steps)
+    paper = _steps(train, Settings("linear"), np.random.default_rng(3))
+    assert sorted(k for s in paper for k in s) == train
+
+
 def test_fast_attention_matches_the_written_out_formula_to_bfloat16_precision():
     torch = pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.model import Block  # noqa: PLC0415
