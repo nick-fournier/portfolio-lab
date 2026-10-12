@@ -6,6 +6,7 @@ the GPU host.
 """
 
 import json
+import pickle
 from dataclasses import asdict, replace
 from datetime import date
 from pathlib import Path
@@ -36,6 +37,18 @@ def data_cmd(out: Annotated[Path, typer.Option(help="Parquet file to write.")]) 
                f"{len(data.inputs(table))} characteristics -> {out}")  # fmt: skip
 
 
+def _months(table: Path, pool: int | None) -> list:
+    """``data.months`` of a table, cached next to it (ranking every month takes a while)."""
+    from portfolio_lab.research.optimizer import data  # noqa: PLC0415
+
+    cache = table.with_name(f"{table.stem}.months-{pool or 'paper'}.pkl")
+    if cache.exists() and cache.stat().st_mtime > table.stat().st_mtime:
+        return pickle.loads(cache.read_bytes())
+    months = data.months(pl.read_parquet(table), pool)
+    cache.write_bytes(pickle.dumps(months))
+    return months
+
+
 @optimizer_app.command("walk")
 def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     table: Annotated[Path, typer.Option(help="The table from `plab optimizer data`.")],
@@ -56,11 +69,11 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     """Walk one model forward and save its monthly portfolios."""
     import torch  # noqa: PLC0415
 
-    from portfolio_lab.research.optimizer import data, walk  # noqa: PLC0415
+    from portfolio_lab.research.optimizer import walk  # noqa: PLC0415
 
     settings = walk.Settings(model, blocks, hidden, window or None, first_epochs, warm_epochs,
                              lr, seed, date.fromisoformat(start), long_only)  # fmt: skip
-    months = data.months(pl.read_parquet(table), pool or None)
+    months = _months(table, pool or None)
     weights, log, fitted = walk.walk(months, settings, device)
     out.mkdir(parents=True, exist_ok=True)
     weights.write_parquet(out / "weights.parquet")

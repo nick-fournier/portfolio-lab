@@ -88,13 +88,13 @@ def walk(
         train = [k for k in range(lo, t) if known[k]]
         losses = []
         for _ in range(settings.warm_epochs if trained else settings.first_epochs):
-            losses = []
+            losses = []  # kept on the device: reading each one would wait for the GPU
             for k in rng.permutation(train):
                 adam.zero_grad()
                 value = loss(model, *data[k])
                 value.backward()
                 adam.step()
-                losses.append(value.item())
+                losses.append(value.detach())
         trained = True
         with torch.no_grad():
             w = model.weights(data[t][0]).cpu().numpy().astype(np.float64)
@@ -104,6 +104,6 @@ def walk(
         gross = float(np.abs(w).sum())
         log.append({"date": month.date, "ret": ret, "long": float(w[w > 0].sum()),
                     "short": float(w[w < 0].sum()), "largest": float(np.abs(w).max()) / gross,
-                    "loss": float(np.mean(losses)),
+                    "loss": float(torch.stack(losses).mean()),
                     "seconds": time.perf_counter() - clock})  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model
