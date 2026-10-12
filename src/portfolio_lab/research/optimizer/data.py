@@ -48,7 +48,24 @@ JKP_COLUMNS = frozenset((
     "ivol_capm_252d", "betadown_252d", "corr_1260d", "betabab_1260d", "prc_highprc_252d",
     "ami_126d", "dolvol_126d", "dolvol_var_126d", "turnover_126d", "turnover_var_126d",
     "zero_trades_21d", "zero_trades_126d", "zero_trades_252d", "bidaskhl_21d",
+    # accounting (research.optimizer.jkp_fund), issuance (jkp), composites (jkp_scores)
+    "aliq_at", "aliq_mat", "at_be", "at_gr1", "at_me", "at_turnover", "be_gr1a", "be_me",
+    "bev_mev", "capex_abn", "capx_gr1", "capx_gr2", "capx_gr3", "cash_at", "coa_gr1a",
+    "col_gr1a", "cop_at", "cop_atl1", "cowc_gr1a", "dbnetis_at", "debt_gr3", "debt_me",
+    "dgp_dsale", "div12m_me", "dsale_dinv", "dsale_drec", "dsale_dsga", "earnings_variability",
+    "ebit_bev", "ebit_sale", "ebitda_mev", "eq_dur", "f_score", "fcf_me", "fnl_gr1a", "gp_at",
+    "gp_atl1", "inv_gr1", "inv_gr1a", "ival_me", "kz_index", "lnoa_gr1a", "ncoa_gr1a",
+    "ncol_gr1a", "netdebt_me", "nfna_gr1a", "ni_ar1", "ni_be", "ni_inc8q", "ni_ivol", "ni_me",
+    "niq_at", "niq_at_chg1", "niq_be", "niq_be_chg1", "niq_su", "nncoa_gr1a", "noa_at",
+    "noa_gr1a", "o_score", "oaccruals_at", "oaccruals_ni", "ocf_at", "ocf_at_chg1", "ocf_me",
+    "ocfq_saleq_std", "op_at", "op_atl1", "ope_be", "ope_bel1", "opex_at", "pi_nix",
+    "ppeinv_gr1a", "rd5_at", "rd_me", "rd_sale", "sale_bev", "sale_gr1", "sale_gr3", "sale_me",
+    "saleq_gr1", "saleq_su", "taccruals_at", "taccruals_ni", "tangibility", "tax_gr1a",
+    "chcsho_12m", "eqnpo_12m",
+    "mispricing_mgmt", "mispricing_perf", "qmj", "qmj_prof", "qmj_growth", "qmj_safety",
 ))  # fmt: skip
+#: The paper keeps characteristics missing for less than this share of stock-months (sec. 4.1).
+PAPER_MAX_MISSING = 0.30
 #: The paper's universe: every common stock, no price, liquidity or history floor.
 PAPER_RULES = EligibilityRules(min_price=0.0, min_dollar_volume=0.0, min_history=1)
 #: Nano caps (below this percentile of NYSE market values) are left out (paper, sec. 4.1).
@@ -78,11 +95,18 @@ def inputs(table: pl.DataFrame, which: str = "all") -> list[str]:
     Args:
         table: From :func:`build`.
         which: ``all``; ``ours`` (the derived monthly table's characteristics); ``jkp`` (the
-            JKP characteristics, ``research.optimizer.jkp``).
+            JKP characteristics, ``research.optimizer.jkp``); ``paper`` (the JKP ones, with our
+            market value as JKP's market equity, missing for under 30% of the table's
+            stock-months, as the paper's 132 of 153).
     """
     every = [c for c in table.columns if c not in NOT_INPUTS]
     if which == "all":
         return every
+    if which == "paper":
+        cand = [c for c in every if c in JKP_COLUMNS or c == "market_value"]
+        missing = table.select(pl.col(c).cast(pl.Float64).is_nan().fill_null(True).mean()
+                               for c in cand).row(0)  # fmt: skip
+        return [c for c, m in zip(cand, missing, strict=True) if m < PAPER_MAX_MISSING]
     jkp_cols = [c for c in every if c in JKP_COLUMNS]
     if which == "jkp":
         return jkp_cols
@@ -130,14 +154,33 @@ def build(
     """
     monthly = characteristics(root, Panel.load(root, rules=rules))
     if jkp_chars:
-        from portfolio_lab.research.optimizer import jkp  # noqa: PLC0415 - heavy, optional
+        from portfolio_lab.research.optimizer import (  # noqa: PLC0415
+            jkp,
+            jkp_fund,
+            jkp_scores,
+        )
 
-        extra = jkp.build(root, monthly.select("date", "symbol", "market_value"))
+        mv = monthly.select("date", "symbol", "market_value")
+        extra = jkp.build(root, mv)
+        fund = (
+            jkp_fund.build(
+                root,
+                mv.select(
+                    pl.col("symbol").cast(pl.Int64).alias("sid"),
+                    month_key(pl.col("date")).alias("ym"),
+                    pl.col("market_value").alias("me"),
+                ),
+            )
+            .with_columns(pl.col("sid").cast(pl.String).alias("symbol"))
+            .drop("sid", "ppegt")
+        )
         monthly = (
             monthly.with_columns(month_key(pl.col("date")).alias("ym"))
             .join(extra, on=["symbol", "ym"], how="left")
+            .join(fund, on=["symbol", "ym"], how="left")
             .drop("ym")
         )
+        monthly = jkp_scores.scores(monthly)
     panel = Panel.load(root)  # production's rules: eligibility, and the same prices
     nyse = panel.ids.securities.select(
         pl.col("sid").cast(pl.String).alias("symbol"), (pl.col("exchange") == "NYSE").alias("nyse")

@@ -4,7 +4,8 @@ import numpy as np
 import polars as pl
 import pytest
 
-from portfolio_lab.research.optimizer import jkp_daily, jkp_monthly
+from portfolio_lab.research.optimizer import jkp_daily, jkp_fund, jkp_monthly, jkp_scores
+from portfolio_lab.research.optimizer import jkp_fund_chars as fc
 
 
 def _months(rets: list[float | None], sid: int = 1) -> pl.DataFrame:
@@ -127,3 +128,89 @@ def test_corwin_schultz_for_a_constant_range_with_no_drift_is_about_the_log_rang
     # beta = 2 L^2, gamma = L^2 with L = ln(high/low): alpha = L, spread = 2(e^L - 1)/(1 + e^L)
     a = np.log(10.1 / 9.9)
     assert out["bidaskhl_21d"][0] == pytest.approx(2 * (np.exp(a) - 1) / (1 + np.exp(a)))
+
+
+def test_a_filing_is_used_from_4_months_after_its_period_until_the_next_one_at_most_18():
+    # filings at months 100 and 112 (annual); the second ends at 112 + 18
+    p = pl.DataFrame(
+        {
+            "sid": [1] * 13,
+            "ym": list(range(100, 113)),
+            "data_available": [k in (0, 12) for k in range(13)],
+            "x": [1.0] + [None] * 11 + [2.0],
+        }
+    )
+    out = jkp_fund.publish(p, ["x"])
+    first = out.filter(pl.col("data_ym") == 100)["ym"].to_list()
+    second = out.filter(pl.col("data_ym") == 112)["ym"].to_list()
+    assert first == list(range(104, 116))  # until the next filing's start (116) minus 1
+    assert second == list(range(116, 131))  # 112 + 18 = 130
+
+
+def test_combine_takes_the_quarterly_value_when_the_annual_is_missing_or_older():
+    ann = pl.DataFrame(
+        {"sid": [1, 1, 1], "ym": [10, 11, 12], "data_ym": [5, 5, 5], "a": [1.0, None, 1.0]}
+    )
+    qtr = pl.DataFrame(
+        {
+            "sid": [1, 1, 1],
+            "ym": [10, 11, 12],
+            "data_ym": [5, 5, 8],
+            "a": [2.0, 2.0, 3.0],
+            "q_only": [7.0, 7.0, 7.0],
+        }
+    )
+    out = jkp_fund.combine(ann, qtr, ["a", "q_only"]).sort("ym")
+    assert out["a"].to_list() == [1.0, 2.0, 3.0]  # tie -> annual; missing -> quarterly; newer
+    assert out["q_only"].to_list() == [7.0, 7.0, 7.0]
+
+
+def test_growth_needs_a_positive_lagged_value_and_enough_history():
+    p = pl.DataFrame(
+        {"sid": [1] * 14, "count": list(range(1, 15)), "x": [0.0, 2.0] + [1.0] * 10 + [3.0, 4.0]}
+    )
+    out = p.with_columns(fc.growth("x", 12).alias("g"))["g"].to_list()
+    assert out[12] is None  # lag (row 0) is 0
+    assert out[13] == pytest.approx(1.0)  # 4 / 2 - 1
+
+
+def test_mispricing_ranks_within_the_month_and_needs_ten_stocks():
+    n = 12
+    t = pl.DataFrame(
+        {
+            "date": [date(2020, 1, 31)] * n,
+            "o_score": [float(k) for k in range(n)],
+            "ret_12_1": [None] * n,
+            "gp_at": [None] * n,
+            "niq_at": [None] * n,
+        }
+    )
+    for c in (
+        "chcsho_12m",
+        "eqnpo_12m",
+        "oaccruals_at",
+        "noa_at",
+        "at_gr1",
+        "ppeinv_gr1a",
+        "gp_at",
+        "ni_be",
+        "_ni_at",
+        "ocf_at",
+        "_gp_sale",
+        "_gpoa_ch5",
+        "_roe_ch5",
+        "_roa_ch5",
+        "_cfoa_ch5",
+        "_gmar_ch5",
+        "betabab_1260d",
+        "_debt_at",
+        "_roeq_be_std",
+        "_roe_be_std",
+    ):
+        if c not in t.columns:
+            t = t.with_columns(pl.lit(None, pl.Float64).alias(c))
+    out = jkp_scores.scores(t)
+    # o_score: high value -> low rank; the highest o_score gets rank 1/12
+    assert out["mispricing_perf"].to_list()[-1] == pytest.approx(1 / n)
+    assert out["mispricing_mgmt"].null_count() == n  # fewer than 3 inputs present
+    assert not any(c.startswith("_") for c in out.columns)

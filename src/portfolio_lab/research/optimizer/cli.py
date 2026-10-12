@@ -123,7 +123,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         bool, typer.Option(help="bfloat16 fused attention (~5x faster transformer).")
     ] = False,
     clip: Annotated[float, typer.Option(help="Gradient clipping (0: none).")] = 1.0,
-    inputs: Annotated[str, typer.Option(help="Characteristics: all, ours or jkp.")] = "all",
+    inputs: Annotated[str, typer.Option(help="Characteristics: all, ours, jkp or paper.")] = "all",
     precision: Annotated[
         str, typer.Option(help="float32 matrix products: highest, or high (TF32, faster).")
     ] = "highest",

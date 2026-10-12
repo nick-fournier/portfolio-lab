@@ -104,6 +104,7 @@ def monthly_returns(daily: pl.DataFrame) -> pl.DataFrame:
         .agg(
             ((1 + pl.col("ret_cc").fill_null(0.0)).product() - 1).alias("ret"),
             pl.col("close").drop_nulls().last().alias("prc"),
+            pl.col("close_adj").drop_nulls().last().alias("prc_adj"),
         )
     )
     grid = (
@@ -248,7 +249,7 @@ def characteristics(
     """Every monthly-return characteristic for every stock-month: sid, ym, then the columns."""
     months = monthly_returns(daily)
     frames = [
-        months.select("sid", "ym", "prc"),
+        months.select("sid", "ym", "prc", "ret", "prc_adj"),
         momentum_and_seasonality(months),
         beta_60m(months, factors),
         residual_momentum(months, factors),

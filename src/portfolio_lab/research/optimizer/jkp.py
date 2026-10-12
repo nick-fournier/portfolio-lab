@@ -17,6 +17,30 @@ from portfolio_lab.research.optimizer import jkp_daily, jkp_monthly
 PRICE_COLUMNS = ["high", "low", "close", "volume", "close_adj", "ret_cc"]
 
 
+def _issuance(m: pl.DataFrame) -> pl.DataFrame:
+    """``chcsho_12m`` and ``eqnpo_12m`` (JKP ``market_chars_monthly``, aux 6945-6982).
+
+    Split-adjusted shares are the market value over the split-and-dividend-adjusted close
+    (JKP: CRSP shares times the share-adjustment factor). Net payout is the log total return
+    minus the log change in market value over 12 months, set to 0 when below 1e-5 in size.
+    """
+    m = m.sort("sid", "ym")
+    count = pl.col("ym").cum_count().over("sid")
+    shares = pl.col("market_value") / pl.col("prc_adj")
+    ri = (1 + pl.col("ret").fill_null(0.0)).cum_prod().over("sid")
+    m = m.with_columns(shares.alias("_sh"), ri.alias("_ri"), count.alias("_n"))
+    lag = lambda c: pl.col(c).shift(12).over("sid")  # noqa: E731
+    me, me12 = pl.col("market_value"), lag("market_value")
+    npo = (pl.col("_ri") / lag("_ri")).log() - (me / me12).log()
+    ok = (pl.col("_n") > 12) & (pl.col("_ri") > 0) & (lag("_ri") > 0) & (me > 0) & (me12 > 0)
+    return m.with_columns(
+        pl.when((pl.col("_n") > 12) & (lag("_sh") != 0))
+        .then(pl.col("_sh") / lag("_sh") - 1)
+        .alias("chcsho_12m"),
+        pl.when(ok).then(pl.when(npo.abs() < 1e-5).then(0.0).otherwise(npo)).alias("eqnpo_12m"),
+    ).drop("_sh", "_ri", "_n", "ret", "prc_adj", "market_value")
+
+
 def build(root: Path, market_value: pl.DataFrame, chunks: int = 8) -> pl.DataFrame:
     """Price-based JKP characteristics: symbol, ym, then one column each.
 
@@ -48,6 +72,7 @@ def build(root: Path, market_value: pl.DataFrame, chunks: int = 8) -> pl.DataFra
             .join(mv, on=["sid", "ym"], how="inner")
             .select("sid", "ym", (pl.col("market_value") / pl.col("prc")).alias("shares"))
         )
+        monthly = _issuance(monthly.join(mv, on=["sid", "ym"], how="left"))
         d = jkp_daily.prepare(daily, factors, listings, shares)
         frames.append(
             monthly.join(jkp_daily.characteristics(d, factors), on=["sid", "ym"], how="left")
