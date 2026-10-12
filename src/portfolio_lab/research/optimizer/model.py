@@ -25,7 +25,11 @@ month's returns over the T-bill. Over many months, with the weights free in size
 gives the maximum-Sharpe portfolio. With long-only weights summing to 1 it instead equals
 1 - 2 (w.r - (w.r)^2 / 2): Kelly's growth approximation with no cap, which puts everything on
 one stock (stage 1, 2026-10-11). ``cap`` bounds every weight (:func:`capped_softmax`), so the
-portfolio holds at least 1 / cap stocks.
+portfolio holds at least 1 / cap stocks. Alone, the cap fails: training grows the scores
+until ten names sit at the cap and the gradient is exactly zero (run13, 2026-10-12).
+``temperature`` first standardizes the scores across the month's stocks and divides by it, so
+the model learns only the ranking and the temperature sets how concentrated the portfolio is
+(with N stocks and normal scores, about N exp(-1 / temperature^2) effective names).
 """
 
 import torch
@@ -112,9 +116,11 @@ class Optimizer(nn.Module):
             (``exp`` of a parameter, starting at 1), so the loss can size the portfolio freely
             and aims at the best long-only Sharpe rather than the best return at full size.
         cap: With ``long_only``, the largest weight in any stock (:func:`capped_softmax`).
+        temperature: With ``long_only``, standardize the scores and divide by this before the
+            softmax (module docs).
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913, PLR0917 - one argument per setting
         self,
         kind: str,
         width: int,
@@ -124,6 +130,7 @@ class Optimizer(nn.Module):
         fast_attention: bool = False,
         scale: bool = False,
         cap: float | None = None,
+        temperature: float | None = None,
     ):
         super().__init__()
         if kind not in MODELS:
@@ -135,6 +142,7 @@ class Optimizer(nn.Module):
         self.lam = _normal(width, var=1 / width)
         self.long_only = long_only
         self.cap = cap
+        self.temperature = temperature
         self.log_m = nn.Parameter(torch.zeros(())) if (long_only and scale) else None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -148,6 +156,8 @@ class Optimizer(nn.Module):
         scores = self(x)
         if not self.long_only:
             return scores
+        if self.temperature:
+            scores = (scores - scores.mean()) / (scores.std() * self.temperature)
         w = capped_softmax(scores, self.cap) if self.cap else torch.softmax(scores, dim=0)
         return w * self.log_m.exp() if self.log_m is not None else w
 

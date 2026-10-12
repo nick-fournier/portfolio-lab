@@ -76,6 +76,19 @@ def test_capped_softmax_holds_every_weight_at_or_under_the_cap_and_keeps_proport
     assert model.lam.grad is not None and bool(model.lam.grad.abs().sum() > 0)
 
 
+def test_temperature_makes_weights_depend_only_on_the_ranking_not_the_scores_size():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+
+    model = Optimizer("linear", 3, long_only=True, cap=0.1, temperature=0.45)
+    x = torch.rand(3000, 3) - 0.5
+    w = model.weights(x)
+    model.lam.data *= 1e6  # runaway scores: same portfolio
+    assert torch.allclose(model.weights(x), w, atol=1e-6)
+    assert 15 < float(1 / (w**2).sum()) < 60  # about 3000 exp(-1 / 0.45^2) = 25 names
+    w.sum().backward()
+
+
 def test_fast_attention_matches_the_written_out_formula_to_bfloat16_precision():
     torch = pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.model import Block  # noqa: PLC0415
