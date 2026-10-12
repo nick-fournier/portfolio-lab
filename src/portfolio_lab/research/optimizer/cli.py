@@ -74,6 +74,14 @@ def _walk_one(
             f"{log['seconds'].sum() / 60:.1f} min")  # fmt: skip
 
 
+def _die_with_parent() -> None:
+    """Make a seed worker exit if the walk command that started it is killed (Linux)."""
+    import ctypes  # noqa: PLC0415
+    import signal  # noqa: PLC0415
+
+    ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+
+
 def _seeds(text: str) -> list[int]:
     """``"3"`` -> [3]; ``"0-9"`` -> [0, ..., 9]; ``"1,4,7"`` -> [1, 4, 7]."""
     out = []
@@ -103,6 +111,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     fast_attention: Annotated[
         bool, typer.Option(help="bfloat16 fused attention (~5x faster transformer).")
     ] = False,
+    clip: Annotated[float, typer.Option(help="Gradient clipping (0: none).")] = 1.0,
     precision: Annotated[
         str, typer.Option(help="float32 matrix products: highest, or high (TF32, faster).")
     ] = "highest",
@@ -123,13 +132,13 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     _months(table, pool or None)  # build the cache once, before the workers read it
     runs = [out / f"seed-{s}" for s in picked]
     threads = max(1, (os.cpu_count() or 1) // min(jobs, len(picked)))
-    with ProcessPoolExecutor(min(jobs, len(picked)),
+    with ProcessPoolExecutor(min(jobs, len(picked)), initializer=_die_with_parent,
                              mp_context=multiprocessing.get_context("spawn")) as pool_:  # fmt: skip
         futures = []
         for s, run in zip(picked, runs, strict=True):
             settings = walk.Settings(
                 model, blocks, hidden, window or None, first_epochs, warm_epochs, lr, s,
-                date.fromisoformat(start), long_only, fast_attention,
+                date.fromisoformat(start), long_only, fast_attention, clip or None,
             )  # fmt: skip
             futures.append(
                 pool_.submit(_walk_one, table, run, settings, pool, device, threads, precision)
@@ -187,9 +196,12 @@ def average_cmd(runs: Annotated[list[Path], typer.Argument(help="Walk folders (o
 def _average(runs: list[Path]) -> str:
     """The seeds' Sharpe spread and their averaged portfolio's Sharpe.
 
-    The averaged weights' monthly return is the average of the seeds' returns.
+    Each seed's portfolio is first scaled to $1 of gross exposure (longs plus shorts) each
+    month, so a seed whose weights grew huge cannot swamp the others; the averaged
+    portfolio's monthly return is then the average of the scaled returns.
     """
-    logs = [pl.read_parquet(r / "log.parquet").select("date", pl.col("ret").alias(r.name))
+    logs = [pl.read_parquet(r / "log.parquet").select(
+                "date", (pl.col("ret") / (pl.col("long") - pl.col("short"))).alias(r.name))
             for r in runs]  # fmt: skip
     joined = logs[0]
     for log in logs[1:]:
