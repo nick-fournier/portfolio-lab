@@ -37,6 +37,8 @@ class Settings:
         start: First test month end.
         long_only: Softmax weights instead of the paper's unconstrained ones (model docs).
         fast_attention: bfloat16 fused attention (model.Block).
+        clip: Largest total gradient size per step (``None``: no clipping). Not in the paper;
+            added after deeper models diverged (2026-10-11).
     """
 
     model: str
@@ -50,6 +52,7 @@ class Settings:
     start: date = date(2003, 12, 31)
     long_only: bool = False
     fast_attention: bool = False
+    clip: float | None = 1.0
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -95,6 +98,8 @@ def walk(
                 adam.zero_grad()
                 value = loss(model, *data[k])
                 value.backward()
+                if settings.clip:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), settings.clip)
                 adam.step()
                 losses.append(value.detach())
         trained = True
