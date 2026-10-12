@@ -24,13 +24,32 @@ Loss for one month (paper eq. 9 without the penalty): (1 - w . r)^2, w the weigh
 month's returns over the T-bill. Over many months, with the weights free in size, minimizing it
 gives the maximum-Sharpe portfolio. With long-only weights summing to 1 it instead equals
 1 - 2 (w.r - (w.r)^2 / 2): Kelly's growth approximation with no cap, which puts everything on
-one stock (stage 1, 2026-10-11).
+one stock (stage 1, 2026-10-11). ``cap`` bounds every weight (:func:`capped_softmax`), so the
+portfolio holds at least 1 / cap stocks.
 """
 
 import torch
 from torch import nn
 
 MODELS = ("linear", "mlp", "transformer")
+
+
+def capped_softmax(scores: torch.Tensor, cap: float) -> torch.Tensor:
+    """Softmax weights with none above ``cap`` (needs at least 1 / cap names).
+
+    Capped names get exactly ``cap`` and the rest share what is left in their softmax
+    proportions (water-filling). Each round fixes the names over the cap at the cap and
+    re-spreads the remainder over the others; at most 1 / cap rounds. Gradients flow through
+    the uncapped names' scores.
+    """
+    capped = torch.zeros_like(scores, dtype=torch.bool)
+    while True:
+        free = torch.softmax(scores.masked_fill(capped, float("-inf")), dim=0)
+        w = torch.where(capped, torch.full_like(scores, cap), (1 - cap * capped.sum()) * free)
+        over = (w > cap) & ~capped
+        if not bool(over.any()):
+            return w
+        capped = capped | over
 
 
 def _normal(*shape: int, var: float) -> nn.Parameter:
@@ -92,6 +111,7 @@ class Optimizer(nn.Module):
         scale: With ``long_only``, multiply the softmax by one learned positive number m
             (``exp`` of a parameter, starting at 1), so the loss can size the portfolio freely
             and aims at the best long-only Sharpe rather than the best return at full size.
+        cap: With ``long_only``, the largest weight in any stock (:func:`capped_softmax`).
     """
 
     def __init__(
@@ -103,6 +123,7 @@ class Optimizer(nn.Module):
         long_only: bool = False,
         fast_attention: bool = False,
         scale: bool = False,
+        cap: float | None = None,
     ):
         super().__init__()
         if kind not in MODELS:
@@ -113,6 +134,7 @@ class Optimizer(nn.Module):
         )
         self.lam = _normal(width, var=1 / width)
         self.long_only = long_only
+        self.cap = cap
         self.log_m = nn.Parameter(torch.zeros(())) if (long_only and scale) else None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -126,7 +148,7 @@ class Optimizer(nn.Module):
         scores = self(x)
         if not self.long_only:
             return scores
-        w = torch.softmax(scores, dim=0)
+        w = capped_softmax(scores, self.cap) if self.cap else torch.softmax(scores, dim=0)
         return w * self.log_m.exp() if self.log_m is not None else w
 
 

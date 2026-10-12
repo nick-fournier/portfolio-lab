@@ -56,6 +56,26 @@ def test_the_three_models_give_weights_that_are_positive_and_sum_to_one():
     assert len(Optimizer("linear", 4, 2, 8).blocks) == 0
 
 
+def test_capped_softmax_holds_every_weight_at_or_under_the_cap_and_keeps_proportions():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.model import Optimizer, capped_softmax  # noqa: PLC0415
+
+    scores = torch.tensor([5.0, 4.0, 1.0, 0.5, 0.0, 0.0, -1.0, -2.0, -3.0, -3.0, -4.0, -5.0])
+    w = capped_softmax(scores, 0.2)
+    assert float(w.sum()) == pytest.approx(1.0, abs=1e-6)
+    assert float(w.max()) == pytest.approx(0.2, abs=1e-6)
+    free = torch.softmax(scores[w < 0.2 - 1e-6], dim=0)  # the uncapped keep their proportions
+    assert torch.allclose(w[w < 0.2 - 1e-6] / w[w < 0.2 - 1e-6].sum(), free, atol=1e-6)
+    assert torch.equal(capped_softmax(torch.zeros(10), 0.2), torch.full((10,), 0.1))
+    model = Optimizer("mlp", 3, 1, 8, long_only=True, cap=0.1)
+    x = torch.rand(40, 3) - 0.5
+    model.lam.data *= 100  # extreme scores: an uncapped softmax would hold one stock
+    w = model.weights(x)
+    assert float(w.max()) <= 0.1 + 1e-6 and float(w.sum()) == pytest.approx(1.0, abs=1e-5)
+    (w @ torch.rand(40)).backward()  # trains through the cap
+    assert model.lam.grad is not None and bool(model.lam.grad.abs().sum() > 0)
+
+
 def test_fast_attention_matches_the_written_out_formula_to_bfloat16_precision():
     torch = pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.model import Block  # noqa: PLC0415

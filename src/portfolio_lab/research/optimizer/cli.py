@@ -125,6 +125,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     device: Annotated[str, typer.Option()] = "cuda",
     long_only: Annotated[bool, typer.Option(help="Softmax weights (not the paper's).")] = False,
     scale: Annotated[bool, typer.Option(help="Long-only with a learned overall size m.")] = False,
+    cap: Annotated[float, typer.Option(help="Long-only's largest weight (0: no cap).")] = 0.0,
     fast_attention: Annotated[
         bool, typer.Option(help="bfloat16 fused attention (~5x faster transformer).")
     ] = False,
@@ -159,6 +160,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
             settings = walk.Settings(
                 model, blocks, hidden, window or None, first_epochs, warm_epochs, lr, s,
                 date.fromisoformat(start), long_only, fast_attention, clip or None, scale,
+                cap or None,
             )  # fmt: skip
             futures.append(
                 pool_.submit(
@@ -185,14 +187,23 @@ def backtest_cmd(
     weights: Annotated[Path, typer.Option(help="weights.parquet from `plab optimizer walk`.")],
     start: Annotated[str, typer.Option()] = "2004-01-30",
     min_weight: Annotated[float, typer.Option(help="Smallest weight held.")] = 0.0,
+    min_price: Annotated[float, typer.Option(help="Eligible: price at least this.")] = 5.0,
+    min_adv: Annotated[float, typer.Option(help="...and daily dollar volume at least.")] = 1e6,
+    min_history: Annotated[int, typer.Option(help="...and this many sessions listed.")] = 252,
 ) -> None:
-    """Hold a walk's weights in the backtest engine (costs included) and report."""
+    """Hold a walk's weights in the backtest engine (costs included) and report.
+
+    Names must be eligible at each decision (defaults: the strategies' rules); the rest of
+    the month's weights are scaled back up to sum to 1.
+    """
     from portfolio_lab.backtest.costs import CostModel  # noqa: PLC0415
     from portfolio_lab.backtest.engine import BacktestConfig, run  # noqa: PLC0415
     from portfolio_lab.research.optimizer.replay import Replay  # noqa: PLC0415
-    from portfolio_lab.research.panel import Panel  # noqa: PLC0415
+    from portfolio_lab.research.panel import EligibilityRules, Panel  # noqa: PLC0415
 
-    panel = Panel.load(get_settings().data_dir)
+    rules = EligibilityRules(min_price=min_price, min_dollar_volume=min_adv,
+                             min_history=min_history)  # fmt: skip
+    panel = Panel.load(get_settings().data_dir, rules=rules)
     strategy = Replay(pl.read_parquet(weights), min_weight)
     config = BacktestConfig(start=date.fromisoformat(start), end=panel.dates[-1],
                             costs=CostModel(notional=100_000))  # fmt: skip
