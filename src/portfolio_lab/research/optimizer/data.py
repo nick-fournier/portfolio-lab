@@ -224,6 +224,8 @@ def months(
     pool: int | None = None,
     columns: list[str] | None = None,
     max_missing: float = 1 / 3,
+    min_price: float = 0.0,
+    min_adv: float = 0.0,
 ) -> list[Month]:
     """Per-month candidates and their ranked characteristics (module docs).
 
@@ -234,6 +236,8 @@ def months(
         columns: Characteristics to use (default: all of :func:`inputs`).
         max_missing: Stocks missing more than this share of the characteristics are left out
             (the paper's filter, sec. 4.1).
+        min_price: Also leave out stocks whose month-end close (``prc``) is below this.
+        min_adv: Also leave out stocks whose trailing median dollar volume is below this.
 
     Returns:
         One :class:`Month` per month end, ascending.
@@ -251,6 +255,10 @@ def months(
     usable = table.filter(
         (missing <= max_missing * len(columns)) & (pl.col("market_value") >= nano)
     )
+    if min_price > 0:
+        usable = usable.filter(pl.col("prc") >= min_price)
+    if min_adv > 0:
+        usable = usable.filter(pl.col("adv") >= min_adv)
     if pool is not None:
         usable = usable.filter(pl.col("eligible") & pl.col("adv").is_not_null())
     out = []

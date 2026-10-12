@@ -37,20 +37,24 @@ def data_cmd(out: Annotated[Path, typer.Option(help="Parquet file to write.")]) 
                f"{len(data.inputs(table))} characteristics -> {out}")  # fmt: skip
 
 
-def _months(table: Path, pool: int | None, inputs: str = "all") -> list:
+def _months(
+    table: Path, pool: int | None, inputs: str = "all", min_price: float = 0, min_adv: float = 0
+) -> list:
     """``data.months`` of a table, cached next to it (ranking every month takes a while)."""
     from portfolio_lab.research.optimizer import data  # noqa: PLC0415
 
-    cache = table.with_name(f"{table.stem}.months-{pool or 'paper'}-{inputs}.pkl")
+    floor = f"-p{min_price:g}-a{min_adv:g}" if min_price or min_adv else ""
+    cache = table.with_name(f"{table.stem}.months-{pool or 'paper'}-{inputs}{floor}.pkl")
     if cache.exists() and cache.stat().st_mtime > table.stat().st_mtime:
         return pickle.loads(cache.read_bytes())
     frame = pl.read_parquet(table)
-    months = data.months(frame, pool, data.inputs(frame, inputs))
+    months = data.months(frame, pool, data.inputs(frame, inputs), min_price=min_price,
+                         min_adv=min_adv)  # fmt: skip
     cache.write_bytes(pickle.dumps(months))
     return months
 
 
-def _walk_one(
+def _walk_one(  # noqa: PLR0913, PLR0917 - one walk's pieces
     table: Path,
     out: Path,
     settings,
@@ -59,6 +63,7 @@ def _walk_one(
     threads: int,
     precision: str,
     inputs: str,
+    floor: tuple[float, float] = (0.0, 0.0),
 ) -> str:
     """One walk: train, save weights, log, model and settings; return a summary line."""
     import torch  # noqa: PLC0415
@@ -67,7 +72,7 @@ def _walk_one(
 
     torch.set_num_threads(threads)
     torch.set_float32_matmul_precision(precision)
-    weights, log, fitted = walk.walk(_months(table, pool or None, inputs), settings, device)
+    weights, log, fitted = walk.walk(_months(table, pool or None, inputs, *floor), settings, device)
     out.mkdir(parents=True, exist_ok=True)
     weights.write_parquet(out / "weights.parquet")
     log.write_parquet(out / "log.parquet")
@@ -124,6 +129,8 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     ] = False,
     clip: Annotated[float, typer.Option(help="Gradient clipping (0: none).")] = 1.0,
     inputs: Annotated[str, typer.Option(help="Characteristics: all, ours, jkp or paper.")] = "all",
+    min_price: Annotated[float, typer.Option(help="Leave out stocks below this price.")] = 0.0,
+    min_adv: Annotated[float, typer.Option(help="...or below this daily dollar volume.")] = 0.0,
     precision: Annotated[
         str, typer.Option(help="float32 matrix products: highest, or high (TF32, faster).")
     ] = "highest",
@@ -141,7 +148,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     from portfolio_lab.research.optimizer import walk  # noqa: PLC0415
 
     picked = _seeds(seeds)
-    _months(table, pool or None, inputs)  # build the cache once, before the workers read it
+    _months(table, pool or None, inputs, min_price, min_adv)  # build the cache once first
     runs = [out / f"seed-{s}" for s in picked]
     threads = max(1, (os.cpu_count() or 1) // min(jobs, len(picked)))
     with ProcessPoolExecutor(min(jobs, len(picked)), initializer=_die_with_parent,
@@ -154,7 +161,16 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
             )  # fmt: skip
             futures.append(
                 pool_.submit(
-                    _walk_one, table, run, settings, pool, device, threads, precision, inputs
+                    _walk_one,
+                    table,
+                    run,
+                    settings,
+                    pool,
+                    device,
+                    threads,
+                    precision,
+                    inputs,
+                    (min_price, min_adv),
                 )
             )
         for f in futures:
