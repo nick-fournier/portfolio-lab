@@ -60,7 +60,10 @@ def french(root: Path) -> pl.DataFrame:
     )
     return frame.select(
         pl.col("d").cast(pl.String).str.strptime(pl.Date, "%Y%m%d").alias("date"),
-        *(pl.col(c).cast(pl.Float64) / 100 for c in ("mktrf", "smb", "hml", "rf")),
+        *(
+            pl.col(c).cast(pl.String).str.strip_chars().cast(pl.Float64) / 100
+            for c in ("mktrf", "smb", "hml", "rf")
+        ),
     )
 
 
