@@ -186,16 +186,17 @@ def test_scaled_long_only_weights_are_m_times_a_mix_and_the_walk_saves_the_mix()
     assert (log["m"] > 0).all()
 
 
-def test_relu_long_only_zeroes_negative_scores_and_the_walk_saves_the_mix():
+def test_softplus_long_only_weights_are_positive_scores_over_n_and_the_walk_saves_the_mix():
     torch = pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
     from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
 
-    model = Optimizer("linear", 2, long_only=True, relu=True)
+    model = Optimizer("linear", 2, long_only=True, softplus=True)
     with torch.no_grad():
         model.lam.copy_(torch.tensor([1.0, 0.0]))
-    w = model.weights(torch.tensor([[0.3, 0.0], [-0.2, 0.0], [0.1, 0.0]]))
-    assert w.tolist() == pytest.approx([0.1, 0.0, 0.1 / 3])  # positive scores / N, else 0
+    w = model.weights(torch.tensor([[5.0, 0.0], [-5.0, 0.0], [0.0, 0.0]]))
+    expected = [np.log1p(np.exp(5.0)) / 3, np.log1p(np.exp(-5.0)) / 3, np.log(2.0) / 3]
+    assert w.tolist() == pytest.approx(expected, rel=1e-5)
     rng = np.random.default_rng(2)
     months = []
     for k in range(30):
@@ -203,11 +204,9 @@ def test_relu_long_only_zeroes_negative_scores_and_the_walk_saves_the_mix():
         r = np.where(x[:, 0] > 0.2, 0.05, -0.01).astype(np.float32)  # input 0 predicts return
         months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDE"), x, r))
     settings = Settings("linear", window=12, first_epochs=200, warm_epochs=5, lr=0.05,
-                        start=date(2000, 1, 1), long_only=True, relu=True)  # fmt: skip
+                        start=date(2000, 1, 1), long_only=True, softplus=True)  # fmt: skip
     weights, log, _ = walk(months, settings)
-    assert (weights["weight"] >= 0).all()
+    assert (weights["weight"] > 0).all()
     sums = weights.group_by("date").agg(pl.col("weight").sum())["weight"].to_list()
-    # the mix, or all cash in a month the model scores every stock negative; size logged as m
-    assert all(x == pytest.approx(1.0) or x == 0 for x in sums)
-    assert sum(x > 0 for x in sums) >= 12
+    assert sums == pytest.approx([1.0] * 18)  # the mix; the size is logged as m
     assert log["ret"].mean() > 0.02  # it learned to hold the stocks with input 0 high

@@ -33,12 +33,13 @@ weights), so the model learns only the ranking.
 
 Every softmax variant collapsed onto one stock whatever the objective (run15, 2026-10-12): a
 softmax weight's gradient is w (1 - w), so stocks already held learn fastest and the rest
-freeze. ``relu`` instead keeps the paper's output and zeroes the negatives,
-w = max(Y lam, 0) / N for the month's N candidates: long-only, any total size (the paper's
-loss sizes it), and the same gradient for every stock held. Softplus would not do: at the
-replication's typical weight, ~0.01, it is exp. Without the 1 / N the first portfolio is ~1,500
-times invested (half of ~3,900 stocks at ~0.4), the first steps push every score below 0, and
-with no stock held the gradient is 0 for good (run16, 2026-10-12); with it, ~0.4 times.
+freeze. ``softplus`` instead keeps the paper's output and makes it positive,
+w = softplus(Y lam) / N for the month's N candidates (softplus(s) = log(1 + e^s): ~s for
+s > 0, ~e^s below): long-only, any total size (the paper's loss sizes it). The 1 / N puts the
+weights where softplus is ~linear (a total size of ~4 needs scores of ~4, not ~-4.4), so
+stocks held get the same gradient. Tried first (run16, 2026-10-12), relu (max(s, 0) / N) died:
+on a nearly flat start Adam's steps pushed every score below 0 within 7 steps, and with no
+stock held relu's gradient is exactly 0 for good. Softplus's gradient is never 0.
 """
 
 import torch
@@ -143,8 +144,8 @@ class Optimizer(nn.Module):
             and aims at the best long-only Sharpe rather than the best return at full size.
         cap: With ``long_only``, the largest weight in any stock (:func:`capped_softmax`).
         names: With ``long_only``, the effective names held (:func:`spread_softmax`).
-        relu: With ``long_only``, weights = max(score, 0) / N instead of a softmax (module
-            docs).
+        softplus: With ``long_only``, weights = softplus(score) / N instead of a softmax
+            (module docs).
     """
 
     def __init__(  # noqa: PLR0913, PLR0917 - one argument per setting
@@ -158,7 +159,7 @@ class Optimizer(nn.Module):
         scale: bool = False,
         cap: float | None = None,
         names: float | None = None,
-        relu: bool = False,
+        softplus: bool = False,
     ):
         super().__init__()
         if kind not in MODELS:
@@ -171,7 +172,7 @@ class Optimizer(nn.Module):
         self.long_only = long_only
         self.cap = cap
         self.names = names
-        self.relu = relu
+        self.softplus = softplus
         self.log_m = nn.Parameter(torch.zeros(())) if (long_only and scale) else None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -181,12 +182,12 @@ class Optimizer(nn.Module):
         return x @ self.lam
 
     def weights(self, x: torch.Tensor) -> torch.Tensor:
-        """Portfolio weights: the scores; if long-only, their relu or softmax (times m)."""
+        """Portfolio weights: the scores; if long-only, their softplus or softmax (times m)."""
         scores = self(x)
         if not self.long_only:
             return scores
-        if self.relu:
-            return torch.relu(scores) / len(scores)
+        if self.softplus:
+            return nn.functional.softplus(scores) / len(scores)
         if self.names:
             scores = spread_softmax(scores, self.names)
         w = capped_softmax(scores, self.cap) if self.cap else torch.softmax(scores, dim=0)

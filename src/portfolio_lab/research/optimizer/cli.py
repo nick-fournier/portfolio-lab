@@ -128,7 +128,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     scale: Annotated[bool, typer.Option(help="Long-only with a learned overall size m.")] = False,
     cap: Annotated[float, typer.Option(help="Long-only's largest weight (0: no cap).")] = 0.0,
     names: Annotated[float, typer.Option(help="Long-only: effective names held (0: off).")] = 0.0,
-    relu: Annotated[bool, typer.Option(help="Long-only: weights = max(score, 0).")] = False,
+    softplus: Annotated[bool, typer.Option(help="Long-only: weights = softplus(score)/N.")] = False,
     objective: Annotated[
         str, typer.Option(help="paper, or a batch objective: sharpe, meanvar, log, downside, ...")
     ] = "paper",
@@ -169,7 +169,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 model, blocks, hidden, window or None, first_epochs, warm_epochs, lr, s,
                 date.fromisoformat(start), long_only, fast_attention, clip or None, scale,
                 cap or None, names or None,
-                None if objective == "paper" else objective, batch, gamma or None, relu,
+                None if objective == "paper" else objective, batch, gamma or None, softplus,
             )  # fmt: skip
             futures.append(
                 pool_.submit(
