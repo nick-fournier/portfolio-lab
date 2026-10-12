@@ -80,7 +80,12 @@ def prepare(
         .select(
             "sid",
             "date",
-            ((pl.col("exchange") == "NASDAQ") & (pl.col("date") <= pl.col("to")))
+            (
+                (pl.col("exchange") == "NASDAQ")(pl.col("exchange") == "NASDAQ")
+                & (pl.col("date") <= pl.col("to"))(
+                    pl.col("to").is_null() | (pl.col("date") <= pl.col("to"))
+                )
+            )
             .fill_null(False)
             .alias("nasdaq"),
         )
