@@ -126,9 +126,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     long_only: Annotated[bool, typer.Option(help="Softmax weights (not the paper's).")] = False,
     scale: Annotated[bool, typer.Option(help="Long-only with a learned overall size m.")] = False,
     cap: Annotated[float, typer.Option(help="Long-only's largest weight (0: no cap).")] = 0.0,
-    temperature: Annotated[
-        float, typer.Option(help="Long-only: standardize scores, softmax at this (0: off).")
-    ] = 0.0,
+    names: Annotated[float, typer.Option(help="Long-only: effective names held (0: off).")] = 0.0,
     fast_attention: Annotated[
         bool, typer.Option(help="bfloat16 fused attention (~5x faster transformer).")
     ] = False,
@@ -163,7 +161,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
             settings = walk.Settings(
                 model, blocks, hidden, window or None, first_epochs, warm_epochs, lr, s,
                 date.fromisoformat(start), long_only, fast_attention, clip or None, scale,
-                cap or None, temperature or None,
+                cap or None, names or None,
             )  # fmt: skip
             futures.append(
                 pool_.submit(

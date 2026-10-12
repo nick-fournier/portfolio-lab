@@ -42,7 +42,7 @@ class Settings:
         clip: Largest total gradient size per step (``None``: no clipping). Not in the paper;
             added after deeper models diverged (2026-10-11).
         cap: Long-only's largest weight in any stock (``None``: no cap; model.capped_softmax).
-        temperature: Long-only's softmax temperature on standardized scores (model docs).
+        names: Long-only's effective names held (model.spread_softmax).
     """
 
     model: str
@@ -59,7 +59,7 @@ class Settings:
     clip: float | None = 1.0
     scale: bool = False
     cap: float | None = None
-    temperature: float | None = None
+    names: float | None = None
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -87,7 +87,7 @@ def walk(
     rng = np.random.default_rng(settings.seed)
     model = Optimizer(settings.model, months[0].x.shape[1], settings.blocks, settings.hidden,
                       settings.long_only, settings.fast_attention, settings.scale,
-                      settings.cap, settings.temperature)  # fmt: skip
+                      settings.cap, settings.names)  # fmt: skip
     model.to(device)
     adam = torch.optim.Adam(model.parameters(), lr=settings.lr)
     data = [_tensors(m, device) for m in months]

@@ -27,15 +27,32 @@ gives the maximum-Sharpe portfolio. With long-only weights summing to 1 it inste
 one stock (stage 1, 2026-10-11). ``cap`` bounds every weight (:func:`capped_softmax`), so the
 portfolio holds at least 1 / cap stocks. Alone, the cap fails: training grows the scores
 until ten names sit at the cap and the gradient is exactly zero (run13, 2026-10-12).
-``temperature`` first standardizes the scores across the month's stocks and divides by it, so
-the model learns only the ranking and the temperature sets how concentrated the portfolio is
-(with N stocks and normal scores, about N exp(-1 / temperature^2) effective names).
+``names`` fixes the concentration instead (:func:`spread_softmax`): each month the softmax
+temperature is set so the portfolio holds that many effective names (1 / sum of squared
+weights), so the model learns only the ranking.
 """
 
 import torch
 from torch import nn
 
 MODELS = ("linear", "mlp", "transformer")
+#: Temperatures tried on standardized scores, from nearly one stock to nearly equal weights.
+TEMPERATURES = torch.logspace(-2, 1, 128)
+
+
+def spread_softmax(scores: torch.Tensor, names: float) -> torch.Tensor:
+    """Standardized scores divided by the temperature that holds ``names`` effective names.
+
+    Effective names = 1 / sum of squared softmax weights. The temperature is picked from
+    :data:`TEMPERATURES` (no gradient through the choice), so the result depends only on the
+    scores' pattern across stocks, never on their size: they cannot run away.
+    """
+    z = (scores - scores.mean()) / scores.std()
+    with torch.no_grad():
+        t = TEMPERATURES.to(z.device)
+        eff = 1 / (torch.softmax(z[None, :] / t[:, None], dim=1) ** 2).sum(dim=1)
+        best = t[(eff.log() - torch.log(torch.tensor(float(names)))).abs().argmin()]
+    return z / best
 
 
 def capped_softmax(scores: torch.Tensor, cap: float) -> torch.Tensor:
@@ -116,8 +133,7 @@ class Optimizer(nn.Module):
             (``exp`` of a parameter, starting at 1), so the loss can size the portfolio freely
             and aims at the best long-only Sharpe rather than the best return at full size.
         cap: With ``long_only``, the largest weight in any stock (:func:`capped_softmax`).
-        temperature: With ``long_only``, standardize the scores and divide by this before the
-            softmax (module docs).
+        names: With ``long_only``, the effective names held (:func:`spread_softmax`).
     """
 
     def __init__(  # noqa: PLR0913, PLR0917 - one argument per setting
@@ -130,7 +146,7 @@ class Optimizer(nn.Module):
         fast_attention: bool = False,
         scale: bool = False,
         cap: float | None = None,
-        temperature: float | None = None,
+        names: float | None = None,
     ):
         super().__init__()
         if kind not in MODELS:
@@ -142,7 +158,7 @@ class Optimizer(nn.Module):
         self.lam = _normal(width, var=1 / width)
         self.long_only = long_only
         self.cap = cap
-        self.temperature = temperature
+        self.names = names
         self.log_m = nn.Parameter(torch.zeros(())) if (long_only and scale) else None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -156,8 +172,8 @@ class Optimizer(nn.Module):
         scores = self(x)
         if not self.long_only:
             return scores
-        if self.temperature:
-            scores = (scores - scores.mean()) / (scores.std() * self.temperature)
+        if self.names:
+            scores = spread_softmax(scores, self.names)
         w = capped_softmax(scores, self.cap) if self.cap else torch.softmax(scores, dim=0)
         return w * self.log_m.exp() if self.log_m is not None else w
 
