@@ -1,16 +1,21 @@
 """The optimizer's data: one row per stock-month, then per-month arrays.
 
-:func:`build` joins the derived monthly table (every stock characteristic) with what the
-models and the backtest need at each month end: whether the stock may be held under
-production's rules, its trailing dollar volume (to pick the most liquid candidates), and
-next month's return over the T-bill (the same definition as the Forecaster's target:
-missing bars earn zero, a stock that fell to OTC takes the delisting return).
+:func:`build` makes the stock-month table. Its rows are the paper's universe (Kelly,
+Kuznetsov, Malamud & Xu 2026, sec. 4.1): every common stock, with no price, liquidity or
+history floor (:data:`PAPER_RULES`). Its columns are the characteristics of the derived
+monthly table (rebuilt here for those rows, the same way the nightly derive builds them),
+plus what the models need at each month end: the stock's market value and whether it is
+listed on the NYSE (for the paper's nano-cap cut), production's eligibility and its trailing
+dollar volume (for the optional liquid pool), and next month's return over the T-bill (the
+Forecaster's definition: missing bars earn zero, a stock that fell to OTC takes the
+delisting return).
 
 :func:`months` turns that table into what one training step sees: for each month end, the
-candidates (the ``pool`` most liquid stocks eligible under production's rules, among those
-missing at most a third of the characteristics, as in the paper), their
-characteristics ranked across the candidates into [-0.5, 0.5] (missing = 0, the middle), and
-their next-month excess returns.
+candidates, their characteristics ranked across the candidates into [-0.5, 0.5] (missing = 0,
+the middle), and their next-month excess returns. Candidates, as in the paper: stocks
+missing at most a third of the characteristics and at or above the 1st percentile of NYSE
+market values that month. Optionally (``pool``), only the ``pool`` most liquid of them that
+production may hold.
 """
 
 from dataclasses import dataclass
@@ -22,12 +27,19 @@ import polars as pl
 from scipy.stats import rankdata
 
 from portfolio_lab.core.paths import DataPaths
+from portfolio_lab.data import reader
+from portfolio_lab.research.context import environment, sensitivities, tailwinds
 from portfolio_lab.research.dataview import DataView
-from portfolio_lab.research.panel import Panel
+from portfolio_lab.research.features import build_features
+from portfolio_lab.research.panel import EligibilityRules, Panel
 from portfolio_lab.research.scoreboard import forward_returns
 
-#: Monthly-table columns that are not characteristics.
-NOT_INPUTS = ("date", "symbol", "sic2")
+#: Table columns that are not characteristics.
+NOT_INPUTS = ("date", "symbol", "sic2", "nyse", "eligible", "adv", "actual")
+#: The paper's universe: every common stock, no price, liquidity or history floor.
+PAPER_RULES = EligibilityRules(min_price=0.0, min_dollar_volume=0.0, min_history=1)
+#: Nano caps (below this percentile of NYSE market values) are left out (paper, sec. 4.1).
+NANO_PERCENTILE = 0.01
 
 
 @dataclass(frozen=True)
@@ -49,24 +61,48 @@ class Month:
 
 def inputs(table: pl.DataFrame) -> list[str]:
     """The characteristic columns of a :func:`build` table, in table order."""
-    extra = {"eligible", "adv", "actual"}
-    return [c for c in table.columns if c not in NOT_INPUTS and c not in extra]
+    return [c for c in table.columns if c not in NOT_INPUTS]
 
 
-def build(root: Path, panel: Panel | None = None) -> pl.DataFrame:
-    """Stock-months of the derived monthly table with eligibility, liquidity and the target.
+def characteristics(root: Path, panel: Panel) -> pl.DataFrame:
+    """The derived monthly table's columns for the panel's eligible stocks (not written).
+
+    The same steps as ``data.derived.monthly.build``, on a panel with other rules.
+    """
+    states = pl.read_parquet(DataPaths(root).fundamentals).with_columns(
+        pl.col("sid").cast(pl.String).alias("symbol")
+    )
+    scores = states.filter(pl.col("fscore").is_not_null()).select(
+        "symbol", "filed", "fscore", "n_signals"
+    )
+    industry = panel.ids.securities.select(pl.col("sid").cast(pl.String).alias("symbol"), "sic")
+    features = build_features(panel, states.drop("fscore", "n_signals"), industry, scores)
+    observations = reader.read(root, "series").filter(pl.col("series") != "DTB3")
+    dates = features["date"].unique().sort().to_list()
+    context = tailwinds(
+        sensitivities(panel, observations, dates), environment(observations, dates, features)
+    )
+    return features.join(context, on=["date", "symbol"], how="left")
+
+
+def build(root: Path, rules: EligibilityRules = PAPER_RULES) -> pl.DataFrame:
+    """The stock-month table (module docs).
 
     Args:
         root: The data hive.
-        panel: Prices under production's eligibility rules (default: loaded from ``root``).
+        rules: Which stocks get a row (default: the paper's universe).
 
     Returns:
-        The monthly table's columns plus ``eligible`` (production rules), ``adv`` (trailing
-        median dollar volume) and ``actual`` (next month's return minus the T-bill; null in
-        the latest month), for month ends the panel has.
+        The characteristics plus ``nyse`` (listed on the NYSE; current listing, not point in
+        time), ``eligible`` (production's rules), ``adv`` (trailing median dollar volume) and
+        ``actual`` (next month's return minus the T-bill; null in the latest month), sorted
+        by date and symbol.
     """
-    panel = panel or Panel.load(root)
-    monthly = pl.read_parquet(DataPaths(root).features)
+    monthly = characteristics(root, Panel.load(root, rules=rules))
+    panel = Panel.load(root)  # production's rules: eligibility, and the same prices
+    nyse = panel.ids.securities.select(
+        pl.col("sid").cast(pl.String).alias("symbol"), (pl.col("exchange") == "NYSE").alias("nyse")
+    )
     ends = sorted(d for d in monthly["date"].unique().to_list() if d in panel.date_index)
     # The table's last row may be a month in progress (today's derive): no full month after
     # the one before it, so that month's target stays unknown too.
@@ -84,7 +120,10 @@ def build(root: Path, panel: Panel | None = None) -> pl.DataFrame:
             "actual": actual.astype(np.float64),
         }))  # fmt: skip
     priced = pl.concat(frames).with_columns(pl.col("adv", "actual").fill_nan(None))
-    return monthly.join(priced, on=["date", "symbol"], how="inner").sort("date", "symbol")
+    table = monthly.join(priced, on=["date", "symbol"], how="inner")
+    return table.join(nyse, on="symbol", how="left").with_columns(
+        pl.col("nyse").fill_null(False)
+    ).sort("date", "symbol")  # fmt: skip
 
 
 def _ranked(values: np.ndarray) -> np.ndarray:
@@ -99,30 +138,42 @@ def _ranked(values: np.ndarray) -> np.ndarray:
 
 
 def months(
-    table: pl.DataFrame, pool: int, columns: list[str] | None = None, max_missing: float = 1 / 3
+    table: pl.DataFrame,
+    pool: int | None = None,
+    columns: list[str] | None = None,
+    max_missing: float = 1 / 3,
 ) -> list[Month]:
     """Per-month candidates and their ranked characteristics (module docs).
 
     Args:
         table: From :func:`build`.
-        pool: Candidates per month: the most liquid stocks eligible under production's rules.
+        pool: ``None`` (the paper): every stock passing the paper's filters. A number: only
+            that many of them, the most liquid that production's rules allow.
         columns: Characteristics to use (default: all of :func:`inputs`).
         max_missing: Stocks missing more than this share of the characteristics are left out
-            before the most liquid are picked (the paper's filter, sec. 4.1).
+            (the paper's filter, sec. 4.1).
 
     Returns:
         One :class:`Month` per month end, ascending.
     """
     columns = columns or inputs(table)
-    out = []
     missing = pl.sum_horizontal(
         pl.col(c).cast(pl.Float64).is_nan().fill_null(True) for c in columns
     )
-    usable = table.filter(
-        pl.col("eligible") & pl.col("adv").is_not_null() & (missing <= max_missing * len(columns))
+    nano = (
+        pl.col("market_value")
+        .filter(pl.col("nyse"))
+        .quantile(NANO_PERCENTILE, interpolation="linear")
+        .over("date")
     )
+    usable = table.filter(
+        (missing <= max_missing * len(columns)) & (pl.col("market_value") >= nano)
+    )
+    if pool is not None:
+        usable = usable.filter(pl.col("eligible") & pl.col("adv").is_not_null())
+    out = []
     for (day,), month in usable.group_by("date", maintain_order=True):
-        g = month.sort("adv", descending=True).head(pool)
+        g = month if pool is None else month.sort("adv", descending=True).head(pool)
         x = g.select(pl.col(c).cast(pl.Float64) for c in columns).to_numpy()
         r = g["actual"].cast(pl.Float64).fill_null(np.nan).to_numpy()
         out.append(Month(day, g["symbol"].to_list(), _ranked(x), r.astype(np.float32)))

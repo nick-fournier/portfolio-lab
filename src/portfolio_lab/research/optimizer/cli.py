@@ -41,7 +41,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     table: Annotated[Path, typer.Option(help="The table from `plab optimizer data`.")],
     out: Annotated[Path, typer.Option(help="Folder for weights, log, model and settings.")],
     model: Annotated[str, typer.Option(help="linear, mlp or transformer.")],
-    pool: Annotated[int, typer.Option(help="Candidates: most liquid eligible stocks.")] = 400,
+    pool: Annotated[int, typer.Option(help="0: the paper's universe; N: N most liquid.")] = 0,
     blocks: Annotated[int, typer.Option()] = 1,
     hidden: Annotated[int, typer.Option()] = 256,
     window: Annotated[int, typer.Option(help="Training months (0: all earlier months).")] = 60,
@@ -60,7 +60,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
 
     settings = walk.Settings(model, blocks, hidden, window or None, first_epochs, warm_epochs,
                              lr, seed, date.fromisoformat(start), long_only)  # fmt: skip
-    months = data.months(pl.read_parquet(table), pool)
+    months = data.months(pl.read_parquet(table), pool or None)
     weights, log, fitted = walk.walk(months, settings, device)
     out.mkdir(parents=True, exist_ok=True)
     weights.write_parquet(out / "weights.parquet")

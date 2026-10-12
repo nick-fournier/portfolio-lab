@@ -18,8 +18,9 @@ def _table() -> pl.DataFrame:
     rows = []
     for day in (date(2020, 1, 31), date(2020, 2, 28)):
         for k in range(6):
-            rows.append({"date": day, "symbol": f"S{k}", "sic2": 10, "value": float(k),
-                         "eligible": k != 5, "adv": float(k), "actual": 0.01 * k})  # fmt: skip
+            rows.append({"date": day, "symbol": f"S{k}", "sic2": 10, "market_value": 10.0 + k,
+                         "nyse": True, "eligible": k != 5, "adv": float(k),
+                         "actual": 0.01 * k})  # fmt: skip
     return pl.DataFrame(rows)
 
 
@@ -28,8 +29,14 @@ def test_months_take_the_most_liquid_eligible_stocks_and_rank_among_them():
     assert [m.date for m in months] == [date(2020, 1, 31), date(2020, 2, 28)]
     first = months[0]
     assert first.symbols == ["S4", "S3", "S2"]  # S5 is ineligible
-    assert first.x[:, 0].tolist() == pytest.approx([1 / 3, 0.0, -1 / 3])
+    assert first.x[:, 0].tolist() == pytest.approx([1 / 3, 0.0, -1 / 3])  # market_value
     assert first.r.tolist() == pytest.approx([0.04, 0.03, 0.02])
+
+
+def test_the_paper_universe_drops_nano_caps_below_the_1st_percentile_of_nyse_values():
+    months = data.months(_table())
+    # NYSE values 10..15: the 1st percentile is 10.05, so S0 (10) is a nano cap
+    assert months[0].symbols == ["S1", "S2", "S3", "S4", "S5"]
 
 
 def test_the_three_models_give_weights_that_are_positive_and_sum_to_one():
