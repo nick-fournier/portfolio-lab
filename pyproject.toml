@@ -21,6 +21,11 @@ dependencies = [
     "uvicorn>=0.30",
 ]
 
+[project.optional-dependencies]
+nets = [
+    "torch>=2.4",
+]
+
 [project.scripts]
 plab = "portfolio_lab.cli:app"
 

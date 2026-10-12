@@ -23,12 +23,14 @@ from portfolio_lab.data.conform import sharadar as conform_sharadar
 from portfolio_lab.data.derived import daily, fundamentals, monthly
 from portfolio_lab.forecast_cli import forecast_app
 from portfolio_lab.jobs import tasks, taxes
+from portfolio_lab.research.optimizer.cli import optimizer_app
 from portfolio_lab.research.scorecard import scorecard
 
 app = typer.Typer(help="Portfolio lab: ingest data, run backtests, serve the dashboard.")
 ingest_app = typer.Typer(help="Fetch and store market data.")
 app.add_typer(ingest_app, name="ingest")
 app.add_typer(forecast_app, name="forecast")
+app.add_typer(optimizer_app, name="optimizer")
 hive_app = typer.Typer(help="The data hive: conform each source into the shared tables.")
 app.add_typer(hive_app, name="hive")
 
