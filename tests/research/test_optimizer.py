@@ -414,3 +414,23 @@ def test_short_controls_keep_unshortable_stocks_and_no_shorts_at_or_above_zero()
     assert (w.filter(pl.col("symbol").is_in(["A", "B"]))["weight"] < 0).any()  # still shorts
     settings = Settings("linear", no_shorts=True, short_hurdle=1.0, **base)
     assert (walk(months, settings, stock_costs=stock)[0]["weight"] >= 0).all()
+
+
+def test_fresh_retraining_makes_each_month_independent_of_the_others():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    rng = np.random.default_rng(9)
+    months = []
+    for k in range(18):
+        x = rng.uniform(-0.5, 0.5, (5, 2)).astype(np.float32)
+        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 5)).astype(np.float32)
+        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDE"), x, r))
+    base = dict(window=12, first_epochs=10, lr=0.01, start=date(2000, 1, 1), fresh=True)
+    with pytest.raises(ValueError, match="fresh"):
+        walk(months, Settings("mlp", every=2, **{**base, "fresh": False}))
+    every = walk(months, Settings("mlp", every=2, **base))[0]
+    full = walk(months, Settings("mlp", **base))[0]
+    assert every["date"].unique().sort().to_list() == [m.date for m in months[12::2]]
+    shared = full.filter(pl.col("date").is_in(every["date"].unique().implode()))
+    assert shared["weight"].to_list() == pytest.approx(every["weight"].to_list(), rel=1e-5)

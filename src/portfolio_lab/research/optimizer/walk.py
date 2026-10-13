@@ -78,6 +78,12 @@ class Settings:
             still lets weights go negative (else every score can sink below 0 and the gradient
             dies, run16); pair it with a large ``short_hurdle`` so shorts never pay there.
         scaled_attention: Divide attention scores by sqrt(D) (model.Block); not in the paper.
+        fresh: Retrain from scratch every test month, as the paper does ("roll the training
+            sample forward one month and retrain"): new starting weights (seeded by ``seed`` and
+            the month) and a new Adam, ``first_epochs`` passes. Default: continue last month's
+            model for ``warm_epochs`` passes (faster; ours).
+        every: Pick a portfolio only every ``every``-th test month (1: all). Needs ``fresh``,
+            since each picked month is then trained on its own; for quick checks.
         partial: Trade only part of the way to the model's weights each month, at a learned
             pace a: holdings = (1 - a) * last month's + a * new weights. In training, last
             month's holdings are taken as the model's weights for the month before (both
@@ -115,6 +121,8 @@ class Settings:
     short_min_easy: float | None = None
     no_shorts: bool = False
     scaled_attention: bool = False
+    fresh: bool = False
+    every: int = 1
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -237,6 +245,8 @@ def _pricing(
     """
     if settings.subset_train and subsets is None:
         raise ValueError("subset_train needs subsets")
+    if settings.every > 1 and not settings.fresh:
+        raise ValueError("every > 1 needs fresh")
     shorts = settings.short_hurdle > 0 or settings.short_min_easy is not None or settings.no_shorts
     flat = settings.spread > 0 or settings.short_fee > 0
     if not (flat or shorts or settings.costs or settings.partial):
@@ -281,6 +291,20 @@ def _hold(
     return w, (month.symbols, w), pace
 
 
+def _new_model(
+    settings: Settings, width: int, device: str, seed: int, month: int = 0
+) -> tuple[Optimizer, torch.optim.Optimizer]:
+    """A freshly initialized model and its Adam (seeded by ``seed``, and ``month`` if any)."""
+    torch.manual_seed(seed if month == 0 else seed * 100_003 + month)
+    model = Optimizer(settings.model, width, settings.blocks, settings.hidden,
+                      settings.long_only, settings.fast_attention, settings.scale,
+                      settings.cap, settings.names, settings.softplus,
+                      partial=settings.partial,
+                      scaled_attention=settings.scaled_attention)  # fmt: skip
+    model.to(device)
+    return model, torch.optim.Adam(model.parameters(), lr=settings.lr)
+
+
 def _shortable(pricing: Pricing | None, settings: Settings, t: int, n: int) -> np.ndarray | None:
     """Month ``t``'s may-be-shorted flags for the walk's holdings (``None``: all may)."""
     if settings.no_shorts:
@@ -316,29 +340,27 @@ def walk(
         seconds; with ``subsets``, ``ret_subset`` and ``stocks_subset``); and the final model.
         With ``subsets`` the weights also have ``subset_weight`` (null outside the subset).
     """
-    torch.manual_seed(settings.seed)
     rng = np.random.default_rng(settings.seed)
-    model = Optimizer(settings.model, months[0].x.shape[1], settings.blocks, settings.hidden,
-                      settings.long_only, settings.fast_attention, settings.scale,
-                      settings.cap, settings.names, settings.softplus,
-                      partial=settings.partial,
-                      scaled_attention=settings.scaled_attention)  # fmt: skip
-    model.to(device)
-    adam = torch.optim.Adam(model.parameters(), lr=settings.lr)
+    model, adam = _new_model(settings, months[0].x.shape[1], device, settings.seed)
     data = [_tensors(m, device) for m in months]
     known = [bool(np.isfinite(m.r).all()) for m in months]
     rows, sub = _subset_rows(months, data, subsets)
     pricing = _pricing(months, settings, device, subsets, stock_costs)
     tune_rng = np.random.default_rng(settings.seed + 1)
-    weights, log, trained, held = [], [], False, None
+    weights, log, trained, held, tested = [], [], False, None, -1
     for t, month in enumerate(months):
         lo = 0 if settings.window is None else t - settings.window
         if month.date < settings.start or lo < 0:
             continue
+        if (tested := tested + 1) % settings.every:
+            continue
         clock = time.perf_counter()
+        if settings.fresh:  # each month on its own: new weights, Adam and shuffle
+            model, adam = _new_model(settings, months[0].x.shape[1], device, settings.seed, t)
+            rng = np.random.default_rng(settings.seed * 100_003 + t)
         train = [k for k in range(lo, t) if known[k]]
         source = sub if settings.subset_train == "only" else data
-        epochs = settings.warm_epochs if trained else settings.first_epochs
+        epochs = settings.warm_epochs if trained and not settings.fresh else settings.first_epochs
         fit = [k for k in train if source[k] is not None]
         losses = _train(model, adam, source, fit, epochs, settings, rng, pricing)
         trained = True

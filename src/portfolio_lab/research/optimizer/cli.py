@@ -170,6 +170,10 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     scaled_attention: Annotated[
         bool, typer.Option(help="Divide attention scores by sqrt(D) (standard; not the paper).")
     ] = False,
+    fresh: Annotated[
+        bool, typer.Option(help="Retrain from scratch each test month (the paper's way).")
+    ] = False,
+    every: Annotated[int, typer.Option(help="Only every Nth test month (needs --fresh).")] = 1,
     no_shorts: Annotated[
         bool, typer.Option(help="Hold no shorts (pair with --short-hurdle).")
     ] = False,
@@ -211,7 +215,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 None if objective == "paper" else objective, batch, gamma or None, softplus,
                 None if subset_train == "all" else subset_train, finetune_epochs, spread, short_fee,
                 costs or None, partial, short_hurdle, short_min_easy or None, no_shorts,
-                scaled_attention,
+                scaled_attention, fresh, every,
             )  # fmt: skip
             futures.append(
                 pool_.submit(
