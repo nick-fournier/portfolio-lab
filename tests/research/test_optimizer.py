@@ -434,3 +434,24 @@ def test_fresh_retraining_makes_each_month_independent_of_the_others():
     assert every["date"].unique().sort().to_list() == [m.date for m in months[12::2]]
     shared = full.filter(pl.col("date").is_in(every["date"].unique().implode()))
     assert shared["weight"].to_list() == pytest.approx(every["weight"].to_list(), rel=1e-5)
+
+
+def test_std_init_keeps_rows_their_size_through_ten_blocks_and_variance_init_grows_them():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+
+    x = torch.rand(500, 100) - 0.5
+    size = float(x.norm(dim=1).mean())
+
+    def grown(init):
+        torch.manual_seed(0)
+        y = x
+        with torch.no_grad():
+            for block in Optimizer("transformer", 100, 10, 256, init=init).blocks:
+                y = block(y)
+        return float(y.norm(dim=1).mean()) / size
+
+    assert grown("std") == pytest.approx(1.0, abs=0.05)
+    assert grown("variance") > 20
+    with pytest.raises(ValueError, match="init"):
+        Optimizer("linear", 3, init="var")

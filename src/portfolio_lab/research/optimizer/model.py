@@ -18,7 +18,11 @@ A block, on the (candidates x inputs) matrix Y, with residual connections and no
     Y <- Y + relu(Y W1 + b1) W2 + b2           feed-forward: each stock alone
 
 Initialization as in the paper (sec. 4.3): Q, K, V ~ N(0, 1/D); W1 ~ N(0, 1/hidden),
-W2 ~ N(0, 1/D), biases 0; lam ~ N(0, 1/D).
+W2 ~ N(0, 1/D), biases 0; lam ~ N(0, 1/D). The paper doesn't say whether the second number is
+the variance (``init="variance"``, the default here so far) or the standard deviation
+(``init="std"``). Read as variances, each block grows each stock's row about 1.7x at the start
+(10 blocks: 136x, starting loss ~2e6) and deep models diverge; read as standard deviations
+the rows keep their size through 10 blocks and the starting loss is ~1 (2026-10-13).
 
 Loss for one month (paper eq. 9 without the penalty): (1 - w . r)^2, w the weights and r next
 month's returns over the T-bill. Over many months, with the weights free in size, minimizing it
@@ -83,8 +87,9 @@ def capped_softmax(scores: torch.Tensor, cap: float) -> torch.Tensor:
         capped = capped | over
 
 
-def _normal(*shape: int, var: float) -> nn.Parameter:
-    return nn.Parameter(torch.randn(*shape) * var**0.5)
+def _normal(*shape: int, var: float, std: bool = False) -> nn.Parameter:
+    """N(0, var) draws; with ``std`` the paper's number is the standard deviation instead."""
+    return nn.Parameter(torch.randn(*shape) * (var if std else var**0.5))
 
 
 class Block(nn.Module):
@@ -97,25 +102,32 @@ class Block(nn.Module):
         fast: Compute attention in bfloat16 with torch's fused kernel (about 5x faster on the
             GPU for ~4,000 stocks; inputs rounded to 8-bit mantissas). Default: float32, the
             formula written out.
+        std: Read the paper's initialization numbers as standard deviations (module docs).
         scaled: Divide the attention scores by sqrt(width), as standard transformers do (the
             paper doesn't). Unscaled scores grow with the inputs' size and width, and deeper
             or wider models diverged (4 blocks; 189 inputs, run10).
     """
 
     def __init__(
-        self, width: int, hidden: int, attention: bool, fast: bool = False, scaled: bool = False
+        self,
+        width: int,
+        hidden: int,
+        attention: bool,
+        fast: bool = False,
+        scaled: bool = False,
+        std: bool = False,
     ):
         super().__init__()
         self.attention = attention
         self.fast = fast
         self.scale = width**-0.5 if scaled else 1.0
         if attention:
-            self.q = _normal(width, width, var=1 / width)
-            self.k = _normal(width, width, var=1 / width)
-            self.v = _normal(width, width, var=1 / width)
-        self.w1 = _normal(width, hidden, var=1 / hidden)
+            self.q = _normal(width, width, var=1 / width, std=std)
+            self.k = _normal(width, width, var=1 / width, std=std)
+            self.v = _normal(width, width, var=1 / width, std=std)
+        self.w1 = _normal(width, hidden, var=1 / hidden, std=std)
         self.b1 = nn.Parameter(torch.zeros(hidden))
-        self.w2 = _normal(hidden, width, var=1 / width)
+        self.w2 = _normal(hidden, width, var=1 / width, std=std)
         self.b2 = nn.Parameter(torch.zeros(width))
 
     def peers(self, y: torch.Tensor) -> torch.Tensor:
@@ -150,6 +162,7 @@ class Optimizer(nn.Module):
             and aims at the best long-only Sharpe rather than the best return at full size.
         cap: With ``long_only``, the largest weight in any stock (:func:`capped_softmax`).
         names: With ``long_only``, the effective names held (:func:`spread_softmax`).
+        init: ``variance`` or ``std``: how to read the paper's N(0, a) (module docs).
         scaled_attention: Divide attention scores by sqrt(width) (:class:`Block`).
         partial: Also learn a trading pace a in (0, 1) (:meth:`pace`; starts near 0.88): the
             portfolio moves only that fraction of the way from last month's holdings to the
@@ -172,16 +185,26 @@ class Optimizer(nn.Module):
         softplus: bool = False,
         partial: bool = False,
         scaled_attention: bool = False,
+        init: str = "variance",
     ):
         super().__init__()
         if kind not in MODELS:
             raise ValueError(f"unknown model {kind!r}; known: {MODELS}")
         n = 0 if kind == "linear" else blocks
         self.blocks = nn.ModuleList(
-            Block(width, hidden, kind == "transformer", fast_attention, scaled_attention)
+            Block(
+                width,
+                hidden,
+                kind == "transformer",
+                fast_attention,
+                scaled_attention,
+                init == "std",
+            )
             for _ in range(n)
         )
-        self.lam = _normal(width, var=1 / width)
+        if init not in {"variance", "std"}:
+            raise ValueError(f"init must be variance or std, not {init!r}")
+        self.lam = _normal(width, var=1 / width, std=init == "std")
         self.long_only = long_only
         self.cap = cap
         self.names = names

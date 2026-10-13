@@ -78,6 +78,7 @@ class Settings:
             still lets weights go negative (else every score can sink below 0 and the gradient
             dies, run16); pair it with a large ``short_hurdle`` so shorts never pay there.
         scaled_attention: Divide attention scores by sqrt(D) (model.Block); not in the paper.
+        init: ``variance`` or ``std``: how to read the paper's initialization (model docs).
         fresh: Retrain from scratch every test month, as the paper does ("roll the training
             sample forward one month and retrain"): new starting weights (seeded by ``seed`` and
             the month) and a new Adam, ``first_epochs`` passes. Default: continue last month's
@@ -123,6 +124,7 @@ class Settings:
     scaled_attention: bool = False
     fresh: bool = False
     every: int = 1
+    init: str = "variance"
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -300,7 +302,7 @@ def _new_model(
                       settings.long_only, settings.fast_attention, settings.scale,
                       settings.cap, settings.names, settings.softplus,
                       partial=settings.partial,
-                      scaled_attention=settings.scaled_attention)  # fmt: skip
+                      scaled_attention=settings.scaled_attention, init=settings.init)  # fmt: skip
     model.to(device)
     return model, torch.optim.Adam(model.parameters(), lr=settings.lr)
 
