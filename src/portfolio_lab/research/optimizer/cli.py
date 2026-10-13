@@ -74,7 +74,12 @@ def _walk_one(  # noqa: PLR0913, PLR0917 - one walk's pieces
     torch.set_num_threads(threads)
     torch.set_float32_matmul_precision(precision)
     months = _months(table, pool or None, inputs, *floor)
-    weights, log, fitted = walk.walk(months, settings, device, subsets)
+    stock = None
+    if settings.costs:
+        from portfolio_lab.research.optimizer import costs  # noqa: PLC0415
+
+        stock = costs.align(months, pl.read_parquet(settings.costs))
+    weights, log, fitted = walk.walk(months, settings, device, subsets, stock)
     out.mkdir(parents=True, exist_ok=True)
     weights.write_parquet(out / "weights.parquet")
     log.write_parquet(out / "log.parquet")
@@ -150,6 +155,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     finetune_epochs: Annotated[int, typer.Option(help="Passes over the pool (finetune).")] = 5,
     spread: Annotated[float, typer.Option(help="Loss: cost per $ traded (0.005: 0.5%).")] = 0.0,
     short_fee: Annotated[float, typer.Option(help="Loss: yearly cost per dollar shorted.")] = 0.0,
+    costs: Annotated[
+        str, typer.Option(help="Loss: per-stock cost table (date, symbol, trade_cost, borrow_fee).")
+    ] = "",
     inputs: Annotated[str, typer.Option(help="Characteristics: all, ours, jkp or paper.")] = "all",
     min_price: Annotated[float, typer.Option(help="Leave out stocks below this price.")] = 0.0,
     min_adv: Annotated[float, typer.Option(help="...or below this daily dollar volume.")] = 0.0,
@@ -187,6 +195,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 cap or None, names or None,
                 None if objective == "paper" else objective, batch, gamma or None, softplus,
                 None if subset_train == "all" else subset_train, finetune_epochs, spread, short_fee,
+                costs or None,
             )  # fmt: skip
             futures.append(
                 pool_.submit(

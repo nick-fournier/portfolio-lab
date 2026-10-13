@@ -297,3 +297,56 @@ def test_walk_with_trading_costs_trades_less_than_without():
         return float(np.abs(np.diff(w.drop("date").to_numpy(), axis=0)).sum())
 
     assert traded(spread=0.05, short_fee=0.5) < traded()
+
+
+def test_per_stock_costs_charge_each_stock_its_own_rate_and_sold_stocks_last_months():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import costs  # noqa: PLC0415
+
+    before = data.Month(date(2000, 1, 31), ["A", "B", "C"], np.zeros((3, 1)), np.zeros(3))
+    now = data.Month(date(2000, 2, 29), ["B", "A", "D"], np.zeros((3, 1)), np.zeros(3))
+    link = costs.links([before, now])[1]
+    w_before = torch.tensor([0.5, -0.2, 0.3])  # A, B, C
+    w = torch.tensor([-0.4, 0.6, 0.1])  # B -0.2 more short, A +0.1, D bought; C sold
+    r = torch.zeros(3)
+    spread = torch.tensor([0.02, 0.01, 0.05])  # this month: B, A, D
+    spread_before = torch.tensor([0.0, 0.0, 0.03])  # last month: A, B, C
+    fee = torch.tensor([1.2, 0.0, 0.0])  # only B costs to borrow
+    net = costs.net_return(w, r, w_before, link, spread, fee, spread_before)
+    traded = 0.02 * 0.2 + 0.01 * 0.1 + 0.05 * 0.1 + 0.03 * 0.3
+    assert float(net) == pytest.approx(-traded - 1.2 / 12 * 0.4)
+
+
+def test_align_puts_costs_in_row_order_and_fills_missing_stocks():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import costs  # noqa: PLC0415
+
+    month = data.Month(date(2000, 1, 31), ["C", "A", "B"], np.zeros((3, 1)), np.zeros(3))
+    table = pl.DataFrame({"date": [date(2000, 1, 31)] * 2, "symbol": ["A", "B"],
+                          "trade_cost": [0.01, 0.03], "borrow_fee": [0.003, 0.5]})  # fmt: skip
+    ((trade, fee),) = costs.align([month], table)
+    assert trade.tolist() == pytest.approx([0.02, 0.01, 0.03])  # C: the month's median
+    assert fee.tolist() == pytest.approx([1.0, 0.003, 0.5])  # C: not lendable
+
+
+def test_walk_with_per_stock_costs_needs_them_and_runs_with_them():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    rng = np.random.default_rng(6)
+    months = [
+        data.Month(
+            date(2000 + k // 12, k % 12 + 1, 1),
+            list("ABCD"),
+            rng.uniform(-0.5, 0.5, (4, 2)).astype(np.float32),
+            rng.normal(0.01, 0.05, 4).astype(np.float32),
+        )
+        for k in range(16)
+    ]
+    settings = Settings("linear", window=12, first_epochs=5, warm_epochs=1,
+                        start=date(2000, 1, 1), costs="table.parquet")  # fmt: skip
+    with pytest.raises(ValueError, match="stock_costs"):
+        walk(months, settings)
+    stock = [(np.full(4, 0.01, np.float32), np.array([0.003, 1, 1, 1], np.float32))] * 16
+    weights, log, _ = walk(months, settings, stock_costs=stock)
+    assert log.height == 4 and weights["weight"].is_finite().all()

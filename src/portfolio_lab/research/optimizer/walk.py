@@ -67,6 +67,8 @@ class Settings:
         finetune_epochs: Passes over the subset's rows with ``"finetune"``.
         spread: Cost per dollar traded in the loss (``costs``; 0: none). Paper loss only.
         short_fee: Yearly cost per dollar shorted in the loss (``costs``; 0: none).
+        costs: A per-stock cost table (``costs.align``) replacing both flat rates; the walk
+            gets it aligned as ``stock_costs``. Recorded here as its path.
         softplus: Long-only weights = softplus(score) / N, size free (model.Optimizer); saved as
             the mix like ``scale``, the total logged as m.
     """
@@ -94,6 +96,7 @@ class Settings:
     finetune_epochs: int = 5
     spread: float = 0.0
     short_fee: float = 0.0
+    costs: str | None = None
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -113,7 +116,7 @@ def _steps(train: list[int], settings: Settings, rng: np.random.Generator) -> li
 Pair = tuple[torch.Tensor, torch.Tensor]
 
 
-def _train(
+def _train(  # noqa: PLR0913, PLR0917 - one training run's pieces
     model: Optimizer,
     adam: torch.optim.Optimizer,
     source: list[Pair | None],
@@ -122,11 +125,13 @@ def _train(
     settings: Settings,
     rng: np.random.Generator,
     links: list[costs.Link | None] | None = None,
+    stock: list[Pair] | None = None,
 ) -> list[torch.Tensor]:
     """``epochs`` passes over the ``train`` months of ``source``; the last pass's losses.
 
     With ``links`` (``costs.links`` of the months) the loss uses the return net of costs, the
-    weights the month before computed by the same model without a gradient.
+    weights the month before computed by the same model without a gradient; with ``stock``
+    (each month's per-stock trade cost and borrow fee) each stock pays its own rates.
     """
     losses = []
     for _ in range(epochs):
@@ -137,8 +142,11 @@ def _train(
                 k = step[0]
                 with torch.no_grad():
                     before = model.weights(source[k - 1][0]) if k > 0 else None
+                spread, fee, spread_before = settings.spread, settings.short_fee, None
+                if stock is not None:
+                    (spread, fee), spread_before = stock[k], stock[k - 1][0] if k > 0 else None
                 net = costs.net_return(model.weights(source[k][0]), source[k][1], before,
-                                       links[k], settings.spread, settings.short_fee)  # fmt: skip
+                                       links[k], spread, fee, spread_before)  # fmt: skip
                 value = (1 - net) ** 2
             elif settings.objective is None:
                 value = loss(model, *source[step[0]])
@@ -164,17 +172,31 @@ def _subset_rows(
     return rows, [(x[r], y[r]) if r else None for (x, y), r in zip(data, rows, strict=True)]
 
 
-def _links(
-    months: list[Month], settings: Settings, device: str, subsets: dict | None
-) -> list[costs.Link | None] | None:
-    """``costs.links`` if the loss has costs (``None`` if not); checks the settings agree."""
+def _pricing(
+    months: list[Month],
+    settings: Settings,
+    device: str,
+    subsets: dict | None,
+    stock_costs: list[tuple[np.ndarray, np.ndarray]] | None,
+) -> tuple[list[costs.Link | None] | None, list[Pair] | None]:
+    """The loss's cost inputs: ``costs.links`` and per-stock cost tensors (or ``None``).
+
+    Links are ``None`` without costs; the tensors are ``None`` without ``settings.costs``.
+    Checks the settings agree.
+    """
     if settings.subset_train and subsets is None:
         raise ValueError("subset_train needs subsets")
-    if settings.spread <= 0 and settings.short_fee <= 0:
-        return None
+    if settings.spread <= 0 and settings.short_fee <= 0 and settings.costs is None:
+        return None, None
     if settings.objective or settings.subset_train:
         raise ValueError("costs need the paper loss on every candidate")
-    return costs.links(months, device)
+    if settings.costs is None:
+        return costs.links(months, device), None
+    if stock_costs is None:
+        raise ValueError("settings.costs needs stock_costs")
+    tensors = [(torch.from_numpy(a).to(device), torch.from_numpy(b).to(device))
+               for a, b in stock_costs]  # fmt: skip
+    return costs.links(months, device), tensors
 
 
 def walk(
@@ -182,6 +204,7 @@ def walk(
     settings: Settings,
     device: str = "cpu",
     subsets: dict[date, set[str]] | None = None,
+    stock_costs: list[tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> tuple[pl.DataFrame, pl.DataFrame, Optimizer]:
     """Train and pick portfolios month by month (module docs).
 
@@ -191,6 +214,8 @@ def walk(
         device: ``cuda`` or ``cpu``.
         subsets: Also pick each test month's portfolio from only these stocks, by month end
             (module docs).
+        stock_costs: Each month's ``(trade_cost, borrow_fee)`` per candidate (``costs.align``),
+            used in the loss when ``settings.costs`` is set.
 
     Returns:
         ``weights`` (date, symbol, weight) for every test month; ``log`` (date, ret = the
@@ -210,7 +235,7 @@ def walk(
     data = [_tensors(m, device) for m in months]
     known = [bool(np.isfinite(m.r).all()) for m in months]
     rows, sub = _subset_rows(months, data, subsets)
-    links = _links(months, settings, device, subsets)
+    links, stock = _pricing(months, settings, device, subsets, stock_costs)
     tune_rng = np.random.default_rng(settings.seed + 1)
     weights, log, trained = [], [], False
     for t, month in enumerate(months):
@@ -222,7 +247,7 @@ def walk(
         source = sub if settings.subset_train == "only" else data
         epochs = settings.warm_epochs if trained else settings.first_epochs
         fit = [k for k in train if source[k] is not None]
-        losses = _train(model, adam, source, fit, epochs, settings, rng, links)
+        losses = _train(model, adam, source, fit, epochs, settings, rng, links, stock)
         trained = True
         with torch.no_grad():
             w = model.weights(data[t][0]).cpu().numpy().astype(np.float64)
