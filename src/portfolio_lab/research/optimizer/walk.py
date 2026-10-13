@@ -77,6 +77,7 @@ class Settings:
         no_shorts: Hold no shorts in the walk (holdings clamped at 0 or above). Training
             still lets weights go negative (else every score can sink below 0 and the gradient
             dies, run16); pair it with a large ``short_hurdle`` so shorts never pay there.
+        scaled_attention: Divide attention scores by sqrt(D) (model.Block); not in the paper.
         partial: Trade only part of the way to the model's weights each month, at a learned
             pace a: holdings = (1 - a) * last month's + a * new weights. In training, last
             month's holdings are taken as the model's weights for the month before (both
@@ -113,6 +114,7 @@ class Settings:
     short_hurdle: float = 0.0
     short_min_easy: float | None = None
     no_shorts: bool = False
+    scaled_attention: bool = False
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -319,7 +321,8 @@ def walk(
     model = Optimizer(settings.model, months[0].x.shape[1], settings.blocks, settings.hidden,
                       settings.long_only, settings.fast_attention, settings.scale,
                       settings.cap, settings.names, settings.softplus,
-                      partial=settings.partial)  # fmt: skip
+                      partial=settings.partial,
+                      scaled_attention=settings.scaled_attention)  # fmt: skip
     model.to(device)
     adam = torch.optim.Adam(model.parameters(), lr=settings.lr)
     data = [_tensors(m, device) for m in months]

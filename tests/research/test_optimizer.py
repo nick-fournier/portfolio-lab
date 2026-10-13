@@ -127,6 +127,13 @@ def test_fast_attention_matches_the_written_out_formula_to_bfloat16_precision():
     assert torch.allclose(block(y), written, atol=1e-6)
     block.fast = True
     assert torch.allclose(block(y), written, atol=2e-2)
+    scaled = Block(width=4, hidden=8, attention=True, scaled=True)
+    logits = (y @ scaled.q) @ (y @ scaled.k).T / 2  # sqrt(4)
+    assert torch.allclose(scaled.peers(y), torch.softmax(logits, dim=-1), atol=1e-6)
+    written = y + scaled.peers(y) @ (y @ scaled.v)
+    written = written + torch.relu(written @ scaled.w1 + scaled.b1) @ scaled.w2 + scaled.b2
+    scaled.fast = True
+    assert torch.allclose(scaled(y), written, atol=2e-2)
 
 
 def test_walk_trains_on_earlier_months_and_learns_to_favor_the_stock_that_keeps_winning():

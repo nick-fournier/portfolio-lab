@@ -97,12 +97,18 @@ class Block(nn.Module):
         fast: Compute attention in bfloat16 with torch's fused kernel (about 5x faster on the
             GPU for ~4,000 stocks; inputs rounded to 8-bit mantissas). Default: float32, the
             formula written out.
+        scaled: Divide the attention scores by sqrt(width), as standard transformers do (the
+            paper doesn't). Unscaled scores grow with the inputs' size and width, and deeper
+            or wider models diverged (4 blocks; 189 inputs, run10).
     """
 
-    def __init__(self, width: int, hidden: int, attention: bool, fast: bool = False):
+    def __init__(
+        self, width: int, hidden: int, attention: bool, fast: bool = False, scaled: bool = False
+    ):
         super().__init__()
         self.attention = attention
         self.fast = fast
+        self.scale = width**-0.5 if scaled else 1.0
         if attention:
             self.q = _normal(width, width, var=1 / width)
             self.k = _normal(width, width, var=1 / width)
@@ -114,14 +120,14 @@ class Block(nn.Module):
 
     def peers(self, y: torch.Tensor) -> torch.Tensor:
         """The attention weights: row i = how much stock i draws on each stock (rows sum to 1)."""
-        return torch.softmax((y @ self.q) @ (y @ self.k).T, dim=-1)
+        return torch.softmax((y @ self.q) @ (y @ self.k).T * self.scale, dim=-1)
 
     def forward(self, y: torch.Tensor) -> torch.Tensor:
         """(candidates x width) -> (candidates x width)."""
-        if self.attention and self.fast:  # same formula, paper's scale (none: scale=1)
+        if self.attention and self.fast:  # same formula and scale
             q, k, v = (y @ m for m in (self.q, self.k, self.v))
             mixed = nn.functional.scaled_dot_product_attention(
-                *(t.bfloat16()[None, None] for t in (q, k, v)), scale=1.0
+                *(t.bfloat16()[None, None] for t in (q, k, v)), scale=self.scale
             )
             y = y + mixed[0, 0].float()
         elif self.attention:
@@ -144,6 +150,7 @@ class Optimizer(nn.Module):
             and aims at the best long-only Sharpe rather than the best return at full size.
         cap: With ``long_only``, the largest weight in any stock (:func:`capped_softmax`).
         names: With ``long_only``, the effective names held (:func:`spread_softmax`).
+        scaled_attention: Divide attention scores by sqrt(width) (:class:`Block`).
         partial: Also learn a trading pace a in (0, 1) (:meth:`pace`; starts near 0.88): the
             portfolio moves only that fraction of the way from last month's holdings to the
             scores each month (the walk does the blending; costs in the loss set a).
@@ -164,13 +171,15 @@ class Optimizer(nn.Module):
         names: float | None = None,
         softplus: bool = False,
         partial: bool = False,
+        scaled_attention: bool = False,
     ):
         super().__init__()
         if kind not in MODELS:
             raise ValueError(f"unknown model {kind!r}; known: {MODELS}")
         n = 0 if kind == "linear" else blocks
         self.blocks = nn.ModuleList(
-            Block(width, hidden, kind == "transformer", fast_attention) for _ in range(n)
+            Block(width, hidden, kind == "transformer", fast_attention, scaled_attention)
+            for _ in range(n)
         )
         self.lam = _normal(width, var=1 / width)
         self.long_only = long_only
