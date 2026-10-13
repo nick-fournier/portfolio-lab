@@ -350,3 +350,33 @@ def test_walk_with_per_stock_costs_needs_them_and_runs_with_them():
     stock = [(np.full(4, 0.01, np.float32), np.array([0.003, 1, 1, 1], np.float32))] * 16
     weights, log, _ = walk(months, settings, stock_costs=stock)
     assert log.height == 4 and weights["weight"].is_finite().all()
+
+
+def test_partial_trading_moves_holdings_part_way_from_last_month_at_the_learned_pace():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    assert float(Optimizer("linear", 2, partial=True).pace()) == pytest.approx(0.881, abs=1e-3)
+    with pytest.raises(ValueError, match="partial"):
+        Optimizer("linear", 2).pace()
+    rng = np.random.default_rng(7)
+    months = []
+    for k in range(18):
+        names = ["A", "B", "C", "D"] if k % 2 else ["A", "B", "C", "E"]  # D and E come and go
+        x = rng.uniform(-0.5, 0.5, (4, 2)).astype(np.float32)
+        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 4)).astype(np.float32)
+        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), names, x, r))
+    settings = Settings("linear", window=12, first_epochs=20, warm_epochs=2, lr=0.05,
+                        start=date(2000, 1, 1), spread=0.01, partial=True)  # fmt: skip
+    weights, log, model = walk(months, settings)
+    a = float(model.pace())
+    assert log["pace"].to_list()[-1] == pytest.approx(a)
+    last, prev = months[-1], months[-2]
+    held = dict(weights.filter(pl.col("date") == prev.date).select("symbol", "weight").rows())
+    with torch.no_grad():
+        target = model.weights(torch.from_numpy(last.x)).numpy()
+    pairs = zip(last.symbols, target, strict=True)
+    expected = [(1 - a) * held.get(s, 0.0) + a * t for s, t in pairs]
+    got = weights.filter(pl.col("date") == last.date)["weight"].to_list()
+    assert got == pytest.approx(expected, rel=1e-4, abs=1e-6)

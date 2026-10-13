@@ -144,6 +144,9 @@ class Optimizer(nn.Module):
             and aims at the best long-only Sharpe rather than the best return at full size.
         cap: With ``long_only``, the largest weight in any stock (:func:`capped_softmax`).
         names: With ``long_only``, the effective names held (:func:`spread_softmax`).
+        partial: Also learn a trading pace a in (0, 1) (:meth:`pace`; starts near 0.88): the
+            portfolio moves only that fraction of the way from last month's holdings to the
+            scores each month (the walk does the blending; costs in the loss set a).
         softplus: With ``long_only``, weights = softplus(score) / N instead of a softmax
             (module docs).
     """
@@ -160,6 +163,7 @@ class Optimizer(nn.Module):
         cap: float | None = None,
         names: float | None = None,
         softplus: bool = False,
+        partial: bool = False,
     ):
         super().__init__()
         if kind not in MODELS:
@@ -174,6 +178,13 @@ class Optimizer(nn.Module):
         self.names = names
         self.softplus = softplus
         self.log_m = nn.Parameter(torch.zeros(())) if (long_only and scale) else None
+        self.pace_logit = nn.Parameter(torch.tensor(2.0)) if partial else None
+
+    def pace(self) -> torch.Tensor:
+        """The share of the gap to the new scores traded each month (``partial`` only)."""
+        if self.pace_logit is None:
+            raise ValueError("pace needs partial=True")
+        return torch.sigmoid(self.pace_logit)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(candidates x width) -> a score per candidate."""

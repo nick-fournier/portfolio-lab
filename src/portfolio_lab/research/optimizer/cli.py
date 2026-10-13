@@ -158,6 +158,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     costs: Annotated[
         str, typer.Option(help="Loss: per-stock cost table (date, symbol, trade_cost, borrow_fee).")
     ] = "",
+    partial: Annotated[
+        bool, typer.Option(help="Trade part way to the new weights at a learned pace.")
+    ] = False,
     inputs: Annotated[str, typer.Option(help="Characteristics: all, ours, jkp or paper.")] = "all",
     min_price: Annotated[float, typer.Option(help="Leave out stocks below this price.")] = 0.0,
     min_adv: Annotated[float, typer.Option(help="...or below this daily dollar volume.")] = 0.0,
@@ -195,7 +198,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 cap or None, names or None,
                 None if objective == "paper" else objective, batch, gamma or None, softplus,
                 None if subset_train == "all" else subset_train, finetune_epochs, spread, short_fee,
-                costs or None,
+                costs or None, partial,
             )  # fmt: skip
             futures.append(
                 pool_.submit(

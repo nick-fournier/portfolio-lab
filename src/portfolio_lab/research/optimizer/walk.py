@@ -69,6 +69,10 @@ class Settings:
         short_fee: Yearly cost per dollar shorted in the loss (``costs``; 0: none).
         costs: A per-stock cost table (``costs.align``) replacing both flat rates; the walk
             gets it aligned as ``stock_costs``. Recorded here as its path.
+        partial: Trade only part of the way to the model's weights each month, at a learned
+            pace a: holdings = (1 - a) * last month's + a * new weights. In training, last
+            month's holdings are taken as the model's weights for the month before (both
+            with gradients); in the walk, the real holdings carry forward. Paper loss only.
         softplus: Long-only weights = softplus(score) / N, size free (model.Optimizer); saved as
             the mix like ``scale``, the total logged as m.
     """
@@ -97,6 +101,7 @@ class Settings:
     spread: float = 0.0
     short_fee: float = 0.0
     costs: str | None = None
+    partial: bool = False
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -130,8 +135,9 @@ def _train(  # noqa: PLR0913, PLR0917 - one training run's pieces
     """``epochs`` passes over the ``train`` months of ``source``; the last pass's losses.
 
     With ``links`` (``costs.links`` of the months) the loss uses the return net of costs, the
-    weights the month before computed by the same model without a gradient; with ``stock``
-    (each month's per-stock trade cost and borrow fee) each stock pays its own rates.
+    weights the month before computed by the same model (without a gradient, unless partial
+    trading blends them into the holdings); with ``stock`` (each month's per-stock trade cost
+    and borrow fee) each stock pays its own rates.
     """
     losses = []
     for _ in range(epochs):
@@ -140,13 +146,18 @@ def _train(  # noqa: PLR0913, PLR0917 - one training run's pieces
             adam.zero_grad()
             if links is not None:
                 k = step[0]
-                with torch.no_grad():
-                    before = model.weights(source[k - 1][0]) if k > 0 else None
+                w = model.weights(source[k][0])
+                if model.pace_logit is not None and k > 0:  # holdings: part way from before
+                    before = model.weights(source[k - 1][0])
+                    w = (1 - model.pace()) * costs.carry(before, links[k]) + model.pace() * w
+                else:
+                    with torch.no_grad():
+                        before = model.weights(source[k - 1][0]) if k > 0 else None
                 spread, fee, spread_before = settings.spread, settings.short_fee, None
                 if stock is not None:
                     (spread, fee), spread_before = stock[k], stock[k - 1][0] if k > 0 else None
-                net = costs.net_return(model.weights(source[k][0]), source[k][1], before,
-                                       links[k], spread, fee, spread_before)  # fmt: skip
+                net = costs.net_return(w, source[k][1], before, links[k], spread, fee,
+                                       spread_before)  # fmt: skip
                 value = (1 - net) ** 2
             elif settings.objective is None:
                 value = loss(model, *source[step[0]])
@@ -186,7 +197,11 @@ def _pricing(
     """
     if settings.subset_train and subsets is None:
         raise ValueError("subset_train needs subsets")
-    if settings.spread <= 0 and settings.short_fee <= 0 and settings.costs is None:
+    if (
+        settings.spread <= 0
+        and settings.short_fee <= 0
+        and not (settings.costs or settings.partial)
+    ):
         return None, None
     if settings.objective or settings.subset_train:
         raise ValueError("costs need the paper loss on every candidate")
@@ -197,6 +212,22 @@ def _pricing(
     tensors = [(torch.from_numpy(a).to(device), torch.from_numpy(b).to(device))
                for a, b in stock_costs]  # fmt: skip
     return costs.links(months, device), tensors
+
+
+def _hold(
+    model: Optimizer, held: tuple[list[str], np.ndarray] | None, month: Month, w: np.ndarray
+) -> tuple[np.ndarray, tuple[list[str], np.ndarray] | None, float | None]:
+    """With partial trading, blend last month's real holdings into ``w`` at the model's pace.
+
+    Returns the holdings, the state to pass next month and the pace (``None`` without it).
+    """
+    if model.pace_logit is None:
+        return w, None, None
+    pace = float(model.pace())
+    if held is not None:
+        before = dict(zip(*held, strict=True))
+        w = (1 - pace) * np.array([before.get(s, 0.0) for s in month.symbols]) + pace * w
+    return w, (month.symbols, w), pace
 
 
 def walk(
@@ -229,7 +260,8 @@ def walk(
     rng = np.random.default_rng(settings.seed)
     model = Optimizer(settings.model, months[0].x.shape[1], settings.blocks, settings.hidden,
                       settings.long_only, settings.fast_attention, settings.scale,
-                      settings.cap, settings.names, settings.softplus)  # fmt: skip
+                      settings.cap, settings.names, settings.softplus,
+                      partial=settings.partial)  # fmt: skip
     model.to(device)
     adam = torch.optim.Adam(model.parameters(), lr=settings.lr)
     data = [_tensors(m, device) for m in months]
@@ -237,7 +269,7 @@ def walk(
     rows, sub = _subset_rows(months, data, subsets)
     links, stock = _pricing(months, settings, device, subsets, stock_costs)
     tune_rng = np.random.default_rng(settings.seed + 1)
-    weights, log, trained = [], [], False
+    weights, log, trained, held = [], [], False, None
     for t, month in enumerate(months):
         lo = 0 if settings.window is None else t - settings.window
         if month.date < settings.start or lo < 0:
@@ -251,6 +283,7 @@ def walk(
         trained = True
         with torch.no_grad():
             w = model.weights(data[t][0]).cpu().numpy().astype(np.float64)
+        w, held, pace = _hold(model, held, month, w)
         sized = settings.scale or (settings.softplus and settings.long_only)
         m = float(w.sum()) if sized else 1.0
         if sized and m > 0:
@@ -277,7 +310,7 @@ def walk(
         log.append({"date": month.date, "ret": ret, "long": float(w[w > 0].sum()),
                     "short": float(w[w < 0].sum()),
                     "largest": float(np.abs(w).max()) / gross if gross else None,
-                    "loss": float(torch.stack(losses).mean()), "m": m,
+                    "loss": float(torch.stack(losses).mean()), "m": m, "pace": pace,
                     "holdings": float(1 / (w**2).sum()) if settings.long_only and gross else None,
                     "seconds": time.perf_counter() - clock} | extra)  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model

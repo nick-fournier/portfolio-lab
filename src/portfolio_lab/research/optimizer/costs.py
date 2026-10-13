@@ -80,6 +80,11 @@ def align(months: list[Month], table: pl.DataFrame) -> list[tuple[np.ndarray, np
     return out
 
 
+def carry(w_before: torch.Tensor, link: Link) -> torch.Tensor:
+    """Last month's weights on this month's stocks, in this month's row order (new: 0)."""
+    return torch.where(link.prev >= 0, w_before[link.prev.clamp(min=0)], 0.0)
+
+
 def net_return(
     w: torch.Tensor,
     r: torch.Tensor,
@@ -98,7 +103,7 @@ def net_return(
     if w_before is None or link is None:
         held, sold = torch.zeros_like(w), w.new_zeros(())
     else:
-        held = torch.where(link.prev >= 0, w_before[link.prev.clamp(min=0)], 0.0)
+        held = carry(w_before, link)
         gone = before[link.gone] if isinstance(before, torch.Tensor) else before
         sold = (gone * w_before[link.gone].abs()).sum()
     traded = (spread * (w - held).abs()).sum() + sold
