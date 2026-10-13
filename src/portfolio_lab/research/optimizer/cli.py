@@ -148,6 +148,8 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         str, typer.Option(help="With --infer-pool, train the picker: all, only (pool) or finetune.")
     ] = "all",
     finetune_epochs: Annotated[int, typer.Option(help="Passes over the pool (finetune).")] = 5,
+    spread: Annotated[float, typer.Option(help="Loss: cost per $ traded (0.005: 0.5%).")] = 0.0,
+    short_fee: Annotated[float, typer.Option(help="Loss: yearly cost per dollar shorted.")] = 0.0,
     inputs: Annotated[str, typer.Option(help="Characteristics: all, ours, jkp or paper.")] = "all",
     min_price: Annotated[float, typer.Option(help="Leave out stocks below this price.")] = 0.0,
     min_adv: Annotated[float, typer.Option(help="...or below this daily dollar volume.")] = 0.0,
@@ -184,7 +186,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 date.fromisoformat(start), long_only, fast_attention, clip or None, scale,
                 cap or None, names or None,
                 None if objective == "paper" else objective, batch, gamma or None, softplus,
-                None if subset_train == "all" else subset_train, finetune_epochs,
+                None if subset_train == "all" else subset_train, finetune_epochs, spread, short_fee,
             )  # fmt: skip
             futures.append(
                 pool_.submit(

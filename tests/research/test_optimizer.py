@@ -262,3 +262,38 @@ def test_subset_training_only_ignores_other_rows_and_finetune_leaves_the_main_mo
     assert run(other, subset_train="only")["subset_weight"].to_numpy() == pytest.approx(
         only, nan_ok=True
     )
+
+
+def test_net_return_charges_the_spread_on_turnover_from_last_month_and_a_fee_on_shorts():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import costs  # noqa: PLC0415
+
+    before = data.Month(date(2000, 1, 31), ["A", "B", "C"], np.zeros((3, 1)), np.zeros(3))
+    now = data.Month(date(2000, 2, 29), ["B", "A", "D"], np.zeros((3, 1)), np.zeros(3))
+    link = costs.links([before, now])[1]
+    w_before = torch.tensor([0.5, -0.2, 0.3])  # A, B, C
+    w = torch.tensor([-0.2, 0.6, 0.1])  # B unchanged, A +0.1, D bought; C (0.3) sold
+    r = torch.tensor([0.0, 0.1, 0.0])
+    net = costs.net_return(w, r, w_before, link, spread=0.01, short_fee=0.12)
+    turnover = 0.0 + 0.1 + 0.1 + 0.3
+    assert float(net) == pytest.approx(0.06 - 0.01 * turnover - 0.01 * 0.2)
+    assert float(costs.net_return(w, r, None, None, 0.01, 0.0)) == pytest.approx(0.06 - 0.009)
+
+
+def test_walk_with_trading_costs_trades_less_than_without():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    rng = np.random.default_rng(5)
+    months = []
+    for k in range(30):
+        x = rng.uniform(-0.5, 0.5, (8, 2)).astype(np.float32)
+        r = (0.1 * x[:, 0] + rng.normal(0, 0.05, 8)).astype(np.float32)
+        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"), x, r))
+    base = dict(window=12, first_epochs=100, warm_epochs=5, lr=0.02, start=date(2000, 1, 1))
+
+    def traded(**kw):
+        w = walk(months, Settings("linear", **base, **kw))[0].pivot("symbol", index="date")
+        return float(np.abs(np.diff(w.drop("date").to_numpy(), axis=0)).sum())
+
+    assert traded(spread=0.05, short_fee=0.5) < traded()

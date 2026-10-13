@@ -32,7 +32,7 @@ import numpy as np
 import polars as pl
 import torch
 
-from portfolio_lab.research.optimizer import objectives
+from portfolio_lab.research.optimizer import costs, objectives
 from portfolio_lab.research.optimizer.data import Month
 from portfolio_lab.research.optimizer.model import Optimizer, loss
 
@@ -65,6 +65,8 @@ class Settings:
         gamma: The objective's risk appetite (``None``: ``objectives.GAMMA``).
         subset_train: ``None``, ``"only"`` or ``"finetune"`` (module docs; needs subsets).
         finetune_epochs: Passes over the subset's rows with ``"finetune"``.
+        spread: Cost per dollar traded in the loss (``costs``; 0: none). Paper loss only.
+        short_fee: Yearly cost per dollar shorted in the loss (``costs``; 0: none).
         softplus: Long-only weights = softplus(score) / N, size free (model.Optimizer); saved as
             the mix like ``scale``, the total logged as m.
     """
@@ -90,6 +92,8 @@ class Settings:
     softplus: bool = False
     subset_train: str | None = None
     finetune_epochs: int = 5
+    spread: float = 0.0
+    short_fee: float = 0.0
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -117,14 +121,26 @@ def _train(
     epochs: int,
     settings: Settings,
     rng: np.random.Generator,
+    links: list[costs.Link | None] | None = None,
 ) -> list[torch.Tensor]:
-    """``epochs`` passes over the ``train`` months of ``source``; the last pass's losses."""
+    """``epochs`` passes over the ``train`` months of ``source``; the last pass's losses.
+
+    With ``links`` (``costs.links`` of the months) the loss uses the return net of costs, the
+    weights the month before computed by the same model without a gradient.
+    """
     losses = []
     for _ in range(epochs):
         losses = []  # kept on the device: reading each one would wait for the GPU
         for step in _steps(train, settings, rng):
             adam.zero_grad()
-            if settings.objective is None:
+            if links is not None:
+                k = step[0]
+                with torch.no_grad():
+                    before = model.weights(source[k - 1][0]) if k > 0 else None
+                net = costs.net_return(model.weights(source[k][0]), source[k][1], before,
+                                       links[k], settings.spread, settings.short_fee)  # fmt: skip
+                value = (1 - net) ** 2
+            elif settings.objective is None:
                 value = loss(model, *source[step[0]])
             else:
                 r = torch.stack([model.weights(source[k][0]) @ source[k][1] for k in step])
@@ -146,6 +162,19 @@ def _subset_rows(
         members = (subsets or {}).get(m.date, set())
         rows[k] = [i for i, symbol in enumerate(m.symbols) if symbol in members]
     return rows, [(x[r], y[r]) if r else None for (x, y), r in zip(data, rows, strict=True)]
+
+
+def _links(
+    months: list[Month], settings: Settings, device: str, subsets: dict | None
+) -> list[costs.Link | None] | None:
+    """``costs.links`` if the loss has costs (``None`` if not); checks the settings agree."""
+    if settings.subset_train and subsets is None:
+        raise ValueError("subset_train needs subsets")
+    if settings.spread <= 0 and settings.short_fee <= 0:
+        return None
+    if settings.objective or settings.subset_train:
+        raise ValueError("costs need the paper loss on every candidate")
+    return costs.links(months, device)
 
 
 def walk(
@@ -180,9 +209,8 @@ def walk(
     adam = torch.optim.Adam(model.parameters(), lr=settings.lr)
     data = [_tensors(m, device) for m in months]
     known = [bool(np.isfinite(m.r).all()) for m in months]
-    if settings.subset_train and subsets is None:
-        raise ValueError("subset_train needs subsets")
     rows, sub = _subset_rows(months, data, subsets)
+    links = _links(months, settings, device, subsets)
     tune_rng = np.random.default_rng(settings.seed + 1)
     weights, log, trained = [], [], False
     for t, month in enumerate(months):
@@ -194,7 +222,7 @@ def walk(
         source = sub if settings.subset_train == "only" else data
         epochs = settings.warm_epochs if trained else settings.first_epochs
         fit = [k for k in train if source[k] is not None]
-        losses = _train(model, adam, source, fit, epochs, settings, rng)
+        losses = _train(model, adam, source, fit, epochs, settings, rng, links)
         trained = True
         with torch.no_grad():
             w = model.weights(data[t][0]).cpu().numpy().astype(np.float64)
