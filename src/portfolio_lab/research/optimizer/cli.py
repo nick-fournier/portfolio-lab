@@ -177,6 +177,16 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     init: Annotated[
         str, typer.Option(help="Paper's N(0, a) read as variance (default) or std.")
     ] = "variance",
+    schedule: Annotated[
+        str, typer.Option(help="Learning rate per month: flat or cosine.")
+    ] = "flat",
+    lr_min: Annotated[float, typer.Option(help="Cosine schedule's last rate.")] = 1e-5,
+    warm_lr: Annotated[
+        float, typer.Option(help="Starting rate when continuing last month's model (0: lr).")
+    ] = 0.0,
+    compile_model: Annotated[
+        bool, typer.Option("--compile", help="torch.compile the model (faster).")
+    ] = False,
     no_shorts: Annotated[
         bool, typer.Option(help="Hold no shorts (pair with --short-hurdle).")
     ] = False,
@@ -218,7 +228,8 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 None if objective == "paper" else objective, batch, gamma or None, softplus,
                 None if subset_train == "all" else subset_train, finetune_epochs, spread, short_fee,
                 costs or None, partial, short_hurdle, short_min_easy or None, no_shorts,
-                scaled_attention, fresh, every, init,
+                scaled_attention, fresh, every, init, schedule, lr_min, warm_lr or None,
+                compile_model,
             )  # fmt: skip
             futures.append(
                 pool_.submit(

@@ -23,6 +23,7 @@ Adam, its own shuffle, so the main model is unchanged).
 """
 
 import copy
+import math
 import time
 from dataclasses import dataclass
 from datetime import date
@@ -79,6 +80,12 @@ class Settings:
             dies, run16); pair it with a large ``short_hurdle`` so shorts never pay there.
         scaled_attention: Divide attention scores by sqrt(D) (model.Block); not in the paper.
         init: ``variance`` or ``std``: how to read the paper's initialization (model docs).
+        schedule: Learning rate within each month's training: ``flat`` (``lr`` every epoch) or
+            ``cosine`` (from the month's starting rate down to ``lr_min`` over its epochs).
+        lr_min: The cosine schedule's last rate.
+        warm_lr: Starting rate for months that continue last month's model (``None``: ``lr``);
+            a fresh or first fit starts at ``lr``.
+        compile: ``torch.compile`` each model (faster; same results).
         fresh: Retrain from scratch every test month, as the paper does ("roll the training
             sample forward one month and retrain"): new starting weights (seeded by ``seed`` and
             the month) and a new Adam, ``first_epochs`` passes. Default: continue last month's
@@ -125,6 +132,10 @@ class Settings:
     fresh: bool = False
     every: int = 1
     init: str = "variance"
+    schedule: str = "flat"
+    lr_min: float = 1e-5
+    warm_lr: float | None = None
+    compile: bool = False
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -164,7 +175,7 @@ def _allow(w: torch.Tensor, shortable: torch.Tensor | None) -> torch.Tensor:
     return w if shortable is None else torch.where(shortable, w, torch.relu(w))
 
 
-def _train(
+def _train(  # noqa: PLR0913 - one training run's pieces
     model: Optimizer,
     adam: torch.optim.Optimizer,
     source: list[Pair | None],
@@ -173,8 +184,13 @@ def _train(
     settings: Settings,
     rng: np.random.Generator,
     pricing: Pricing | None = None,
+    *,
+    start_lr: float | None = None,
 ) -> list[torch.Tensor]:
     """``epochs`` passes over the ``train`` months of ``source``; the last pass's losses.
+
+    Each pass's learning rate follows ``settings.schedule`` from ``start_lr`` (default
+    ``settings.lr``).
 
     With ``pricing`` the loss uses the return net of costs, the weights the month before
     computed by the same model (without a gradient, unless partial trading blends them into
@@ -182,7 +198,9 @@ def _train(
     be shorted are clamped at 0 or above.
     """
     losses = []
-    for _ in range(epochs):
+    for epoch in range(epochs):
+        for group in adam.param_groups:
+            group["lr"] = _lr(settings, start_lr or settings.lr, epoch, epochs)
         losses = []  # kept on the device: reading each one would wait for the GPU
         for step in _steps(train, settings, rng):
             adam.zero_grad()
@@ -293,6 +311,22 @@ def _hold(
     return w, (month.symbols, w), pace
 
 
+def _lr(settings: Settings, start: float, epoch: int, epochs: int) -> float:
+    """The learning rate for pass ``epoch`` (0-based) of ``epochs`` (``settings.schedule``)."""
+    if settings.schedule == "flat":
+        return start
+    if settings.schedule == "cosine":
+        done = epoch / max(epochs - 1, 1)
+        return settings.lr_min + (start - settings.lr_min) * 0.5 * (1 + math.cos(math.pi * done))
+    raise ValueError(f"schedule must be flat or cosine, not {settings.schedule!r}")
+
+
+def _start_lr(settings: Settings, trained: bool) -> float:
+    """The month's starting rate: ``warm_lr`` when continuing last month's model, else ``lr``."""
+    warm = trained and not settings.fresh
+    return settings.warm_lr if warm and settings.warm_lr else settings.lr
+
+
 def _new_model(
     settings: Settings, width: int, device: str, seed: int, month: int = 0
 ) -> tuple[Optimizer, torch.optim.Optimizer]:
@@ -304,6 +338,8 @@ def _new_model(
                       partial=settings.partial,
                       scaled_attention=settings.scaled_attention, init=settings.init)  # fmt: skip
     model.to(device)
+    if settings.compile:
+        model.compile(dynamic=True)
     return model, torch.optim.Adam(model.parameters(), lr=settings.lr)
 
 
@@ -364,7 +400,8 @@ def walk(
         source = sub if settings.subset_train == "only" else data
         epochs = settings.warm_epochs if trained and not settings.fresh else settings.first_epochs
         fit = [k for k in train if source[k] is not None]
-        losses = _train(model, adam, source, fit, epochs, settings, rng, pricing)
+        losses = _train(model, adam, source, fit, epochs, settings, rng, pricing,
+                        start_lr=_start_lr(settings, trained))  # fmt: skip
         trained = True
         with torch.no_grad():
             w = model.weights(data[t][0]).cpu().numpy().astype(np.float64)

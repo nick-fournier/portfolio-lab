@@ -178,6 +178,7 @@ def summary(curves: pl.DataFrame) -> pl.DataFrame:
         .group_by("config", "end", maintain_order=True)
         .first()
     )
+    order = curves.select("config").unique(maintain_order=True).with_row_index("order")
     last = curves.sort("epoch").group_by("config", "end").last()
     blew = curves.group_by("config", "end").agg(
         (~pl.col("train_loss").is_finite() | (pl.col("train_loss") > 1e3)).any().alias("blew")
@@ -201,6 +202,9 @@ def summary(curves: pl.DataFrame) -> pl.DataFrame:
             curves.group_by("config").agg(pl.col("seconds").median().alias("s_per_epoch")),
             on="config",
         )
+        .join(order, on="config")
+        .sort("order")
+        .drop("order")
     )
 
 
