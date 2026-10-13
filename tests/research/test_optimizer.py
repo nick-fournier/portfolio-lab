@@ -455,3 +455,29 @@ def test_std_init_keeps_rows_their_size_through_ten_blocks_and_variance_init_gro
     assert grown("variance") > 20
     with pytest.raises(ValueError, match="init"):
         Optimizer("linear", 3, init="var")
+
+
+def test_grid_records_every_epoch_and_cosine_decays_to_the_floor():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import grid  # noqa: PLC0415
+
+    config = grid.Config("c", blocks=2, lr=1e-2, schedule="cosine", lr_min=1e-4, epochs=5)
+    assert grid.lr_at(config, 0) == pytest.approx(1e-2)
+    assert grid.lr_at(config, 4) == pytest.approx(1e-4)
+    with pytest.raises(ValueError, match="unknown"):
+        grid.configs_from([{"name": "x", "learning_rate": 1}])
+    rng = np.random.default_rng(10)
+    months = []
+    for k in range(20):
+        x = rng.uniform(-0.5, 0.5, (6, 3)).astype(np.float32)
+        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 6)).astype(np.float32)
+        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEF"), x, r))
+    setups = [config, grid.Config("small", blocks=1, epochs=3, stocks=4)]
+    curves = grid.grid(months, [16, 18], setups, window=12, validation=3, device="cpu")
+    assert curves.height == 2 * 5 + 2 * 3
+    assert {"train_loss", "val_loss", "test_ret", "row_max", "gross", "seconds"} <= set(
+        curves.columns
+    )
+    summary = grid.summary(curves)
+    assert summary["config"].to_list() == ["c", "small"]
+    assert (summary["best_epoch"] >= 1).all()

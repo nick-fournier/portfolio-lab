@@ -364,3 +364,29 @@ def signal_cmd(
         counts.append(len(keep))
     typer.echo(f"{len(dates)} months, median {int(np.median(counts))} stocks with a forecast: "
                f"Sharpe {_halves(dates, np.array(rets))}")  # fmt: skip
+
+
+@optimizer_app.command("grid")
+def grid_cmd(
+    table: Annotated[Path, typer.Option(help="The table from `plab optimizer data`.")],
+    configs: Annotated[Path, typer.Option(help="JSON list of setups (research.optimizer.grid).")],
+    out: Annotated[Path, typer.Option(help="Parquet file for the per-epoch curves.")],
+    ends: Annotated[str, typer.Option(help="Window ends, comma-separated month-end dates.")],
+    inputs: Annotated[
+        str, typer.Option(help="Characteristics: all, ours, jkp or paper.")
+    ] = "paper",
+    window: Annotated[int, typer.Option(help="Months before each end.")] = 60,
+    validation: Annotated[int, typer.Option(help="Last months of each window held out.")] = 12,
+    device: Annotated[str, typer.Option()] = "cuda",
+) -> None:
+    """Train each setup fresh on a few windows and record every epoch (research.optimizer.grid)."""
+    from portfolio_lab.research.optimizer import grid  # noqa: PLC0415
+
+    months = _months(table, None, inputs)
+    index = {m.date: i for i, m in enumerate(months)}
+    picked = [index[date.fromisoformat(d.strip())] for d in ends.split(",")]
+    setups = grid.configs_from(json.loads(configs.read_text()))
+    curves = grid.grid(months, picked, setups, window, validation, device)
+    curves.write_parquet(out)
+    with pl.Config(tbl_rows=-1, tbl_cols=-1, tbl_width_chars=200, float_precision=4):
+        typer.echo(grid.summary(curves))
