@@ -56,11 +56,14 @@ def links(months: list[Month], device: str = "cpu") -> list[Link | None]:
 Cost = float | torch.Tensor
 
 
-def align(months: list[Month], table: pl.DataFrame) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Each month's ``(trade_cost, borrow_fee)`` in its candidates' row order.
+def align(
+    months: list[Month], table: pl.DataFrame
+) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """Each month's ``(trade_cost, borrow_fee, easy_chance)`` in its candidates' row order.
 
     A stock missing from ``table`` pays the month's median trade cost and a borrow fee of 1
-    (100% a year: treated as not lendable).
+    (100% a year: treated as not lendable), with an easy-to-borrow chance of 0. A table without
+    ``easy_chance`` gives every stock 1.
     """
     by_date = table.partition_by("date", as_dict=True)
     out = []
@@ -68,15 +71,23 @@ def align(months: list[Month], table: pl.DataFrame) -> list[tuple[np.ndarray, np
         part = by_date.get((m.date,))
         rows = pl.DataFrame({"symbol": m.symbols})
         if part is not None:
-            rows = rows.join(part.select("symbol", "trade_cost", "borrow_fee"), on="symbol",
-                             how="left", maintain_order="left")  # fmt: skip
+            keep = [
+                c
+                for c in ("symbol", "trade_cost", "borrow_fee", "easy_chance")
+                if c in part.columns
+            ]
+            rows = rows.join(part.select(keep), on="symbol", how="left", maintain_order="left")
         blank = np.full(len(rows), np.nan)
         trade = rows["trade_cost"].to_numpy() if "trade_cost" in rows.columns else blank
         fee = rows["borrow_fee"].to_numpy() if "borrow_fee" in rows.columns else blank
         known = np.isfinite(trade)
         trade = np.where(known, trade, np.median(trade[known]) if known.any() else 0.005)
         fee = np.where(np.isfinite(fee), fee, 1.0)
-        out.append((trade.astype(np.float32), fee.astype(np.float32)))
+        easy = (
+            rows["easy_chance"].to_numpy() if "easy_chance" in rows.columns else np.ones(len(rows))
+        )
+        easy = np.where(np.isfinite(easy), easy, 0.0)
+        out.append((trade.astype(np.float32), fee.astype(np.float32), easy.astype(np.float32)))
     return out
 
 

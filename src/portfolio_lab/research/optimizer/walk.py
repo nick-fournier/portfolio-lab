@@ -69,6 +69,14 @@ class Settings:
         short_fee: Yearly cost per dollar shorted in the loss (``costs``; 0: none).
         costs: A per-stock cost table (``costs.align``) replacing both flat rates; the walk
             gets it aligned as ``stock_costs``. Recorded here as its path.
+        short_hurdle: Extra yearly cost per dollar shorted in the loss, on top of the borrow
+            fee: the willingness-to-short knob (0: none; large: shorts must earn that much).
+        short_min_easy: Only stocks at least this likely to be easy to borrow (the cost
+            table's ``easy_chance``) may be held short, in training and in the walk: the others'
+            weights are clamped at 0 or above (``None``: every stock).
+        no_shorts: Hold no shorts in the walk (holdings clamped at 0 or above). Training
+            still lets weights go negative (else every score can sink below 0 and the gradient
+            dies, run16); pair it with a large ``short_hurdle`` so shorts never pay there.
         partial: Trade only part of the way to the model's weights each month, at a learned
             pace a: holdings = (1 - a) * last month's + a * new weights. In training, last
             month's holdings are taken as the model's weights for the month before (both
@@ -102,6 +110,9 @@ class Settings:
     short_fee: float = 0.0
     costs: str | None = None
     partial: bool = False
+    short_hurdle: float = 0.0
+    short_min_easy: float | None = None
+    no_shorts: bool = False
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -121,7 +132,27 @@ def _steps(train: list[int], settings: Settings, rng: np.random.Generator) -> li
 Pair = tuple[torch.Tensor, torch.Tensor]
 
 
-def _train(  # noqa: PLR0913, PLR0917 - one training run's pieces
+@dataclass(frozen=True)
+class Pricing:
+    """What the cost-aware loss needs (:func:`_pricing`).
+
+    Attributes:
+        links: ``costs.links`` of the months.
+        stock: Each month's per-stock (trade cost, borrow fee), or ``None`` for flat rates.
+        shortable: Each month's per-stock flag: may be held short (``None``: all may).
+    """
+
+    links: list[costs.Link | None]
+    stock: list[Pair] | None
+    shortable: list[torch.Tensor] | None
+
+
+def _allow(w: torch.Tensor, shortable: torch.Tensor | None) -> torch.Tensor:
+    """``w`` with the stocks that may not be shorted clamped at 0 or above."""
+    return w if shortable is None else torch.where(shortable, w, torch.relu(w))
+
+
+def _train(
     model: Optimizer,
     adam: torch.optim.Optimizer,
     source: list[Pair | None],
@@ -129,35 +160,42 @@ def _train(  # noqa: PLR0913, PLR0917 - one training run's pieces
     epochs: int,
     settings: Settings,
     rng: np.random.Generator,
-    links: list[costs.Link | None] | None = None,
-    stock: list[Pair] | None = None,
+    pricing: Pricing | None = None,
 ) -> list[torch.Tensor]:
     """``epochs`` passes over the ``train`` months of ``source``; the last pass's losses.
 
-    With ``links`` (``costs.links`` of the months) the loss uses the return net of costs, the
-    weights the month before computed by the same model (without a gradient, unless partial
-    trading blends them into the holdings); with ``stock`` (each month's per-stock trade cost
-    and borrow fee) each stock pays its own rates.
+    With ``pricing`` the loss uses the return net of costs, the weights the month before
+    computed by the same model (without a gradient, unless partial trading blends them into
+    the holdings); with per-stock costs each stock pays its own rates, and stocks that may not
+    be shorted are clamped at 0 or above.
     """
     losses = []
     for _ in range(epochs):
         losses = []  # kept on the device: reading each one would wait for the GPU
         for step in _steps(train, settings, rng):
             adam.zero_grad()
-            if links is not None:
+            if pricing is not None:
                 k = step[0]
-                w = model.weights(source[k][0])
+                mask = pricing.shortable or [None] * len(source)
+                w = _allow(model.weights(source[k][0]), mask[k])
                 if model.pace_logit is not None and k > 0:  # holdings: part way from before
-                    before = model.weights(source[k - 1][0])
-                    w = (1 - model.pace()) * costs.carry(before, links[k]) + model.pace() * w
+                    before = _allow(model.weights(source[k - 1][0]), mask[k - 1])
+                    w = (1 - model.pace()) * costs.carry(
+                        before, pricing.links[k]
+                    ) + model.pace() * w
+                    w = _allow(w, mask[k])
                 else:
                     with torch.no_grad():
-                        before = model.weights(source[k - 1][0]) if k > 0 else None
+                        before = (_allow(model.weights(source[k - 1][0]), mask[k - 1])
+                                  if k > 0 else None)  # fmt: skip
                 spread, fee, spread_before = settings.spread, settings.short_fee, None
-                if stock is not None:
-                    (spread, fee), spread_before = stock[k], stock[k - 1][0] if k > 0 else None
-                net = costs.net_return(w, source[k][1], before, links[k], spread, fee,
-                                       spread_before)  # fmt: skip
+                if pricing.stock is not None:
+                    (spread, fee), spread_before = (
+                        pricing.stock[k],
+                        (pricing.stock[k - 1][0] if k > 0 else None),
+                    )
+                net = costs.net_return(w, source[k][1], before, pricing.links[k], spread,
+                                       fee + settings.short_hurdle, spread_before)  # fmt: skip
                 value = (1 - net) ** 2
             elif settings.objective is None:
                 value = loss(model, *source[step[0]])
@@ -188,46 +226,66 @@ def _pricing(
     settings: Settings,
     device: str,
     subsets: dict | None,
-    stock_costs: list[tuple[np.ndarray, np.ndarray]] | None,
-) -> tuple[list[costs.Link | None] | None, list[Pair] | None]:
-    """The loss's cost inputs: ``costs.links`` and per-stock cost tensors (or ``None``).
+    stock_costs: list[tuple[np.ndarray, ...]] | None,
+) -> Pricing | None:
+    """The cost-aware loss's inputs (``None`` without costs); checks the settings agree.
 
-    Links are ``None`` without costs; the tensors are ``None`` without ``settings.costs``.
-    Checks the settings agree.
+    ``stock_costs``: each month's per-stock (trade cost, borrow fee[, easy-to-borrow chance])
+    from ``costs.align``.
     """
     if settings.subset_train and subsets is None:
         raise ValueError("subset_train needs subsets")
-    if (
-        settings.spread <= 0
-        and settings.short_fee <= 0
-        and not (settings.costs or settings.partial)
-    ):
-        return None, None
+    shorts = settings.short_hurdle > 0 or settings.short_min_easy is not None or settings.no_shorts
+    flat = settings.spread > 0 or settings.short_fee > 0
+    if not (flat or shorts or settings.costs or settings.partial):
+        return None
     if settings.objective or settings.subset_train:
         raise ValueError("costs need the paper loss on every candidate")
-    if settings.costs is None:
-        return costs.links(months, device), None
-    if stock_costs is None:
-        raise ValueError("settings.costs needs stock_costs")
-    tensors = [(torch.from_numpy(a).to(device), torch.from_numpy(b).to(device))
-               for a, b in stock_costs]  # fmt: skip
-    return costs.links(months, device), tensors
+    if (settings.costs or settings.short_min_easy is not None) and stock_costs is None:
+        raise ValueError("per-stock costs need stock_costs")
+    stock = shortable = None
+    if settings.costs:
+        stock = [(torch.from_numpy(c[0]).to(device), torch.from_numpy(c[1]).to(device))
+                 for c in stock_costs]  # fmt: skip
+    if settings.short_min_easy is not None:
+        shortable = [torch.from_numpy(c[2] >= settings.short_min_easy).to(device)
+                     for c in stock_costs]  # fmt: skip
+    return Pricing(costs.links(months, device), stock, shortable)
 
 
 def _hold(
-    model: Optimizer, held: tuple[list[str], np.ndarray] | None, month: Month, w: np.ndarray
+    model: Optimizer,
+    held: tuple[list[str], np.ndarray] | None,
+    month: Month,
+    w: np.ndarray,
+    shortable: np.ndarray | None,
 ) -> tuple[np.ndarray, tuple[list[str], np.ndarray] | None, float | None]:
-    """With partial trading, blend last month's real holdings into ``w`` at the model's pace.
+    """The month's holdings from the model's weights ``w``.
 
-    Returns the holdings, the state to pass next month and the pace (``None`` without it).
+    Stocks that may not be shorted (``shortable`` False) are clamped at 0 or above, before and
+    after partial trading blends last month's real holdings in at the model's pace. Returns
+    the holdings, the state to pass next month and the pace (``None`` without partial).
     """
+    clamp = (
+        (lambda v: v) if shortable is None else (lambda v: np.where(shortable, v, np.maximum(v, 0)))
+    )
+    w = clamp(w)
     if model.pace_logit is None:
         return w, None, None
     pace = float(model.pace())
     if held is not None:
         before = dict(zip(*held, strict=True))
-        w = (1 - pace) * np.array([before.get(s, 0.0) for s in month.symbols]) + pace * w
+        w = clamp((1 - pace) * np.array([before.get(s, 0.0) for s in month.symbols]) + pace * w)
     return w, (month.symbols, w), pace
+
+
+def _shortable(pricing: Pricing | None, settings: Settings, t: int, n: int) -> np.ndarray | None:
+    """Month ``t``'s may-be-shorted flags for the walk's holdings (``None``: all may)."""
+    if settings.no_shorts:
+        return np.zeros(n, dtype=bool)
+    if pricing is None or pricing.shortable is None:
+        return None
+    return pricing.shortable[t].cpu().numpy()
 
 
 def walk(
@@ -235,7 +293,7 @@ def walk(
     settings: Settings,
     device: str = "cpu",
     subsets: dict[date, set[str]] | None = None,
-    stock_costs: list[tuple[np.ndarray, np.ndarray]] | None = None,
+    stock_costs: list[tuple[np.ndarray, ...]] | None = None,
 ) -> tuple[pl.DataFrame, pl.DataFrame, Optimizer]:
     """Train and pick portfolios month by month (module docs).
 
@@ -267,7 +325,7 @@ def walk(
     data = [_tensors(m, device) for m in months]
     known = [bool(np.isfinite(m.r).all()) for m in months]
     rows, sub = _subset_rows(months, data, subsets)
-    links, stock = _pricing(months, settings, device, subsets, stock_costs)
+    pricing = _pricing(months, settings, device, subsets, stock_costs)
     tune_rng = np.random.default_rng(settings.seed + 1)
     weights, log, trained, held = [], [], False, None
     for t, month in enumerate(months):
@@ -279,11 +337,11 @@ def walk(
         source = sub if settings.subset_train == "only" else data
         epochs = settings.warm_epochs if trained else settings.first_epochs
         fit = [k for k in train if source[k] is not None]
-        losses = _train(model, adam, source, fit, epochs, settings, rng, links, stock)
+        losses = _train(model, adam, source, fit, epochs, settings, rng, pricing)
         trained = True
         with torch.no_grad():
             w = model.weights(data[t][0]).cpu().numpy().astype(np.float64)
-        w, held, pace = _hold(model, held, month, w)
+        w, held, pace = _hold(model, held, month, w, _shortable(pricing, settings, t, len(w)))
         sized = settings.scale or (settings.softplus and settings.long_only)
         m = float(w.sum()) if sized else 1.0
         if sized and m > 0:

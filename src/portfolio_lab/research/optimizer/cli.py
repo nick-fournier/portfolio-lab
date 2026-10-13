@@ -161,6 +161,15 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     partial: Annotated[
         bool, typer.Option(help="Trade part way to the new weights at a learned pace.")
     ] = False,
+    short_hurdle: Annotated[
+        float, typer.Option(help="Loss: extra yearly cost per dollar shorted (willingness).")
+    ] = 0.0,
+    short_min_easy: Annotated[
+        float, typer.Option(help="Short only stocks at least this likely easy to borrow (0: off).")
+    ] = 0.0,
+    no_shorts: Annotated[
+        bool, typer.Option(help="Hold no shorts (pair with --short-hurdle).")
+    ] = False,
     inputs: Annotated[str, typer.Option(help="Characteristics: all, ours, jkp or paper.")] = "all",
     min_price: Annotated[float, typer.Option(help="Leave out stocks below this price.")] = 0.0,
     min_adv: Annotated[float, typer.Option(help="...or below this daily dollar volume.")] = 0.0,
@@ -198,7 +207,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 cap or None, names or None,
                 None if objective == "paper" else objective, batch, gamma or None, softplus,
                 None if subset_train == "all" else subset_train, finetune_epochs, spread, short_fee,
-                costs or None, partial,
+                costs or None, partial, short_hurdle, short_min_easy or None, no_shorts,
             )  # fmt: skip
             futures.append(
                 pool_.submit(

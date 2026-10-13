@@ -324,9 +324,13 @@ def test_align_puts_costs_in_row_order_and_fills_missing_stocks():
     month = data.Month(date(2000, 1, 31), ["C", "A", "B"], np.zeros((3, 1)), np.zeros(3))
     table = pl.DataFrame({"date": [date(2000, 1, 31)] * 2, "symbol": ["A", "B"],
                           "trade_cost": [0.01, 0.03], "borrow_fee": [0.003, 0.5]})  # fmt: skip
-    ((trade, fee),) = costs.align([month], table)
+    ((trade, fee, easy),) = costs.align([month], table)
     assert trade.tolist() == pytest.approx([0.02, 0.01, 0.03])  # C: the month's median
     assert fee.tolist() == pytest.approx([1.0, 0.003, 0.5])  # C: not lendable
+    assert easy.tolist() == [1.0, 1.0, 1.0]  # no easy_chance column: all
+    table = table.with_columns(pl.Series("easy_chance", [0.95, 0.4]))
+    ((_, _, easy),) = costs.align([month], table)
+    assert easy.tolist() == pytest.approx([0.0, 0.95, 0.4])  # C missing: 0
 
 
 def test_walk_with_per_stock_costs_needs_them_and_runs_with_them():
@@ -380,3 +384,26 @@ def test_partial_trading_moves_holdings_part_way_from_last_month_at_the_learned_
     expected = [(1 - a) * held.get(s, 0.0) + a * t for s, t in pairs]
     got = weights.filter(pl.col("date") == last.date)["weight"].to_list()
     assert got == pytest.approx(expected, rel=1e-4, abs=1e-6)
+
+
+def test_short_controls_keep_unshortable_stocks_and_no_shorts_at_or_above_zero():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    rng = np.random.default_rng(8)
+    months = []
+    for k in range(16):
+        x = rng.uniform(-0.5, 0.5, (4, 2)).astype(np.float32)
+        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 4)).astype(np.float32)  # input 0: long or short
+        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCD"), x, r))
+    easy = np.array([0.99, 0.95, 0.5, 0.1], np.float32)
+    stock = [(np.full(4, 0.001, np.float32), np.full(4, 0.003, np.float32), easy)] * 16
+    base = dict(window=12, first_epochs=50, warm_epochs=3, lr=0.05, start=date(2000, 1, 1),
+                costs="table.parquet", partial=True)  # fmt: skip
+    with pytest.raises(ValueError, match="stock_costs"):
+        walk(months, Settings("linear", short_min_easy=0.9, **base))
+    w = walk(months, Settings("linear", short_min_easy=0.9, **base), stock_costs=stock)[0]
+    assert (w.filter(pl.col("symbol").is_in(["C", "D"]))["weight"] >= 0).all()
+    assert (w.filter(pl.col("symbol").is_in(["A", "B"]))["weight"] < 0).any()  # still shorts
+    settings = Settings("linear", no_shorts=True, short_hurdle=1.0, **base)
+    assert (walk(months, settings, stock_costs=stock)[0]["weight"] >= 0).all()
