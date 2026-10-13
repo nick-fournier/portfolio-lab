@@ -233,3 +233,32 @@ def test_subset_inference_runs_the_trained_model_on_the_subset_rows_alone():
     got = last.filter(pl.col("symbol").is_in(["A", "C"]))["subset_weight"].to_numpy()
     assert got == pytest.approx(expected, rel=1e-5)
     assert (log["stocks_subset"] == 2).all()
+
+
+def test_subset_training_only_ignores_other_rows_and_finetune_leaves_the_main_model_alone():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    rng = np.random.default_rng(4)
+    months = []
+    for k in range(16):
+        x = rng.uniform(-0.5, 0.5, (5, 2)).astype(np.float32)
+        r = rng.normal(0.01, 0.05, 5).astype(np.float32)
+        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDE"), x, r))
+    subsets = {m.date: {"A", "C", "D"} for m in months}
+    base = dict(window=12, first_epochs=5, warm_epochs=2, start=date(2000, 1, 1))
+
+    def run(months, **kw):
+        return walk(months, Settings("mlp", **base, **kw), subsets=subsets)[0]
+
+    plain, tuned = run(months), run(months, subset_train="finetune")
+    assert plain["weight"].to_list() == tuned["weight"].to_list()  # main model unchanged
+    assert plain["subset_weight"].to_list() != tuned["subset_weight"].to_list()
+    other = [  # returns of stocks outside the subset changed: "only" never sees them
+        data.Month(m.date, m.symbols, m.x, np.where(np.isin(m.symbols, ["B", "E"]), 0.5, m.r))
+        for m in months
+    ]
+    only = run(months, subset_train="only")["subset_weight"].to_numpy()
+    assert run(other, subset_train="only")["subset_weight"].to_numpy() == pytest.approx(
+        only, nan_ok=True
+    )

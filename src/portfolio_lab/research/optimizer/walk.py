@@ -12,8 +12,17 @@ With an ``objective`` (``objectives``) a step grades a batch of ``batch`` consec
 months instead of one: each pass splits the training months into such blocks from a random
 offset and visits them in shuffled order, so every month still goes through the model once per
 pass.
+
+With ``subsets`` (stocks the portfolio may hold, by month end) each test month also gets a
+portfolio picked from the subset alone, its rows fed to the model without the other stocks
+(their ranks across all candidates kept), so attention sees only the subset.
+``subset_train`` sets how the model that picks it was trained: ``None``, on every candidate;
+``"only"``, on the subset's rows alone in every training month; ``"finetune"``, on every
+candidate, then a copy given ``finetune_epochs`` more passes over the subset's rows (fresh
+Adam, its own shuffle, so the main model is unchanged).
 """
 
+import copy
 import time
 from dataclasses import dataclass
 from datetime import date
@@ -54,6 +63,8 @@ class Settings:
             loss, one month per step).
         batch: Consecutive months per step with an ``objective``.
         gamma: The objective's risk appetite (``None``: ``objectives.GAMMA``).
+        subset_train: ``None``, ``"only"`` or ``"finetune"`` (module docs; needs subsets).
+        finetune_epochs: Passes over the subset's rows with ``"finetune"``.
         softplus: Long-only weights = softplus(score) / N, size free (model.Optimizer); saved as
             the mix like ``scale``, the total logged as m.
     """
@@ -77,6 +88,8 @@ class Settings:
     batch: int = 12
     gamma: float | None = None
     softplus: bool = False
+    subset_train: str | None = None
+    finetune_epochs: int = 5
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -93,6 +106,48 @@ def _steps(train: list[int], settings: Settings, rng: np.random.Generator) -> li
     return [blocks[i] for i in rng.permutation(len(blocks))]
 
 
+Pair = tuple[torch.Tensor, torch.Tensor]
+
+
+def _train(
+    model: Optimizer,
+    adam: torch.optim.Optimizer,
+    source: list[Pair | None],
+    train: list[int],
+    epochs: int,
+    settings: Settings,
+    rng: np.random.Generator,
+) -> list[torch.Tensor]:
+    """``epochs`` passes over the ``train`` months of ``source``; the last pass's losses."""
+    losses = []
+    for _ in range(epochs):
+        losses = []  # kept on the device: reading each one would wait for the GPU
+        for step in _steps(train, settings, rng):
+            adam.zero_grad()
+            if settings.objective is None:
+                value = loss(model, *source[step[0]])
+            else:
+                r = torch.stack([model.weights(source[k][0]) @ source[k][1] for k in step])
+                value = objectives.grade(settings.objective, r, settings.gamma)
+            value.backward()
+            if settings.clip:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), settings.clip)
+            adam.step()
+            losses.append(value.detach())
+    return losses
+
+
+def _subset_rows(
+    months: list[Month], data: list[Pair], subsets: dict[date, set[str]] | None
+) -> tuple[list[list[int]], list[Pair | None]]:
+    """Each month's rows in its subset, and those rows' tensors (``None`` if none)."""
+    rows: list[list[int]] = [[] for _ in months]
+    for k, m in enumerate(months):
+        members = (subsets or {}).get(m.date, set())
+        rows[k] = [i for i, symbol in enumerate(m.symbols) if symbol in members]
+    return rows, [(x[r], y[r]) if r else None for (x, y), r in zip(data, rows, strict=True)]
+
+
 def walk(
     months: list[Month],
     settings: Settings,
@@ -105,9 +160,8 @@ def walk(
         months: From :func:`.data.months`, ascending.
         settings: The walk's settings.
         device: ``cuda`` or ``cpu``.
-        subsets: Also pick each test month's portfolio from only these stocks (by month end):
-            the model trained on every candidate is run on the subset's rows alone (their
-            ranks across all candidates kept), so attention sees only the subset.
+        subsets: Also pick each test month's portfolio from only these stocks, by month end
+            (module docs).
 
     Returns:
         ``weights`` (date, symbol, weight) for every test month; ``log`` (date, ret = the
@@ -126,6 +180,10 @@ def walk(
     adam = torch.optim.Adam(model.parameters(), lr=settings.lr)
     data = [_tensors(m, device) for m in months]
     known = [bool(np.isfinite(m.r).all()) for m in months]
+    if settings.subset_train and subsets is None:
+        raise ValueError("subset_train needs subsets")
+    rows, sub = _subset_rows(months, data, subsets)
+    tune_rng = np.random.default_rng(settings.seed + 1)
     weights, log, trained = [], [], False
     for t, month in enumerate(months):
         lo = 0 if settings.window is None else t - settings.window
@@ -133,21 +191,10 @@ def walk(
             continue
         clock = time.perf_counter()
         train = [k for k in range(lo, t) if known[k]]
-        losses = []
-        for _ in range(settings.warm_epochs if trained else settings.first_epochs):
-            losses = []  # kept on the device: reading each one would wait for the GPU
-            for step in _steps(train, settings, rng):
-                adam.zero_grad()
-                if settings.objective is None:
-                    value = loss(model, *data[step[0]])
-                else:
-                    r = torch.stack([model.weights(data[k][0]) @ data[k][1] for k in step])
-                    value = objectives.grade(settings.objective, r, settings.gamma)
-                value.backward()
-                if settings.clip:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), settings.clip)
-                adam.step()
-                losses.append(value.detach())
+        source = sub if settings.subset_train == "only" else data
+        epochs = settings.warm_epochs if trained else settings.first_epochs
+        fit = [k for k in train if source[k] is not None]
+        losses = _train(model, adam, source, fit, epochs, settings, rng)
         trained = True
         with torch.no_grad():
             w = model.weights(data[t][0]).cpu().numpy().astype(np.float64)
@@ -159,13 +206,17 @@ def walk(
         frame = pl.DataFrame({"date": [month.date] * len(w), "symbol": month.symbols, "weight": w})
         extra = {}
         if subsets is not None:
-            members = subsets.get(month.date, set())
-            keep = [i for i, symbol in enumerate(month.symbols) if symbol in members]
+            keep, picker = rows[t], model
+            if settings.subset_train == "finetune":
+                picker = copy.deepcopy(model)
+                tune = torch.optim.Adam(picker.parameters(), lr=settings.lr)
+                fit = [k for k in train if sub[k] is not None]
+                _train(picker, tune, sub, fit, settings.finetune_epochs, settings, tune_rng)
             with torch.no_grad():
-                ws = model.weights(data[t][0][keep]).cpu().numpy().astype(np.float64)
-            sub = np.full(len(w), np.nan)
-            sub[keep] = ws
-            frame = frame.with_columns(pl.Series("subset_weight", sub).fill_nan(None))
+                ws = picker.weights(data[t][0][keep]).cpu().numpy().astype(np.float64)
+            column = np.full(len(w), np.nan)
+            column[keep] = ws
+            frame = frame.with_columns(pl.Series("subset_weight", column).fill_nan(None))
             extra = {"ret_subset": float(ws @ month.r[keep]) if known[t] and keep else None,
                      "stocks_subset": len(keep)}  # fmt: skip
         weights.append(frame)
