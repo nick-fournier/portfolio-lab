@@ -64,6 +64,7 @@ def _walk_one(  # noqa: PLR0913, PLR0917 - one walk's pieces
     precision: str,
     inputs: str,
     floor: tuple[float, float] = (0.0, 0.0),
+    subsets: dict | None = None,
 ) -> str:
     """One walk: train, save weights, log, model and settings; return a summary line."""
     import torch  # noqa: PLC0415
@@ -72,7 +73,8 @@ def _walk_one(  # noqa: PLR0913, PLR0917 - one walk's pieces
 
     torch.set_num_threads(threads)
     torch.set_float32_matmul_precision(precision)
-    weights, log, fitted = walk.walk(_months(table, pool or None, inputs, *floor), settings, device)
+    months = _months(table, pool or None, inputs, *floor)
+    weights, log, fitted = walk.walk(months, settings, device, subsets)
     out.mkdir(parents=True, exist_ok=True)
     weights.write_parquet(out / "weights.parquet")
     log.write_parquet(out / "log.parquet")
@@ -80,6 +82,7 @@ def _walk_one(  # noqa: PLR0913, PLR0917 - one walk's pieces
     meta = asdict(replace(settings, start=settings.start.isoformat())) | {
         "pool": pool,
         "inputs": inputs,
+        "infer_pool": len(next(iter(subsets.values()))) if subsets else None,
     }
     (out / "settings.json").write_text(json.dumps(meta, indent=2))
     graded = log.filter(pl.col("ret").is_not_null())
@@ -138,6 +141,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         bool, typer.Option(help="bfloat16 fused attention (~5x faster transformer).")
     ] = False,
     clip: Annotated[float, typer.Option(help="Gradient clipping (0: none).")] = 1.0,
+    infer_pool: Annotated[
+        int, typer.Option(help="Also pick from only the N most liquid eligible stocks (0: off).")
+    ] = 0,
     inputs: Annotated[str, typer.Option(help="Characteristics: all, ours, jkp or paper.")] = "all",
     min_price: Annotated[float, typer.Option(help="Leave out stocks below this price.")] = 0.0,
     min_adv: Annotated[float, typer.Option(help="...or below this daily dollar volume.")] = 0.0,
@@ -159,6 +165,10 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
 
     picked = _seeds(seeds)
     _months(table, pool or None, inputs, min_price, min_adv)  # build the cache once first
+    subsets = None
+    if infer_pool:
+        floor = (min_price, min_adv)
+        subsets = {m.date: set(m.symbols) for m in _months(table, infer_pool, inputs, *floor)}
     runs = [out / f"seed-{s}" for s in picked]
     threads = max(1, (os.cpu_count() or 1) // min(jobs, len(picked)))
     with ProcessPoolExecutor(min(jobs, len(picked)), initializer=_die_with_parent,
@@ -183,6 +193,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                     precision,
                     inputs,
                     (min_price, min_adv),
+                    subsets,
                 )
             )
         for f in futures:

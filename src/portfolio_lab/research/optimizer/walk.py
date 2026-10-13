@@ -94,7 +94,10 @@ def _steps(train: list[int], settings: Settings, rng: np.random.Generator) -> li
 
 
 def walk(
-    months: list[Month], settings: Settings, device: str = "cpu"
+    months: list[Month],
+    settings: Settings,
+    device: str = "cpu",
+    subsets: dict[date, set[str]] | None = None,
 ) -> tuple[pl.DataFrame, pl.DataFrame, Optimizer]:
     """Train and pick portfolios month by month (module docs).
 
@@ -102,13 +105,17 @@ def walk(
         months: From :func:`.data.months`, ascending.
         settings: The walk's settings.
         device: ``cuda`` or ``cpu``.
+        subsets: Also pick each test month's portfolio from only these stocks (by month end):
+            the model trained on every candidate is run on the subset's rows alone (their
+            ranks across all candidates kept), so attention sees only the subset.
 
     Returns:
         ``weights`` (date, symbol, weight) for every test month; ``log`` (date, ret = the
         portfolio's next-month return over the T-bill before costs, ``long`` and ``short`` =
         the sums of the positive and negative weights, ``largest`` = the largest absolute
         weight's share of the sum of absolute weights, mean training loss over the last pass,
-        seconds); and the final model.
+        seconds; with ``subsets``, ``ret_subset`` and ``stocks_subset``); and the final model.
+        With ``subsets`` the weights also have ``subset_weight`` (null outside the subset).
     """
     torch.manual_seed(settings.seed)
     rng = np.random.default_rng(settings.seed)
@@ -149,13 +156,24 @@ def walk(
         if sized and m > 0:
             w = w / m  # hold the mix fully invested; m is the model's sizing
         ret = float(w @ month.r) if known[t] else None
-        weights.append(pl.DataFrame({"date": [month.date] * len(w), "symbol": month.symbols,
-                                     "weight": w}))  # fmt: skip
+        frame = pl.DataFrame({"date": [month.date] * len(w), "symbol": month.symbols, "weight": w})
+        extra = {}
+        if subsets is not None:
+            members = subsets.get(month.date, set())
+            keep = [i for i, symbol in enumerate(month.symbols) if symbol in members]
+            with torch.no_grad():
+                ws = model.weights(data[t][0][keep]).cpu().numpy().astype(np.float64)
+            sub = np.full(len(w), np.nan)
+            sub[keep] = ws
+            frame = frame.with_columns(pl.Series("subset_weight", sub).fill_nan(None))
+            extra = {"ret_subset": float(ws @ month.r[keep]) if known[t] and keep else None,
+                     "stocks_subset": len(keep)}  # fmt: skip
+        weights.append(frame)
         gross = float(np.abs(w).sum())  # 0 only if no stock is held: all cash
         log.append({"date": month.date, "ret": ret, "long": float(w[w > 0].sum()),
                     "short": float(w[w < 0].sum()),
                     "largest": float(np.abs(w).max()) / gross if gross else None,
                     "loss": float(torch.stack(losses).mean()), "m": m,
                     "holdings": float(1 / (w**2).sum()) if settings.long_only and gross else None,
-                    "seconds": time.perf_counter() - clock})  # fmt: skip
+                    "seconds": time.perf_counter() - clock} | extra)  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model

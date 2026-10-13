@@ -210,3 +210,26 @@ def test_softplus_long_only_weights_are_positive_scores_over_n_and_the_walk_save
     sums = weights.group_by("date").agg(pl.col("weight").sum())["weight"].to_list()
     assert sums == pytest.approx([1.0] * 18)  # the mix; the size is logged as m
     assert log["ret"].mean() > 0.02  # it learned to hold the stocks with input 0 high
+
+
+def test_subset_inference_runs_the_trained_model_on_the_subset_rows_alone():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    rng = np.random.default_rng(3)
+    months = []
+    for k in range(16):
+        x = rng.uniform(-0.5, 0.5, (5, 2)).astype(np.float32)
+        r = rng.normal(0.01, 0.05, 5).astype(np.float32)
+        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDE"), x, r))
+    settings = Settings("transformer", window=12, first_epochs=5, warm_epochs=1,
+                        start=date(2000, 1, 1))  # fmt: skip
+    subsets = {m.date: {"A", "C"} for m in months}
+    weights, log, model = walk(months, settings, subsets=subsets)
+    last = weights.filter(pl.col("date") == months[-1].date)
+    assert last.filter(pl.col("symbol").is_in(["B", "D", "E"]))["subset_weight"].is_null().all()
+    with torch.no_grad():  # the final month: the model on rows A and C only
+        expected = model.weights(torch.from_numpy(months[-1].x[[0, 2]])).numpy()
+    got = last.filter(pl.col("symbol").is_in(["A", "C"]))["subset_weight"].to_numpy()
+    assert got == pytest.approx(expected, rel=1e-5)
+    assert (log["stocks_subset"] == 2).all()
