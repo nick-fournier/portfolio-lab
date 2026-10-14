@@ -48,6 +48,19 @@ Each epoch also records ``val_growth`` (held-out months, before costs) and ``val
 (after costs), both as growth a year, exp(12 x mean log(1 + R)) - 1, plus ``val_cost`` (a
 year) and ``cash`` (1 - sum w on month t).
 
+Carried holdings (paper objective with ``costs``): with ``carry`` the spread is charged on the
+dollars traded from h, the book stored the last time month k - 1 was trained (or scored), after
+its stocks' returns (w (1 + r); stocks that left are sold, new ones start at 0), instead of from
+the current model's weights on month k - 1. With ``holdings_input`` each stock's row also gets
+two inputs: h on this month's stocks, scaled to N x h / sum |h| (traits' scale), and
+log(half-spread / 0.5%) clipped to [-3, 3] (keeps the level, so a costly month shows). The
+book table starts from one in-order pass through the training months and is refreshed at
+every step. With ``costs``, each epoch also scores the held-out months rolled forward in
+order from the last training month's book (each month trades from the one before, drifted):
+``val_net_sharpe`` and ``val_carry_sharpe`` (net and gross, annualized), and at 2x gross a
+year ``val_net_ret``, ``val_gross_ret``, ``val_spread`` and ``val_borrow``, plus
+``val_turnover`` (dollars traded a year per dollar of gross).
+
 Training loss L of a best-scaled portfolio equals 1 / (1 + S^2), S its monthly Sharpe, so a
 low training loss is an in-sample Sharpe, not a better model.
 """
@@ -62,6 +75,7 @@ import torch
 
 from portfolio_lab.research.optimizer import costs as cost_model
 from portfolio_lab.research.optimizer.data import Month
+from portfolio_lab.research.optimizer.holdings import carried, with_holdings
 from portfolio_lab.research.optimizer.model import Optimizer
 
 
@@ -94,6 +108,8 @@ class Config:
         objective: ``paper`` (1 - R)^2 or ``growth`` (module docs).
         gamma: Caution for ``growth`` (1 = log, Kelly).
         over_cost: Monthly cost per dollar invested above the account (``growth``).
+        carry: Charge spreads from the stored, drifted book (module docs).
+        holdings_input: Feed each stock's holding and spread to the model (module docs).
     """
 
     name: str
@@ -119,6 +135,8 @@ class Config:
     objective: str = "paper"
     gamma: float = 1.0
     over_cost: float = 0.0
+    carry: bool = False
+    holdings_input: bool = False
 
 
 def lr_at(config: Config, epoch: int) -> float:
@@ -191,19 +209,21 @@ def _prepare(
     return tensors, cost_model.links(span, device), stock
 
 
-def _measure(run, model: Optimizer, tensors: list, held: list[int], test_known: bool) -> dict:
-    """The epoch's held-out and test-month measures (module docs)."""
+def _measure(run, features, model: Optimizer, tensors: list, held: list[int],
+             test_known: bool) -> dict:  # fmt: skip
+    """The epoch's held-out and test-month measures (module docs); ``run(k)``: month k's weights."""
+    test = len(tensors) - 1
     with torch.no_grad():
-        ws = [run(tensors[k][0]) for k in held]
+        ws = [run(k) for k in held]
         rs = [tensors[k][1] for k in held]
         val = torch.stack([w @ r for w, r in zip(ws, rs, strict=True)])
         val_long = torch.stack([_long(w) @ r for w, r in zip(ws, rs, strict=True)])
-        x_t, r_t = tensors[-1]
-        y, row_max = x_t, 0.0
+        r_t = tensors[test][1]
+        y, row_max = features(test), 0.0
         for block in model.blocks:
             y = block(y)
             row_max = max(row_max, float(y.norm(dim=1).max()))
-        w = run(x_t)
+        w = run(test)
         gross = float(w.abs().sum())
         ok = test_known and gross > 0
         held_t = _long(w)
@@ -250,6 +270,45 @@ def _epoch(model: Optimizer, adam, step_loss, order: list[int], clip: float | No
     return losses
 
 
+def _check(config: Config) -> None:
+    if config.objective not in {"paper", "growth"}:
+        raise ValueError(f"objective must be paper or growth, not {config.objective!r}")
+    paper_with_costs = config.costs and config.objective == "paper" and not config.long_only
+    if (config.carry or config.holdings_input) and not paper_with_costs:
+        raise ValueError("carry and holdings_input need costs with the paper objective")
+
+
+def _before(config: Config, run, book: dict, tensors: list, k: int) -> torch.Tensor | None:
+    """The book month k trades from: carried (stored, drifted) or the model's on month k - 1."""
+    with torch.no_grad():
+        if config.carry:
+            return book[k - 1] * (1 + tensors[k - 1][1]) if k - 1 in book else None
+        before = run(k - 1) if k > 0 else None
+        if config.objective == "growth" and before is not None:
+            before = _drift(before, tensors[k - 1][1])
+        return before
+
+
+def _fill(book: dict, run, months: int) -> None:
+    """The book table's start: one in-order pass, each month's book from the one before."""
+    with torch.no_grad():
+        for k in range(months):
+            book[k] = run(k)
+
+
+def _held_net(run, net_of, tensors: list, held: list[int]) -> dict:
+    """Held-out months after costs (growth objective only)."""
+    if not held:
+        return {}
+    with torch.no_grad():
+        ws = [run(k) for k in held]
+        net = torch.stack([net_of(k, w) for k, w in zip(held, ws, strict=True)])
+        gross = torch.stack([w @ tensors[k][1] for k, w in zip(held, ws, strict=True)])
+    ok = bool((net > -1).all())
+    return {"val_net_growth": _growth(net) if ok else None,
+            "val_cost": float(12 * (gross - net).mean())}  # fmt: skip
+
+
 def fit(
     months: list[Month], end: int, config: Config, window: int = 60, validation: int = 12,
     device: str = "cuda", stock_costs: list | None = None,
@@ -261,29 +320,33 @@ def fit(
     torch.set_float32_matmul_precision("high" if config.tf32 else "highest")
     torch.manual_seed(config.seed)
     rng = np.random.default_rng(config.seed)
-    if config.objective not in {"paper", "growth"}:
-        raise ValueError(f"objective must be paper or growth, not {config.objective!r}")
-    growth = config.objective == "growth"
+    _check(config)
+    growth, table = config.objective == "growth", config.carry or config.holdings_input
     tensors, links, stock = _prepare(months, end, config, window, device, stock_costs, rng)
     known = [bool(torch.isfinite(r).all()) for _, r in tensors]
     train = [k for k in range(window - validation) if known[k]]
     held = [k for k in range(window - validation, window) if known[k]]
-    model = _new_model(config, tensors[0][0].shape[1], device, cash=growth)
+    width = tensors[0][0].shape[1] + (2 if config.holdings_input else 0)
+    model = _new_model(config, width, device, cash=growth)
     scores = torch.compile(model, dynamic=True) if config.compile else model
+    book: dict[int, torch.Tensor] = {}  # month -> its stored weights (carried holdings)
 
-    def run(x: torch.Tensor) -> torch.Tensor:
+    def features(k: int) -> torch.Tensor:
+        if not config.holdings_input:
+            return tensors[k][0]
+        return with_holdings(tensors, links, stock, book, k)
+
+    def run(k: int) -> torch.Tensor:
+        y = scores(features(k))
         if config.long_only:
-            return torch.softmax(scores(x), dim=0)
-        return scores(x) / len(x) if growth else scores(x)
+            return torch.softmax(y, dim=0)
+        return y / len(y) if growth else y
 
     adam = torch.optim.Adam(model.parameters(), lr=config.lr)
 
     def net_of(k: int, w: torch.Tensor) -> torch.Tensor:
         """Month k's return net of spreads and penalties, trading from last month's book."""
-        with torch.no_grad():
-            before = run(tensors[k - 1][0]) if k > 0 else None
-            if growth and before is not None:
-                before = _drift(before, tensors[k - 1][1])
+        before = _before(config, run, book, tensors, k)
         spread, fee, spread_before = 0.0, 0.0, None
         if stock is not None:
             (spread, fee), spread_before = stock[k], stock[k - 1][0] if k > 0 else None
@@ -292,25 +355,17 @@ def fit(
         return net - config.over_cost * torch.relu(w.sum() - 1)
 
     def step_loss(k: int) -> torch.Tensor:
-        w = run(tensors[k][0])
+        w = run(k)
+        if table:
+            book[k] = w.detach()
         if links is None:
             return _loss(w, tensors[k][1])
         if growth:
             return -_utility(1 + net_of(k, w), config.gamma)
         return (1 - net_of(k, w) + config.size_cost * (w.sum() - 1).abs()) ** 2
 
-    def held_net() -> dict:
-        """Held-out months after costs (growth objective only)."""
-        if not (growth and held):
-            return {}
-        with torch.no_grad():
-            ws = [run(tensors[k][0]) for k in held]
-            net = torch.stack([net_of(k, w) for k, w in zip(held, ws, strict=True)])
-            gross = torch.stack([w @ tensors[k][1] for k, w in zip(held, ws, strict=True)])
-        ok = bool((net > -1).all())
-        return {"val_net_growth": _growth(net) if ok else None,
-                "val_cost": float(12 * (gross - net).mean())}  # fmt: skip
-
+    if table:
+        _fill(book, run, window - validation)
     rows = []
     for epoch in range(config.epochs):
         for group in adam.param_groups:
@@ -320,10 +375,13 @@ def fit(
         if device == "cuda":
             torch.cuda.synchronize()
         seconds = time.perf_counter() - clock
+        scored = (_held_net(run, net_of, tensors, held) if growth else
+                  carried(run, tensors, held, links, stock, book if table else None,
+                           config.short_hurdle))  # fmt: skip
         rows.append({"config": config.name, "end": months[end].date, "epoch": epoch + 1,
                      "lr": lr_at(config, epoch),
                      "train_loss": float(torch.stack(losses).mean()) if losses else math.nan,
-                     **_measure(run, model, tensors, held, known[window]), **held_net(),
+                     **scored, **_measure(run, features, model, tensors, held, known[window]),
                      "seconds": seconds})  # fmt: skip
         if not math.isfinite(rows[-1]["train_loss"]):
             break
