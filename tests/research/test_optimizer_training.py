@@ -362,13 +362,13 @@ def test_grid_growth_objective_starts_in_cash_and_stays_long_and_at_most_investe
         r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 8)).astype(np.float32)
         months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"), x, r))
     stock = [(np.full(8, 0.002, np.float32), np.zeros(8, np.float32), np.ones(8, np.float32))] * 20
-    config = grid.Config("g", blocks=1, lr=1e-2, epochs=20, costs=True, objective="growth",
+    config = grid.Config("g", blocks=1, lr=5e-2, epochs=30, costs=True, objective="growth",
                          short_hurdle=50.0, over_cost=5.0)  # fmt: skip
     curves = grid.grid(months, [16, 18], [config], window=12, validation=3, device="cpu",
                        stock_costs=stock)  # fmt: skip
-    last = curves.filter(pl.col("epoch") == 20)
+    last = curves.filter(pl.col("epoch") == 30)
     assert {"val_growth", "val_net_growth", "val_cost", "cash"} <= set(curves.columns)
-    assert all(g > 0.05 for g in last["gross"])  # left cash for the stocks
+    assert all(g > 0.1 for g in last["gross"])  # left cash for the stocks
     assert all(s < 0.05 for s in last["val_short_share"])
     assert all(c > -0.1 for c in last["cash"])  # at most ~fully invested
     assert all(n <= g for n, g in zip(last["val_net_growth"], last["val_growth"], strict=True))
