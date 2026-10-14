@@ -269,3 +269,46 @@ def test_seed_average_leaves_out_a_dud_seed_month_and_saves_the_average(tmp_path
     feb = avg.filter(pl.col("date") == d2)["weight"].to_list()
     assert jan == pytest.approx([(0.5 + 0.25) / 2, (-0.5 + 0.75) / 2])  # both seeds at $1 gross
     assert feb == pytest.approx([0.5, -0.5])  # seed-1's February is a dud: seed-0 alone
+
+
+def test_grid_with_costs_and_a_short_hurdle_shorts_less_and_reports_the_long_side():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import grid  # noqa: PLC0415
+
+    rng = np.random.default_rng(13)
+    months = []
+    for k in range(20):
+        x = rng.uniform(-0.5, 0.5, (8, 3)).astype(np.float32)
+        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 8)).astype(np.float32)
+        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"), x, r))
+    stock = [
+        (np.full(8, 0.001, np.float32), np.full(8, 0.003, np.float32), np.ones(8, np.float32))
+    ] * 20
+    base = dict(blocks=1, lr=1e-2, epochs=15, costs=True)
+    setups = [grid.Config("free", **base), grid.Config("long", short_hurdle=50.0, **base)]
+    curves = grid.grid(months, [16, 18], setups, window=12, validation=3, device="cpu",
+                       stock_costs=stock)  # fmt: skip
+    last = (
+        curves.filter(pl.col("epoch") == 15)
+        .group_by("config")
+        .agg(pl.col("val_short_share").mean())
+    )
+    share = dict(last.rows())
+    assert share["long"] < share["free"]
+    assert {"val_long_sharpe", "test_long_ret"} <= set(curves.columns)
+    with pytest.raises(ValueError, match="stock_costs"):
+        grid.fit(months, 16, setups[0], window=12, validation=3, device="cpu")
+
+
+def test_max_return_zeroes_garbage_training_returns_only():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.walk import Settings, _data  # noqa: PLC0415
+
+    m = data.Month(date(2000, 1, 31), ["A", "B"], np.zeros((2, 1), np.float32),
+                   np.array([948.0, 0.05], np.float32))  # fmt: skip
+    ((_, r),) = _data([m], Settings("linear", max_return=3.0), "cpu")
+    assert r.tolist() == pytest.approx([0.0, 0.05])
+    assert m.r[0] == 948.0  # the month itself (the test month's return) is untouched
+    ((_, r),) = _data([m], Settings("linear"), "cpu")
+    assert float(r[0]) == 948.0
+    assert torch.is_tensor(r)

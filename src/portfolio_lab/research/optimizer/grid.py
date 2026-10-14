@@ -13,6 +13,15 @@ with the paper's loss, one Adam step per month, months shuffled each pass, excep
   2x gross so setups compare.
 - ``row_max``: the largest row size inside the network on month t (blow-ups show here first).
 - ``gross``: month t's total absolute weight; ``seconds``: the epoch's training time.
+- ``val_long_sharpe``: the held-out months' monthly Sharpe of the long side alone (positive
+  weights scaled to 1); ``val_short_share``: shorts' share of gross on those months;
+  ``test_long_ret``: month t's long side alone at 1x.
+
+With ``costs`` the loss uses the return net of each stock's spread on turnover (from the
+model's weights the month before) and borrow fee, plus ``short_hurdle`` a year per dollar
+short (``costs.net_return``); a large hurdle is long-only as an exact penalty. Training
+months' returns above ``max_return`` in size are set to 0 (data errors), and a step whose loss
+is not finite is skipped.
 
 Training loss L of a best-scaled portfolio equals 1 / (1 + S^2), S its monthly Sharpe, so a
 low training loss is an in-sample Sharpe, not a better model.
@@ -26,6 +35,7 @@ import numpy as np
 import polars as pl
 import torch
 
+from portfolio_lab.research.optimizer import costs as cost_model
 from portfolio_lab.research.optimizer.data import Month
 from portfolio_lab.research.optimizer.model import Optimizer
 
@@ -51,6 +61,9 @@ class Config:
         clip: Largest total gradient size per step (``None``: none, the paper).
         scaled_attention: Divide attention scores by sqrt(D) (model.Block).
         hidden: Feed-forward hidden width.
+        costs: Per-stock costs in the loss (module docs; needs the grid's ``stock_costs``).
+        short_hurdle: Extra yearly cost per dollar short in the loss.
+        max_return: Training returns above this in size set to 0 (``None``: kept).
     """
 
     name: str
@@ -68,6 +81,9 @@ class Config:
     clip: float | None = None
     scaled_attention: bool = False
     hidden: int = 256
+    costs: bool = False
+    short_hurdle: float = 0.0
+    max_return: float | None = None
 
 
 def lr_at(config: Config, epoch: int) -> float:
@@ -91,9 +107,64 @@ def _loss(w: torch.Tensor, r: torch.Tensor) -> torch.Tensor:
     return (1 - w @ r) ** 2
 
 
+def _long(w: torch.Tensor) -> torch.Tensor:
+    """The long side alone, scaled to $1 (zeros if nothing is long)."""
+    pos = torch.relu(w)
+    return pos / pos.sum().clamp(min=1e-12)
+
+
+def _prepare(
+    months: list[Month], end: int, config: Config, window: int, device: str,
+    stock_costs: list | None, rng: np.random.Generator,
+) -> tuple[list, list | None, list | None]:  # fmt: skip
+    """The window's (x, r) tensors (training returns cleaned), cost links and per-stock costs."""
+    span = months[end - window : end + 1]
+    tensors = [tuple(torch.from_numpy(a).to(device) for a in _subset(m, config.stocks, rng))
+               for m in span]  # fmt: skip
+    if config.max_return:
+        tensors[:window] = [(x, torch.where(r.abs() > config.max_return, 0.0, r))
+                            for x, r in tensors[:window]]  # fmt: skip
+    if not (config.costs or config.short_hurdle > 0):
+        return tensors, None, None
+    if config.stocks:
+        raise ValueError("costs need every stock (stocks=0)")
+    stock = None
+    if config.costs:
+        if stock_costs is None:
+            raise ValueError("costs need stock_costs")
+        stock = [(torch.from_numpy(c[0]).to(device), torch.from_numpy(c[1]).to(device))
+                 for c in stock_costs[end - window : end + 1]]  # fmt: skip
+    return tensors, cost_model.links(span, device), stock
+
+
+def _measure(run, model: Optimizer, tensors: list, held: list[int], test_known: bool) -> dict:
+    """The epoch's held-out and test-month measures (module docs)."""
+    with torch.no_grad():
+        ws = [run(tensors[k][0]) for k in held]
+        rs = [tensors[k][1] for k in held]
+        val = torch.stack([w @ r for w, r in zip(ws, rs, strict=True)])
+        val_long = torch.stack([_long(w) @ r for w, r in zip(ws, rs, strict=True)])
+        x_t, r_t = tensors[-1]
+        y, row_max = x_t, 0.0
+        for block in model.blocks:
+            y = block(y)
+            row_max = max(row_max, float(y.norm(dim=1).max()))
+        w = run(x_t)
+        gross = float(w.abs().sum())
+        ok = test_known and gross > 0
+    sharpe = lambda v: float(v.mean() / v.std()) if len(held) > 1 else None  # noqa: E731
+    return {"val_loss": float(((1 - val) ** 2).mean()), "val_sharpe": sharpe(val),
+            "val_long_sharpe": sharpe(val_long),
+            "val_short_share": float(torch.stack([torch.relu(-v).sum() / v.abs().sum()
+                                                  for v in ws]).mean()),
+            "test_ret": float(w @ r_t) / gross * 2 if ok else None,
+            "test_long_ret": float(_long(w) @ r_t) if ok else None,
+            "row_max": row_max, "gross": gross}  # fmt: skip
+
+
 def fit(
     months: list[Month], end: int, config: Config, window: int = 60, validation: int = 12,
-    device: str = "cuda",
+    device: str = "cuda", stock_costs: list | None = None,
 ) -> list[dict]:  # fmt: skip
     """Train one fresh model for ``config`` on the window before ``months[end]`` (module docs).
 
@@ -102,19 +173,29 @@ def fit(
     torch.set_float32_matmul_precision("high" if config.tf32 else "highest")
     torch.manual_seed(config.seed)
     rng = np.random.default_rng(config.seed)
-    tensors = [
-        tuple(torch.from_numpy(a).to(device) for a in _subset(m, config.stocks, rng))
-        for m in months[end - window : end + 1]
-    ]
+    tensors, links, stock = _prepare(months, end, config, window, device, stock_costs, rng)
     known = [bool(torch.isfinite(r).all()) for _, r in tensors]
     train = [k for k in range(window - validation) if known[k]]
     held = [k for k in range(window - validation, window) if known[k]]
-    x_t, r_t = tensors[window]
-    model = Optimizer("transformer", x_t.shape[1], config.blocks, config.hidden,
+    model = Optimizer("transformer", tensors[0][0].shape[1], config.blocks, config.hidden,
                       fast_attention=config.fast_attention, init=config.init,
                       scaled_attention=config.scaled_attention).to(device)  # fmt: skip
     run = torch.compile(model, dynamic=True) if config.compile else model
     adam = torch.optim.Adam(model.parameters(), lr=config.lr)
+
+    def step_loss(k: int) -> torch.Tensor:
+        w = run(tensors[k][0])
+        if links is None:
+            return _loss(w, tensors[k][1])
+        with torch.no_grad():
+            before = run(tensors[k - 1][0]) if k > 0 else None
+        spread, fee, spread_before = 0.0, 0.0, None
+        if stock is not None:
+            (spread, fee), spread_before = stock[k], stock[k - 1][0] if k > 0 else None
+        net = cost_model.net_return(w, tensors[k][1], before, links[k], spread,
+                                    fee + config.short_hurdle, spread_before)  # fmt: skip
+        return (1 - net) ** 2
+
     rows = []
     for epoch in range(config.epochs):
         for group in adam.param_groups:
@@ -123,7 +204,9 @@ def fit(
         losses = []
         for k in rng.permutation(train):
             adam.zero_grad()
-            value = _loss(run(tensors[k][0]), tensors[k][1])
+            value = step_loss(int(k))
+            if not torch.isfinite(value):  # skip a broken step rather than poison Adam
+                continue
             value.backward()
             if config.clip:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip)
@@ -132,21 +215,10 @@ def fit(
         if device == "cuda":
             torch.cuda.synchronize()
         seconds = time.perf_counter() - clock
-        with torch.no_grad():
-            val = torch.stack([run(tensors[k][0]) @ tensors[k][1] for k in held])
-            y, row_max = x_t, 0.0
-            for block in model.blocks:
-                y = block(y)
-                row_max = max(row_max, float(y.norm(dim=1).max()))
-            w = run(x_t)
-            gross = float(w.abs().sum())
-            test = float(w @ r_t) / gross * 2 if known[window] and gross > 0 else None
         rows.append({"config": config.name, "end": months[end].date, "epoch": epoch + 1,
                      "lr": lr_at(config, epoch),
-                     "train_loss": float(torch.stack(losses).mean()),
-                     "val_loss": float(((1 - val) ** 2).mean()),
-                     "val_sharpe": float(val.mean() / val.std()) if len(held) > 1 else None,
-                     "test_ret": test, "row_max": row_max, "gross": gross,
+                     "train_loss": float(torch.stack(losses).mean()) if losses else math.nan,
+                     **_measure(run, model, tensors, held, known[window]),
                      "seconds": seconds})  # fmt: skip
         if not math.isfinite(rows[-1]["train_loss"]):
             break
@@ -155,13 +227,13 @@ def fit(
 
 def grid(
     months: list[Month], ends: list[int], configs: list[Config], window: int = 60,
-    validation: int = 12, device: str = "cuda",
+    validation: int = 12, device: str = "cuda", stock_costs: list | None = None,
 ) -> pl.DataFrame:  # fmt: skip
     """Every config on every window end; one row per config, window and epoch."""
     rows = []
     for config in configs:
         for end in ends:
-            rows += fit(months, end, config, window, validation, device)
+            rows += fit(months, end, config, window, validation, device, stock_costs)
     return pl.DataFrame(rows)
 
 

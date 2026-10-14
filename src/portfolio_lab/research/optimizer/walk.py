@@ -86,6 +86,9 @@ class Settings:
         warm_lr: Starting rate for months that continue last month's model (``None``: ``lr``);
             a fresh or first fit starts at ``lr``.
         compile: ``torch.compile`` each model (faster; same results).
+        max_return: Training months' returns above this in size are set to 0 (data errors such
+            as a $0.001 stock "returning" 94,800% in a month); the test month's are kept.
+            ``None``: kept as they are.
         fresh: Retrain from scratch every test month, as the paper does ("roll the training
             sample forward one month and retrain"): new starting weights (seeded by ``seed`` and
             the month) and a new Adam, ``first_epochs`` passes. Default: continue last month's
@@ -136,10 +139,22 @@ class Settings:
     lr_min: float = 1e-5
     warm_lr: float | None = None
     compile: bool = False
+    max_return: float | None = None
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
     return torch.from_numpy(m.x).to(device), torch.from_numpy(m.r).to(device)
+
+
+def _data(months: list[Month], settings: Settings, device: str) -> list[tuple]:
+    """Each month's (x, r) tensors, returns above ``settings.max_return`` in size set to 0.
+
+    The test month's return is read from ``month.r`` itself, so it stays untouched.
+    """
+    data = [_tensors(m, device) for m in months]
+    if not settings.max_return:
+        return data
+    return [(x, torch.where(r.abs() > settings.max_return, 0.0, r)) for x, r in data]
 
 
 def _steps(train: list[int], settings: Settings, rng: np.random.Generator) -> list[list[int]]:
@@ -232,6 +247,8 @@ def _train(  # noqa: PLR0913 - one training run's pieces
             else:
                 r = torch.stack([model.weights(source[k][0]) @ source[k][1] for k in step])
                 value = objectives.grade(settings.objective, r, settings.gamma)
+            if not torch.isfinite(value):  # skip a broken step rather than poison Adam
+                continue
             value.backward()
             if settings.clip:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), settings.clip)
@@ -380,7 +397,7 @@ def walk(
     """
     rng = np.random.default_rng(settings.seed)
     model, adam = _new_model(settings, months[0].x.shape[1], device, settings.seed)
-    data = [_tensors(m, device) for m in months]
+    data = _data(months, settings, device)
     known = [bool(np.isfinite(m.r).all()) for m in months]
     rows, sub = _subset_rows(months, data, subsets)
     pricing = _pricing(months, settings, device, subsets, stock_costs)
@@ -432,7 +449,8 @@ def walk(
         log.append({"date": month.date, "ret": ret, "long": float(w[w > 0].sum()),
                     "short": float(w[w < 0].sum()),
                     "largest": float(np.abs(w).max()) / gross if gross else None,
-                    "loss": float(torch.stack(losses).mean()), "m": m, "pace": pace,
+                    "loss": float(torch.stack(losses).mean()) if losses else math.nan,
+                    "m": m, "pace": pace,
                     "holdings": float(1 / (w**2).sum()) if settings.long_only and gross else None,
                     "seconds": time.perf_counter() - clock} | extra)  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model
