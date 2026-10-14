@@ -23,6 +23,11 @@ With ``long_only`` the weights are the softmax of the scores (positive, summing 
 invested, no shorts, no borrowing) and the loss is computed on them, so training sees only
 such portfolios (model.Optimizer ``long_only``).
 
+``size_cost`` instead keeps the paper's weights (w = Y lam) and charges that much per month per
+dollar the total weight is away from 1, kappa |sum w - 1|, inside the net return: with a large
+kappa (above any month's gain from more or less size) the portfolio is fully invested as an
+exact penalty, not a clamp. With a large ``short_hurdle`` it is long-only at size 1.
+
 With ``costs`` the loss uses the return net of each stock's spread on turnover (from the
 model's weights the month before) and borrow fee, plus ``short_hurdle`` a year per dollar
 short (``costs.net_return``); a large hurdle is long-only as an exact penalty. Training
@@ -71,6 +76,7 @@ class Config:
         short_hurdle: Extra yearly cost per dollar short in the loss.
         max_return: Training returns above this in size set to 0 (``None``: kept).
         long_only: Weights = softmax of the scores (module docs).
+        size_cost: Monthly cost per dollar the total weight is away from 1 (module docs).
     """
 
     name: str
@@ -92,6 +98,7 @@ class Config:
     short_hurdle: float = 0.0
     max_return: float | None = None
     long_only: bool = False
+    size_cost: float = 0.0
 
 
 def lr_at(config: Config, epoch: int) -> float:
@@ -132,7 +139,7 @@ def _prepare(
     if config.max_return:
         tensors[:window] = [(x, torch.where(r.abs() > config.max_return, 0.0, r))
                             for x, r in tensors[:window]]  # fmt: skip
-    if not (config.costs or config.short_hurdle > 0):
+    if not (config.costs or config.short_hurdle > 0 or config.size_cost > 0):
         return tensors, None, None
     if config.stocks:
         raise ValueError("costs need every stock (stocks=0)")
@@ -208,7 +215,7 @@ def fit(
             (spread, fee), spread_before = stock[k], stock[k - 1][0] if k > 0 else None
         net = cost_model.net_return(w, tensors[k][1], before, links[k], spread,
                                     fee + config.short_hurdle, spread_before)  # fmt: skip
-        return (1 - net) ** 2
+        return (1 - net + config.size_cost * (w.sum() - 1).abs()) ** 2
 
     rows = []
     for epoch in range(config.epochs):

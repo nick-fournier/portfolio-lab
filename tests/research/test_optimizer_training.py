@@ -330,3 +330,22 @@ def test_grid_long_only_trains_on_fully_invested_softmax_weights():
     assert curves["val_short_share"].to_list() == [0.0] * 3
     assert all(1 <= n <= 8 for n in curves["names"])
     assert all(0 < t <= 1 for t in curves["top_weight"])
+
+
+def test_grid_size_cost_holds_the_portfolio_near_one_dollar():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import grid  # noqa: PLC0415
+
+    rng = np.random.default_rng(15)
+    months = []
+    for k in range(20):
+        x = rng.uniform(-0.5, 0.5, (8, 3)).astype(np.float32)
+        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 8)).astype(np.float32)
+        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"), x, r))
+    base = dict(blocks=1, lr=1e-2, epochs=30, short_hurdle=50.0)
+    setups = [grid.Config("free", **base), grid.Config("one", size_cost=1.0, **base)]
+    curves = grid.grid(months, [16, 18], setups, window=12, validation=3, device="cpu")
+    last = curves.filter(pl.col("epoch") == 30).group_by("config").agg(pl.col("gross").mean())
+    gross = dict(last.rows())
+    assert abs(gross["one"] - 1) < abs(gross["free"] - 1)
+    assert gross["one"] == pytest.approx(1.0, abs=0.1)
