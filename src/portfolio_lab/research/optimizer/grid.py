@@ -34,6 +34,17 @@ short (``costs.net_return``); a large hurdle is long-only as an exact penalty. T
 months' returns above ``max_return`` in size are set to 0 (data errors), and a step whose loss
 is not finite is skipped.
 
+``objective="growth"`` replaces the paper's pricing loss with an investor's: maximize the
+average of U(1 + R_net) over the training months, U = log (Kelly) or, with ``gamma`` above 1,
+((1 + R)^(1 - gamma) - 1) / (1 - gamma). R_net is the month's return over the T-bill net of
+spreads on the dollars traded from h, last month's weights after their prices moved (cash earns
+the T-bill, 0 here), minus ``short_hurdle`` a year per dollar short and ``over_cost`` a month per
+dollar invested above the account: both exact penalties, so the book is long-only and at most
+fully invested. The model starts in cash (lam = 0) so log(1 + R) is defined from the first step.
+Each epoch also records ``val_growth`` (held-out months, before costs) and ``val_net_growth``
+(after costs), both as growth a year, exp(12 x mean log(1 + R)) - 1, plus ``val_cost`` (a
+year) and ``cash`` (1 - sum w on month t).
+
 Training loss L of a best-scaled portfolio equals 1 / (1 + S^2), S its monthly Sharpe, so a
 low training loss is an in-sample Sharpe, not a better model.
 """
@@ -77,6 +88,9 @@ class Config:
         max_return: Training returns above this in size set to 0 (``None``: kept).
         long_only: Weights = softmax of the scores (module docs).
         size_cost: Monthly cost per dollar the total weight is away from 1 (module docs).
+        objective: ``paper`` (1 - R)^2 or ``growth`` (module docs).
+        gamma: Caution for ``growth`` (1 = log, Kelly).
+        over_cost: Monthly cost per dollar invested above the account (``growth``).
     """
 
     name: str
@@ -99,6 +113,9 @@ class Config:
     max_return: float | None = None
     long_only: bool = False
     size_cost: float = 0.0
+    objective: str = "paper"
+    gamma: float = 1.0
+    over_cost: float = 0.0
 
 
 def lr_at(config: Config, epoch: int) -> float:
@@ -122,6 +139,24 @@ def _loss(w: torch.Tensor, r: torch.Tensor) -> torch.Tensor:
     return (1 - w @ r) ** 2
 
 
+def _utility(g: torch.Tensor, gamma: float) -> torch.Tensor:
+    """Growth score of wealth multiple ``g``: log at gamma 1, else constant relative risk aversion.
+
+    A month losing everything or more (``g`` <= 0) scores non-finite and its step is skipped.
+    """
+    return torch.log(g) if gamma == 1 else (g ** (1 - gamma) - 1) / (1 - gamma)
+
+
+def _drift(w: torch.Tensor, r: torch.Tensor) -> torch.Tensor:
+    """Weights after a month of returns ``r`` (cash earns 0 over the T-bill)."""
+    return w * (1 + r) / (1 + w @ r)
+
+
+def _growth(net: torch.Tensor) -> float:
+    """Monthly returns as growth a year, exp(12 x mean log(1 + R)) - 1."""
+    return float(torch.expm1(12 * torch.log1p(net).mean()))
+
+
 def _long(w: torch.Tensor) -> torch.Tensor:
     """The long side alone, scaled to $1 (zeros if nothing is long)."""
     pos = torch.relu(w)
@@ -139,7 +174,8 @@ def _prepare(
     if config.max_return:
         tensors[:window] = [(x, torch.where(r.abs() > config.max_return, 0.0, r))
                             for x, r in tensors[:window]]  # fmt: skip
-    if not (config.costs or config.short_hurdle > 0 or config.size_cost > 0):
+    priced = config.costs or config.short_hurdle > 0 or config.size_cost > 0
+    if not (priced or config.objective == "growth"):
         return tensors, None, None
     if config.stocks:
         raise ValueError("costs need every stock (stocks=0)")
@@ -168,6 +204,7 @@ def _measure(run, model: Optimizer, tensors: list, held: list[int], test_known: 
         gross = float(w.abs().sum())
         ok = test_known and gross > 0
         held_t = _long(w)
+        growth = _growth(val) if bool((val > -1).all()) else None
     sharpe = lambda v: float(v.mean() / v.std()) if len(held) > 1 else None  # noqa: E731
     return {"val_loss": float(((1 - val) ** 2).mean()), "val_sharpe": sharpe(val),
             "val_long_sharpe": sharpe(val_long),
@@ -176,7 +213,38 @@ def _measure(run, model: Optimizer, tensors: list, held: list[int], test_known: 
             "test_ret": float(w @ r_t) / gross * 2 if ok else None,
             "test_long_ret": float(_long(w) @ r_t) if ok else None,
             "names": float(1 / (held_t**2).sum()), "top_weight": float(held_t.max()),
+            "val_growth": growth, "cash": float(1 - w.sum()),
             "row_max": row_max, "gross": gross}  # fmt: skip
+
+
+def _new_model(config: Config, width: int, device: str, cash: bool) -> Optimizer:
+    """A fresh transformer for ``config``; with ``cash`` it starts holding nothing (lam = 0)."""
+    model = Optimizer("transformer", width, config.blocks, config.hidden,
+                      fast_attention=config.fast_attention, init=config.init,
+                      scaled_attention=config.scaled_attention).to(device)  # fmt: skip
+    if cash:
+        with torch.no_grad():
+            model.lam.zero_()
+    return model
+
+
+def _epoch(model: Optimizer, adam, step_loss, order: list[int], clip: float | None) -> list:
+    """One pass: one Adam step per month in ``order``; returns the losses of the steps taken.
+
+    A step whose loss is not finite is skipped rather than poison Adam.
+    """
+    losses = []
+    for k in order:
+        adam.zero_grad()
+        value = step_loss(int(k))
+        if not torch.isfinite(value):
+            continue
+        value.backward()
+        if clip:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+        adam.step()
+        losses.append(value.detach())
+    return losses
 
 
 def fit(
@@ -190,13 +258,14 @@ def fit(
     torch.set_float32_matmul_precision("high" if config.tf32 else "highest")
     torch.manual_seed(config.seed)
     rng = np.random.default_rng(config.seed)
+    if config.objective not in {"paper", "growth"}:
+        raise ValueError(f"objective must be paper or growth, not {config.objective!r}")
+    growth = config.objective == "growth"
     tensors, links, stock = _prepare(months, end, config, window, device, stock_costs, rng)
     known = [bool(torch.isfinite(r).all()) for _, r in tensors]
     train = [k for k in range(window - validation) if known[k]]
     held = [k for k in range(window - validation, window) if known[k]]
-    model = Optimizer("transformer", tensors[0][0].shape[1], config.blocks, config.hidden,
-                      fast_attention=config.fast_attention, init=config.init,
-                      scaled_attention=config.scaled_attention).to(device)  # fmt: skip
+    model = _new_model(config, tensors[0][0].shape[1], device, cash=growth)
     scores = torch.compile(model, dynamic=True) if config.compile else model
 
     def run(x: torch.Tensor) -> torch.Tensor:
@@ -204,42 +273,52 @@ def fit(
 
     adam = torch.optim.Adam(model.parameters(), lr=config.lr)
 
-    def step_loss(k: int) -> torch.Tensor:
-        w = run(tensors[k][0])
-        if links is None:
-            return _loss(w, tensors[k][1])
+    def net_of(k: int, w: torch.Tensor) -> torch.Tensor:
+        """Month k's return net of spreads and penalties, trading from last month's book."""
         with torch.no_grad():
             before = run(tensors[k - 1][0]) if k > 0 else None
+            if growth and before is not None:
+                before = _drift(before, tensors[k - 1][1])
         spread, fee, spread_before = 0.0, 0.0, None
         if stock is not None:
             (spread, fee), spread_before = stock[k], stock[k - 1][0] if k > 0 else None
         net = cost_model.net_return(w, tensors[k][1], before, links[k], spread,
                                     fee + config.short_hurdle, spread_before)  # fmt: skip
-        return (1 - net + config.size_cost * (w.sum() - 1).abs()) ** 2
+        return net - config.over_cost * torch.relu(w.sum() - 1)
+
+    def step_loss(k: int) -> torch.Tensor:
+        w = run(tensors[k][0])
+        if links is None:
+            return _loss(w, tensors[k][1])
+        if growth:
+            return -_utility(1 + net_of(k, w), config.gamma)
+        return (1 - net_of(k, w) + config.size_cost * (w.sum() - 1).abs()) ** 2
+
+    def held_net() -> dict:
+        """Held-out months after costs (growth objective only)."""
+        if not (growth and held):
+            return {}
+        with torch.no_grad():
+            ws = [run(tensors[k][0]) for k in held]
+            net = torch.stack([net_of(k, w) for k, w in zip(held, ws, strict=True)])
+            gross = torch.stack([w @ tensors[k][1] for k, w in zip(held, ws, strict=True)])
+        ok = bool((net > -1).all())
+        return {"val_net_growth": _growth(net) if ok else None,
+                "val_cost": float(12 * (gross - net).mean())}  # fmt: skip
 
     rows = []
     for epoch in range(config.epochs):
         for group in adam.param_groups:
             group["lr"] = lr_at(config, epoch)
         clock = time.perf_counter()
-        losses = []
-        for k in rng.permutation(train):
-            adam.zero_grad()
-            value = step_loss(int(k))
-            if not torch.isfinite(value):  # skip a broken step rather than poison Adam
-                continue
-            value.backward()
-            if config.clip:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip)
-            adam.step()
-            losses.append(value.detach())
+        losses = _epoch(model, adam, step_loss, rng.permutation(train), config.clip)
         if device == "cuda":
             torch.cuda.synchronize()
         seconds = time.perf_counter() - clock
         rows.append({"config": config.name, "end": months[end].date, "epoch": epoch + 1,
                      "lr": lr_at(config, epoch),
                      "train_loss": float(torch.stack(losses).mean()) if losses else math.nan,
-                     **_measure(run, model, tensors, held, known[window]),
+                     **_measure(run, model, tensors, held, known[window]), **held_net(),
                      "seconds": seconds})  # fmt: skip
         if not math.isfinite(rows[-1]["train_loss"]):
             break

@@ -349,3 +349,28 @@ def test_grid_size_cost_holds_the_portfolio_near_one_dollar():
     gross = dict(last.rows())
     assert abs(gross["one"] - 1) < abs(gross["free"] - 1)
     assert gross["one"] == pytest.approx(1.0, abs=0.1)
+
+
+def test_grid_growth_objective_starts_in_cash_and_stays_long_and_at_most_invested():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import grid  # noqa: PLC0415
+
+    rng = np.random.default_rng(16)
+    months = []
+    for k in range(20):
+        x = rng.uniform(-0.5, 0.5, (8, 3)).astype(np.float32)
+        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 8)).astype(np.float32)
+        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"), x, r))
+    stock = [(np.full(8, 0.002, np.float32), np.zeros(8, np.float32), np.ones(8, np.float32))] * 20
+    config = grid.Config("g", blocks=1, lr=1e-2, epochs=20, costs=True, objective="growth",
+                         short_hurdle=50.0, over_cost=5.0)  # fmt: skip
+    curves = grid.grid(months, [16, 18], [config], window=12, validation=3, device="cpu",
+                       stock_costs=stock)  # fmt: skip
+    last = curves.filter(pl.col("epoch") == 20)
+    assert {"val_growth", "val_net_growth", "val_cost", "cash"} <= set(curves.columns)
+    assert all(g > 0.05 for g in last["gross"])  # left cash for the stocks
+    assert all(s < 0.05 for s in last["val_short_share"])
+    assert all(c > -0.1 for c in last["cash"])  # at most ~fully invested
+    assert all(n <= g for n, g in zip(last["val_net_growth"], last["val_growth"], strict=True))
+    with pytest.raises(ValueError, match="objective"):
+        grid.fit(months, 16, grid.Config("x", objective="kelly"), window=12, device="cpu")
