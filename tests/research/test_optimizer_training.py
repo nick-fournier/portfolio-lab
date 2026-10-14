@@ -312,3 +312,21 @@ def test_max_return_zeroes_garbage_training_returns_only():
     ((_, r),) = _data([m], Settings("linear"), "cpu")
     assert float(r[0]) == 948.0
     assert torch.is_tensor(r)
+
+
+def test_grid_long_only_trains_on_fully_invested_softmax_weights():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import grid  # noqa: PLC0415
+
+    rng = np.random.default_rng(14)
+    months = []
+    for k in range(20):
+        x = rng.uniform(-0.5, 0.5, (8, 3)).astype(np.float32)
+        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 8)).astype(np.float32)
+        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"), x, r))
+    config = grid.Config("long", blocks=1, lr=1e-2, epochs=3, long_only=True)
+    curves = grid.grid(months, [16], [config], window=12, validation=3, device="cpu")
+    assert curves["gross"].to_list() == pytest.approx([1.0] * 3)
+    assert curves["val_short_share"].to_list() == [0.0] * 3
+    assert all(1 <= n <= 8 for n in curves["names"])
+    assert all(0 < t <= 1 for t in curves["top_weight"])

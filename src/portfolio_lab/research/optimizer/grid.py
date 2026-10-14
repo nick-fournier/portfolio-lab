@@ -16,6 +16,12 @@ with the paper's loss, one Adam step per month, months shuffled each pass, excep
 - ``val_long_sharpe``: the held-out months' monthly Sharpe of the long side alone (positive
   weights scaled to 1); ``val_short_share``: shorts' share of gross on those months;
   ``test_long_ret``: month t's long side alone at 1x.
+- ``names``: month t's effective names held, 1 / sum of squared weights (long side at 1x);
+  ``top_weight``: its largest weight.
+
+With ``long_only`` the weights are the softmax of the scores (positive, summing to 1: fully
+invested, no shorts, no borrowing) and the loss is computed on them, so training sees only
+such portfolios (model.Optimizer ``long_only``).
 
 With ``costs`` the loss uses the return net of each stock's spread on turnover (from the
 model's weights the month before) and borrow fee, plus ``short_hurdle`` a year per dollar
@@ -64,6 +70,7 @@ class Config:
         costs: Per-stock costs in the loss (module docs; needs the grid's ``stock_costs``).
         short_hurdle: Extra yearly cost per dollar short in the loss.
         max_return: Training returns above this in size set to 0 (``None``: kept).
+        long_only: Weights = softmax of the scores (module docs).
     """
 
     name: str
@@ -84,6 +91,7 @@ class Config:
     costs: bool = False
     short_hurdle: float = 0.0
     max_return: float | None = None
+    long_only: bool = False
 
 
 def lr_at(config: Config, epoch: int) -> float:
@@ -152,6 +160,7 @@ def _measure(run, model: Optimizer, tensors: list, held: list[int], test_known: 
         w = run(x_t)
         gross = float(w.abs().sum())
         ok = test_known and gross > 0
+        held_t = _long(w)
     sharpe = lambda v: float(v.mean() / v.std()) if len(held) > 1 else None  # noqa: E731
     return {"val_loss": float(((1 - val) ** 2).mean()), "val_sharpe": sharpe(val),
             "val_long_sharpe": sharpe(val_long),
@@ -159,6 +168,7 @@ def _measure(run, model: Optimizer, tensors: list, held: list[int], test_known: 
                                                   for v in ws]).mean()),
             "test_ret": float(w @ r_t) / gross * 2 if ok else None,
             "test_long_ret": float(_long(w) @ r_t) if ok else None,
+            "names": float(1 / (held_t**2).sum()), "top_weight": float(held_t.max()),
             "row_max": row_max, "gross": gross}  # fmt: skip
 
 
@@ -180,7 +190,11 @@ def fit(
     model = Optimizer("transformer", tensors[0][0].shape[1], config.blocks, config.hidden,
                       fast_attention=config.fast_attention, init=config.init,
                       scaled_attention=config.scaled_attention).to(device)  # fmt: skip
-    run = torch.compile(model, dynamic=True) if config.compile else model
+    scores = torch.compile(model, dynamic=True) if config.compile else model
+
+    def run(x: torch.Tensor) -> torch.Tensor:
+        return torch.softmax(scores(x), dim=0) if config.long_only else scores(x)
+
     adam = torch.optim.Adam(model.parameters(), lr=config.lr)
 
     def step_loss(k: int) -> torch.Tensor:
