@@ -245,3 +245,27 @@ def test_walk_cosine_schedule_and_warm_rate():
                               warm_epochs=2, start=date(2000, 1, 1), schedule="cosine",
                               warm_lr=1e-3))  # fmt: skip
     assert log.height == 3 and weights["weight"].is_finite().all()
+
+
+def test_seed_average_leaves_out_a_dud_seed_month_and_saves_the_average(tmp_path):
+    from portfolio_lab.research.optimizer.cli import _average  # noqa: PLC0415
+
+    d1, d2 = date(2020, 1, 31), date(2020, 2, 29)
+    for name, loss, w in (
+        ("seed-0", [0.5, 0.5], [2.0, -2.0]),
+        ("seed-1", [0.4, float("nan")], [1.0, 3.0]),
+    ):
+        run = tmp_path / name
+        run.mkdir()
+        pl.DataFrame({"date": [d1, d2], "ret": [0.1, 0.2], "long": [1.0, 1.0], "short": [-1.0, 0.0],
+                      "loss": loss}).write_parquet(run / "log.parquet")  # fmt: skip
+        weights = pl.DataFrame({"date": [d1, d1, d2, d2], "symbol": ["A", "B", "A", "B"],
+                                "weight": [w[0], w[1], w[0], w[1]]})  # fmt: skip
+        weights.write_parquet(run / "weights.parquet")
+    line = _average([tmp_path / "seed-0", tmp_path / "seed-1"])
+    assert "1 dud seed-months" in line
+    avg = pl.read_parquet(tmp_path / "weights.parquet").sort("date", "symbol")
+    jan = avg.filter(pl.col("date") == d1)["weight"].to_list()
+    feb = avg.filter(pl.col("date") == d2)["weight"].to_list()
+    assert jan == pytest.approx([(0.5 + 0.25) / 2, (-0.5 + 0.75) / 2])  # both seeds at $1 gross
+    assert feb == pytest.approx([0.5, -0.5])  # seed-1's February is a dud: seed-0 alone
