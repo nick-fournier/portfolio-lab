@@ -40,7 +40,10 @@ average of U(1 + R_net) over the training months, U = log (Kelly) or, with ``gam
 spreads on the dollars traded from h, last month's weights after their prices moved (cash earns
 the T-bill, 0 here), minus ``short_hurdle`` a year per dollar short and ``over_cost`` a month per
 dollar invested above the account: both exact penalties, so the book is long-only and at most
-fully invested. The model starts in cash (lam = 0) so log(1 + R) is defined from the first step.
+fully invested. The model starts in cash (lam = 0) so log(1 + R) is defined from the first step,
+and its weights are the scores divided by the month's number of stocks, w = Y lam / N (the
+paper's linear portfolio carries the same 1 / N): without it one Adam step from cash moves the
+total weight by ~N times the step and the first months lose more than everything.
 Each epoch also records ``val_growth`` (held-out months, before costs) and ``val_net_growth``
 (after costs), both as growth a year, exp(12 x mean log(1 + R)) - 1, plus ``val_cost`` (a
 year) and ``cash`` (1 - sum w on month t).
@@ -269,7 +272,9 @@ def fit(
     scores = torch.compile(model, dynamic=True) if config.compile else model
 
     def run(x: torch.Tensor) -> torch.Tensor:
-        return torch.softmax(scores(x), dim=0) if config.long_only else scores(x)
+        if config.long_only:
+            return torch.softmax(scores(x), dim=0)
+        return scores(x) / len(x) if growth else scores(x)
 
     adam = torch.optim.Adam(model.parameters(), lr=config.lr)
 
