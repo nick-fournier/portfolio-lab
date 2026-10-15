@@ -19,6 +19,8 @@ import typer
 from portfolio_lab.core.config import get_settings
 
 optimizer_app = typer.Typer(help="Class 3 optimizer track (research).")
+#: The volatility trait the optimism log buckets by (a year of idiosyncratic volatility).
+VOL_TRAIT = "ivol_capm_252d"
 
 
 def _sharpe(monthly: np.ndarray) -> float:
@@ -60,6 +62,11 @@ def _walk_one(table: Path, out: Path, settings, device: str, threads: int, preci
     torch.set_num_threads(threads)
     torch.set_float32_matmul_precision(precision)
     months = [m for m in _months(table, inputs) if end is None or m.date <= end]
+    if settings.measure_optimism and settings.vol_column is None:
+        from portfolio_lab.research.optimizer import data  # noqa: PLC0415
+
+        names = data.inputs(pl.read_parquet(table, n_rows=1000), inputs)
+        settings = replace(settings, vol_column=names.index(VOL_TRAIT))
     stock = None
     if settings.costs:
         from portfolio_lab.research.optimizer import costs  # noqa: PLC0415

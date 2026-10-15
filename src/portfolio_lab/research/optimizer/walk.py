@@ -80,8 +80,10 @@ class Settings:
         cost_scale: Costs in the training loss are charged at this multiple (held-out scoring
             and the walk's own measures use the real costs): in-sample returns run about twice
             what the model earns out of sample, so at 1x costs look half as large as they are.
-        measure_optimism: Log in-sample and out-of-sample return per dollar by spread and
-            borrow fee bucket each month (research.optimizer.optimism; needs ``costs``).
+        measure_optimism: Log in-sample and out-of-sample return per dollar by spread, borrow
+            fee, position size and volatility bucket each month (research.optimizer.optimism;
+            needs ``costs``).
+        vol_column: The inputs' column of the ranked volatility trait for those buckets.
         holdings_input: Feed each stock's holding and spread to the model (module docs).
         borrow_input: Also feed each stock's borrow fee (needs ``holdings_input``).
         stop: Early stopping each month (module docs).
@@ -106,6 +108,7 @@ class Settings:
     short_hurdle: float = 0.0
     cost_scale: float = 1.0
     measure_optimism: bool = False
+    vol_column: int | None = None
     schedule: str = "flat"
     lr_min: float = 1e-5
     warm_lr: float | None = None
@@ -347,8 +350,10 @@ def walk(
         with average.swapped() if average is not None else contextlib.nullcontext():
             w = holdings.pick(model, data, pricing, last, t)
             if cuts is not None and known[t]:  # the traded model, before the book takes w
-                extra = {"opt_in": optimism.measure(model, data, pricing, train, cuts),
-                         "opt_out": optimism.test_month(w, data, pricing, t, cuts)}  # fmt: skip
+                vol = settings.vol_column
+                extra = {"opt_in": optimism.measure(model, data, pricing, train, cuts, vol),
+                         "opt_out": optimism.test_month(w, data, pricing, t, cuts,
+                                                        vol)}  # fmt: skip
         last = holdings.remember(pricing, w, data, t)
         gross = float(np.abs(w).sum())  # 0 only if no stock is held: all cash
         weights.append(pl.DataFrame({"date": [month.date] * len(w), "symbol": month.symbols,
