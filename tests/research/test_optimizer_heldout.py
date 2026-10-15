@@ -94,3 +94,36 @@ def test_winsor_pulls_training_returns_in_to_each_months_quantiles_and_keeps_the
     unknown = [data.Month(date(2000, 1, 31), ["A", "B"], np.zeros((2, 1), np.float32),
                           np.array([np.nan, 5.0], np.float32))]  # fmt: skip
     assert torch.isnan(_data(unknown, Settings("linear", winsor=0.01), "cpu")[0][0][1][0])
+
+
+def test_clipped_runs_score_held_out_months_on_their_real_returns():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import stopping  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import (  # noqa: PLC0415
+        Settings,
+        _data,
+        _held_loss,
+        _streams,
+        walk,
+    )  # fmt: skip
+
+    rng = np.random.default_rng(5)
+    months = [
+        data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"),
+                   rng.uniform(-0.5, 0.5, (8, 2)).astype(np.float32),
+                   rng.normal(0.01, 0.3, 8).astype(np.float32))
+        for k in range(30)
+    ]  # fmt: skip
+    day = months[25].date
+    s = Settings("linear", window=20, first_epochs=1, start=day, holdout=6, cold=True,
+                 watch=True, scatter=True, winsor=0.2, only=(day,))  # fmt: skip
+    _, log, model = walk(months, s)
+    clipped, real = _data(months, s, "cpu")
+    _, hold_rng = _streams(s, day)
+    _, held = stopping.held_months(list(range(5, 25)), 6, hold_rng, scatter=True)
+    assert log["held_curve"][0].to_list() == pytest.approx(
+        [_held_loss(model, real, None, s, held)], rel=1e-5
+    )
+    assert _held_loss(model, clipped, None, s, held) != pytest.approx(
+        _held_loss(model, real, None, s, held), rel=1e-3
+    )

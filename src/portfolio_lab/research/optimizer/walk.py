@@ -110,8 +110,8 @@ class Settings:
         winsor: Training months' returns are pulled in to their month's ``winsor`` and
             1 - ``winsor`` quantiles (0.01: the 1st and 99th percentiles; 0: off). The paper
             does not clip; our returns carry data errors and lottery outcomes that a book many
-            times its capital bets on, and blow training up (bench1). The test month's own
-            return, its per-pass loss and its optimism readings stay real.
+            times its capital bets on, and blow training up (bench1). Everything that is not
+            a training step stays real: held-out and test scores, trades, optimism readings.
         cost_scale: Costs in the training loss are charged at this multiple (held-out scoring
             and the walk's own measures use the real costs): in-sample returns run about twice
             what the model earns out of sample, so at 1x costs look half as large as they are.
@@ -342,7 +342,8 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     ``epochs`` passes (with ``settings.stop``: at most), the rate following
     ``settings.schedule`` from ``start_lr`` over them. With a book (``holdings_input``) the
     ``span`` months not in it get the model's weights first, in month order. The held-out
-    months are drawn from ``hold_rng``; the test month is scored on its real return (``raw``).
+    months are drawn from ``hold_rng``; they and the test month are scored on their real
+    returns (``raw``), training alone sees ``data``'s clipped ones.
     """
     if pricing is not None:
         holdings.fill(model, data, pricing, span)
@@ -351,10 +352,10 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     tests: list[float] = []
 
     def score() -> float:
-        _roll(model, data, pricing, block)
+        _roll(model, raw, pricing, block)
         if test >= 0:
             tests.append(_held_loss(model, raw, pricing, settings, [test]))
-        return _held_loss(model, data, pricing, settings, block)
+        return _held_loss(model, raw, pricing, settings, block)
 
     norms: list[torch.Tensor] = []
 
@@ -475,13 +476,13 @@ def walk(
         with average.swapped() if average is not None else contextlib.nullcontext():
             if traded != t - 1 and pricing is not None and pricing.book is not None:
                 last = pricing.book.get(t - 1)  # last month not traded: the model's own weights
-            w = holdings.pick(model, data, pricing, last, t)
+            w = holdings.pick(model, raw, pricing, last, t)
             if cuts is not None and known[t]:  # the traded model, before the book takes w
                 vol = settings.vol_column
-                extra = {"opt_in": optimism.measure(model, data, pricing, train, cuts, vol),
+                extra = {"opt_in": optimism.measure(model, raw, pricing, train, cuts, vol),
                          "opt_out": optimism.test_month(w, raw, pricing, t, cuts,
                                                         vol)}  # fmt: skip
-        last, traded = holdings.remember(pricing, w, data, t), t
+        last, traded = holdings.remember(pricing, w, raw, t), t
         gross = float(np.abs(w).sum())  # 0 only if no stock is held: all cash
         weights.append(pl.DataFrame({"date": [month.date] * len(w), "symbol": month.symbols,
                                      "weight": w}))  # fmt: skip
