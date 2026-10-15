@@ -38,6 +38,10 @@ MARKET = "SPY"
 #: Actions after which a dead stock exits at its last price rather than as a delisting.
 ACQUIRED = ("acquisitionby", "mergerfrom", "acquisitioncash", "acquisitionstock",
             "acquisitionelectcash", "acquisitionelectstock", "spacmerger")  # fmt: skip
+#: Days before its last day an acquisition action may fall and still be the stock's exit.
+BOUGHT_DAYS = 90
+#: SIC of a blank check (SPAC): one that dies without a merger has returned its trust.
+BLANK_CHECK = 6770
 CHUNKS = 6
 
 
@@ -88,11 +92,20 @@ def build(root: Path) -> dict:
 
 
 def _fell_to_otc(root: Path, securities: pl.DataFrame) -> list[str]:
-    """Dead securities not bought out: they exit with the backtest's delisting return."""
-    actions = reader.read(root, "actions")
-    bought = set(actions.filter(pl.col("action").is_in(ACQUIRED))["sid"])
-    dead = securities.filter(pl.col("last").is_not_null())["sid"]
-    return [str(s) for s in dead if s not in bought]
+    """Dead securities that failed: they exit with the backtest's delisting return.
+
+    Not failures: a stock bought out (an :data:`ACQUIRED` action within
+    :data:`BOUGHT_DAYS` of its last day; a de-SPAC's merger years earlier does not count),
+    and a blank check (SIC :data:`BLANK_CHECK`) that closed by returning its trust.
+    """
+    actions = reader.read(root, "actions").filter(pl.col("action").is_in(ACQUIRED))
+    trust = (pl.col("sic") == BLANK_CHECK).fill_null(False)
+    dead = securities.filter(pl.col("last").is_not_null() & ~trust)
+    bought = set(
+        dead.join(actions, on="sid")
+        .filter((pl.col("last") - pl.col("date")).dt.total_days() <= BOUGHT_DAYS)["sid"]
+    )  # fmt: skip
+    return [str(s) for s in dead["sid"] if s not in bought]
 
 
 def _names(ids: ids_.Ids, sids: list[int]) -> dict[str, str]:

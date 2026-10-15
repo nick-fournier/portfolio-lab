@@ -315,3 +315,16 @@ def test_a_name_changed_on_its_first_day_is_dropped_and_the_current_name_shown()
     ids = ids_.from_sharadar(tickers, actions)
     assert ids.tickers["ticker"].to_list() == ["SNDK"]
     assert daily._names(ids, [200]) == {"200": "SNDK"}
+
+
+def test_only_failures_take_the_delisting_return(tmp_path):
+    securities = pl.DataFrame(
+        {"sid": [1, 2, 3, 4, 5], "sic": [2834, 3571, 6770, None, 2834],
+         "last": [date(2023, 5, 1), date(2023, 5, 1), date(2023, 5, 1), date(2023, 5, 1), None]}
+    )  # fmt: skip
+    reader.write(tmp_path, "sharadar", "actions", pl.DataFrame(
+        {"sid": [1, 2], "date": [date(2023, 4, 20), date(2021, 2, 1)],
+         "action": ["acquisitioncash", "spacmerger"], "value": [None, None]}))  # fmt: skip
+    # 1 bought out; 2 a de-SPAC that failed two years after its merger; 3 a blank check that
+    # returned its trust; 4 a failure; 5 still alive
+    assert daily._fell_to_otc(tmp_path, securities) == ["2", "4"]
