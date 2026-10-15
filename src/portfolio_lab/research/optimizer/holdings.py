@@ -3,9 +3,12 @@
 The grid's ``carry`` and ``holdings_input`` settings (research.optimizer.grid module docs) keep a
 table of each month's book. :func:`holding` turns last month's book into this month's holding
 column, :func:`with_holdings` appends it and the spread to the traits, and :func:`carried`
-scores the held-out months trading month to month from the carried book.
+scores the held-out months trading month to month from the carried book. The walk's
+``holdings_input`` (research.optimizer.walk) uses :func:`inputs`, :func:`fill`, :func:`pick`
+and :func:`remember` with its pricing (``links``, ``stock`` and ``book``).
 """
 
+import numpy as np
 import torch
 
 from portfolio_lab.research.optimizer import costs as cost_model
@@ -67,3 +70,36 @@ def carried(run, tensors: list, held: list[int], links: list, stock: list | None
             "val_net_ret": float(24 * net.mean()), "val_gross_ret": float(24 * g.mean()),
             "val_spread": float(24 * sp.mean()), "val_borrow": float(24 * bo.mean()),
             "val_turnover": float(12 * tr.mean())}  # fmt: skip
+
+
+def inputs(source: list, pricing, book: dict | None, k: int) -> torch.Tensor:
+    """Month k's model inputs: its traits, plus holding and spread columns with a ``book``."""
+    if pricing is None or book is None:
+        return source[k][0]
+    return with_holdings(source, pricing.links, pricing.stock, book, k)
+
+
+def fill(weights, source: list, pricing, span: range) -> None:
+    """Months in ``span`` not yet in the pricing's book get ``weights``' output, in month order."""
+    if pricing.book is None:
+        return
+    with torch.no_grad():
+        for k in span:
+            if k not in pricing.book:
+                pricing.book[k] = weights(inputs(source, pricing, pricing.book, k))
+
+
+def pick(weights, data: list, pricing, last: torch.Tensor | None, t: int) -> np.ndarray:
+    """The test month's weights; with a book, its inputs carry the real holdings ``last``."""
+    with torch.no_grad():
+        real = None if pricing is None or pricing.book is None else \
+            ({} if last is None else {t - 1: last})  # fmt: skip
+        return weights(inputs(data, pricing, real, t)).cpu().numpy().astype(np.float64)
+
+
+def remember(pricing, w: np.ndarray, data: list, t: int) -> torch.Tensor | None:
+    """Store the test month's real holdings in the book; returns them (``None`` without one)."""
+    if pricing is None or pricing.book is None:
+        return None
+    pricing.book[t] = torch.from_numpy(w).to(data[t][0])
+    return pricing.book[t]

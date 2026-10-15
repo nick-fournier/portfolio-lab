@@ -20,6 +20,12 @@ portfolio picked from the subset alone, its rows fed to the model without the ot
 ``"only"``, on the subset's rows alone in every training month; ``"finetune"``, on every
 candidate, then a copy given ``finetune_epochs`` more passes over the subset's rows (fresh
 Adam, its own shuffle, so the main model is unchanged).
+
+With ``holdings_input`` (2026-10-15; needs per-stock ``costs``) each stock's row also gets its
+holding and spread (research.optimizer.holdings): in training, from a book table of each
+month's weights (filled in month order the first time a month enters the window, refreshed at
+every step, kept from month to month); for the test month, from the walk's real holdings of
+the month before after its returns.
 """
 
 import copy
@@ -33,7 +39,7 @@ import numpy as np
 import polars as pl
 import torch
 
-from portfolio_lab.research.optimizer import costs, objectives
+from portfolio_lab.research.optimizer import costs, holdings, objectives
 from portfolio_lab.research.optimizer.data import Month
 from portfolio_lab.research.optimizer.model import Optimizer, loss
 
@@ -101,6 +107,7 @@ class Settings:
             with gradients); in the walk, the real holdings carry forward. Paper loss only.
         softplus: Long-only weights = softplus(score) / N, size free (model.Optimizer); saved as
             the mix like ``scale``, the total logged as m.
+        holdings_input: Feed each stock's holding and spread to the model (module docs).
     """
 
     model: str
@@ -140,6 +147,7 @@ class Settings:
     warm_lr: float | None = None
     compile: bool = False
     max_return: float | None = None
+    holdings_input: bool = False
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -178,11 +186,13 @@ class Pricing:
         links: ``costs.links`` of the months.
         stock: Each month's per-stock (trade cost, borrow fee), or ``None`` for flat rates.
         shortable: Each month's per-stock flag: may be held short (``None``: all may).
+        book: The training book table with ``holdings_input`` (module docs), else ``None``.
     """
 
     links: list[costs.Link | None]
     stock: list[Pair] | None
     shortable: list[torch.Tensor] | None
+    book: dict[int, torch.Tensor] | None = None
 
 
 def _allow(w: torch.Tensor, shortable: torch.Tensor | None) -> torch.Tensor:
@@ -201,6 +211,7 @@ def _train(  # noqa: PLR0913 - one training run's pieces
     pricing: Pricing | None = None,
     *,
     start_lr: float | None = None,
+    fill: range | None = None,
 ) -> list[torch.Tensor]:
     """``epochs`` passes over the ``train`` months of ``source``; the last pass's losses.
 
@@ -210,8 +221,12 @@ def _train(  # noqa: PLR0913 - one training run's pieces
     With ``pricing`` the loss uses the return net of costs, the weights the month before
     computed by the same model (without a gradient, unless partial trading blends them into
     the holdings); with per-stock costs each stock pays its own rates, and stocks that may not
-    be shorted are clamped at 0 or above.
+    be shorted are clamped at 0 or above. With the pricing's book (``holdings_input``) each
+    month's inputs carry the book's month before, and each step stores its month's weights
+    there; the ``fill`` months not in the book get the model's weights first, in month order.
     """
+    if pricing is not None and fill is not None:
+        holdings.fill(model.weights, source, pricing, fill)
     losses = []
     for epoch in range(epochs):
         for group in adam.param_groups:
@@ -220,28 +235,7 @@ def _train(  # noqa: PLR0913 - one training run's pieces
         for step in _steps(train, settings, rng):
             adam.zero_grad()
             if pricing is not None:
-                k = step[0]
-                mask = pricing.shortable or [None] * len(source)
-                w = _allow(model.weights(source[k][0]), mask[k])
-                if model.pace_logit is not None and k > 0:  # holdings: part way from before
-                    before = _allow(model.weights(source[k - 1][0]), mask[k - 1])
-                    w = (1 - model.pace()) * costs.carry(
-                        before, pricing.links[k]
-                    ) + model.pace() * w
-                    w = _allow(w, mask[k])
-                else:
-                    with torch.no_grad():
-                        before = (_allow(model.weights(source[k - 1][0]), mask[k - 1])
-                                  if k > 0 else None)  # fmt: skip
-                spread, fee, spread_before = settings.spread, settings.short_fee, None
-                if pricing.stock is not None:
-                    (spread, fee), spread_before = (
-                        pricing.stock[k],
-                        (pricing.stock[k - 1][0] if k > 0 else None),
-                    )
-                net = costs.net_return(w, source[k][1], before, pricing.links[k], spread,
-                                       fee + settings.short_hurdle, spread_before)  # fmt: skip
-                value = (1 - net) ** 2
+                value = _priced_loss(model, source, pricing, settings, step[0])
             elif settings.objective is None:
                 value = loss(model, *source[step[0]])
             else:
@@ -255,6 +249,30 @@ def _train(  # noqa: PLR0913 - one training run's pieces
             adam.step()
             losses.append(value.detach())
     return losses
+
+
+def _priced_loss(model: Optimizer, source: list, pricing: Pricing, settings: Settings,
+                 k: int) -> torch.Tensor:  # fmt: skip
+    """Month k's paper loss on its return net of costs (:func:`_train`)."""
+    mask = pricing.shortable or [None] * len(source)
+    w = _allow(model.weights(holdings.inputs(source, pricing, pricing.book, k)), mask[k])
+    if model.pace_logit is not None and k > 0:  # holdings: part way from before
+        before = _allow(model.weights(source[k - 1][0]), mask[k - 1])
+        w = _allow((1 - model.pace()) * costs.carry(before, pricing.links[k])
+                   + model.pace() * w, mask[k])  # fmt: skip
+    else:
+        with torch.no_grad():
+            x = holdings.inputs(source, pricing, pricing.book, k - 1) if k > 0 else None
+            before = _allow(model.weights(x), mask[k - 1]) if k > 0 else None
+    if pricing.book is not None:
+        pricing.book[k] = w.detach()
+    spread, fee, spread_before = settings.spread, settings.short_fee, None
+    if pricing.stock is not None:
+        spread_before = pricing.stock[k - 1][0] if k > 0 else None
+        spread, fee = pricing.stock[k]
+    net = costs.net_return(w, source[k][1], before, pricing.links[k], spread,
+                           fee + settings.short_hurdle, spread_before)  # fmt: skip
+    return (1 - net) ** 2
 
 
 def _subset_rows(
@@ -282,6 +300,8 @@ def _pricing(
     """
     if settings.subset_train and subsets is None:
         raise ValueError("subset_train needs subsets")
+    if settings.holdings_input and (not settings.costs or settings.partial):
+        raise ValueError("holdings_input needs per-stock costs and no partial trading")
     if settings.every > 1 and not settings.fresh:
         raise ValueError("every > 1 needs fresh")
     shorts = settings.short_hurdle > 0 or settings.short_min_easy is not None or settings.no_shorts
@@ -299,7 +319,8 @@ def _pricing(
     if settings.short_min_easy is not None:
         shortable = [torch.from_numpy(c[2] >= settings.short_min_easy).to(device)
                      for c in stock_costs]  # fmt: skip
-    return Pricing(costs.links(months, device), stock, shortable)
+    book = {} if settings.holdings_input else None
+    return Pricing(costs.links(months, device), stock, shortable, book)
 
 
 def _hold(
@@ -347,9 +368,13 @@ def _start_lr(settings: Settings, trained: bool) -> float:
 def _new_model(
     settings: Settings, width: int, device: str, seed: int, month: int = 0
 ) -> tuple[Optimizer, torch.optim.Optimizer]:
-    """A freshly initialized model and its Adam (seeded by ``seed``, and ``month`` if any)."""
+    """A freshly initialized model and its Adam (seeded by ``seed``, and ``month`` if any).
+
+    ``width``: the traits; ``holdings_input`` adds its two columns.
+    """
     torch.manual_seed(seed if month == 0 else seed * 100_003 + month)
-    model = Optimizer(settings.model, width, settings.blocks, settings.hidden,
+    model = Optimizer(settings.model, width + 2 * settings.holdings_input,
+                      settings.blocks, settings.hidden,
                       settings.long_only, settings.fast_attention, settings.scale,
                       settings.cap, settings.names, settings.softplus,
                       partial=settings.partial,
@@ -402,7 +427,7 @@ def walk(
     rows, sub = _subset_rows(months, data, subsets)
     pricing = _pricing(months, settings, device, subsets, stock_costs)
     tune_rng = np.random.default_rng(settings.seed + 1)
-    weights, log, trained, held, tested = [], [], False, None, -1
+    weights, log, trained, held, tested, last = [], [], False, None, -1, None
     for t, month in enumerate(months):
         lo = 0 if settings.window is None else t - settings.window
         if month.date < settings.start or lo < 0:
@@ -418,11 +443,11 @@ def walk(
         epochs = settings.warm_epochs if trained and not settings.fresh else settings.first_epochs
         fit = [k for k in train if source[k] is not None]
         losses = _train(model, adam, source, fit, epochs, settings, rng, pricing,
-                        start_lr=_start_lr(settings, trained))  # fmt: skip
+                        start_lr=_start_lr(settings, trained), fill=range(lo, t))  # fmt: skip
         trained = True
-        with torch.no_grad():
-            w = model.weights(data[t][0]).cpu().numpy().astype(np.float64)
+        w = holdings.pick(model.weights, data, pricing, last, t)
         w, held, pace = _hold(model, held, month, w, _shortable(pricing, settings, t, len(w)))
+        last = holdings.remember(pricing, w, data, t)
         sized = settings.scale or (settings.softplus and settings.long_only)
         m = float(w.sum()) if sized else 1.0
         if sized and m > 0:

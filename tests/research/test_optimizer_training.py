@@ -419,3 +419,40 @@ def test_grid_carry_and_holdings_input_score_held_out_months_from_the_carried_bo
     assert (curves["val_net_ret"] <= curves["val_gross_ret"]).all()
     with pytest.raises(ValueError, match="carry"):
         grid.fit(months, 16, grid.Config("x", carry=True), window=12, validation=3, device="cpu")
+
+
+def test_walk_holdings_input_feeds_the_real_book_to_the_test_month_and_needs_costs():
+    torch = pytest.importorskip("torch")
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from portfolio_lab.research.optimizer import costs, holdings  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    rng = np.random.default_rng(18)
+    pool = list("ABCDEF")
+    months = [
+        data.Month(
+            date(2000 + k // 12, k % 12 + 1, 1),
+            [pool[(k + i) % 6] for i in range(4)],  # one stock leaves, one joins each month
+            rng.uniform(-0.5, 0.5, (4, 2)).astype(np.float32),
+            rng.normal(0.01, 0.05, 4).astype(np.float32),
+        )
+        for k in range(16)
+    ]
+    stock = [(rng.uniform(0.001, 0.02, 4).astype(np.float32), np.full(4, 0.05, np.float32))] * 16
+    settings = Settings("transformer", window=12, first_epochs=3, warm_epochs=1,
+                        start=date(2000, 1, 1), costs="table.parquet",
+                        holdings_input=True)  # fmt: skip
+    weights, log, model = walk(months, settings, stock_costs=stock)
+    assert log.height == 4 and weights["weight"].is_finite().all()
+    assert model.weights(torch.zeros(4, 4)).shape == (4,)  # 2 traits + holding + spread
+    with pytest.raises(ValueError, match="holdings_input"):
+        walk(months, Settings("linear", window=12, start=date(2000, 1, 1), holdings_input=True))
+    # the test month's holding column is last month's real book after its returns
+    tensors = [(torch.from_numpy(m.x), torch.from_numpy(m.r)) for m in months]
+    spreads = [(torch.from_numpy(s), torch.from_numpy(f)) for s, f in stock]
+    pricing = SimpleNamespace(links=costs.links(months), book={}, stock=spreads)
+    last = torch.tensor([0.3, -0.2, 0.1, 0.4])
+    got = holdings.pick(lambda x: x[:, 2], tensors, pricing, last, 13)
+    want = holdings.holding(last, tensors[12][1], pricing.links[13], 4)
+    assert got.tolist() == pytest.approx(want.tolist())

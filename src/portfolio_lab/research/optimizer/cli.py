@@ -199,6 +199,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     precision: Annotated[
         str, typer.Option(help="float32 matrix products: highest, or high (TF32, faster).")
     ] = "highest",
+    holdings_input: Annotated[
+        bool, typer.Option(help="Feed each stock's holding and spread to the model (--costs).")
+    ] = False,
 ) -> None:
     """Walk a model forward, one run per seed, and save each seed's monthly portfolios.
 
@@ -232,7 +235,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 None if subset_train == "all" else subset_train, finetune_epochs, spread, short_fee,
                 costs or None, partial, short_hurdle, short_min_easy or None, no_shorts,
                 scaled_attention, fresh, every, init, schedule, lr_min, warm_lr or None,
-                compile_model, max_return or None,
+                compile_model, max_return or None, holdings_input=holdings_input,
             )  # fmt: skip
             futures.append(
                 pool_.submit(
