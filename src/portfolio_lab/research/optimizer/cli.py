@@ -144,6 +144,12 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     cost_scale: Annotated[
         float, typer.Option(help="Loss: charge costs at this multiple in training (1: real).")
     ] = 1.0,
+    ridge: Annotated[
+        float, typer.Option(help="Loss: charge per unit of w^2 (expected overestimate; 0: off).")
+    ] = 0.0,
+    ridge_tilt: Annotated[
+        str, typer.Option(help="Ridge multipliers by spread bucket, cheap to dear: a,b,c,d,e.")
+    ] = "",
     measure_optimism: Annotated[
         bool, typer.Option(help="Log in- vs out-of-sample return by cost bucket (--costs).")
     ] = False,
@@ -205,7 +211,8 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 model, blocks, hidden, window or None, first_epochs, warm_epochs, lr, s,
                 date.fromisoformat(start), fast_attention=fast_attention, clip=_clip(clip),
                 costs=costs or None, short_hurdle=short_hurdle, cost_scale=cost_scale,
-                measure_optimism=measure_optimism,
+                measure_optimism=measure_optimism, ridge=ridge,
+                ridge_tilt=tuple(float(x) for x in ridge_tilt.split(",")) if ridge_tilt else None,
                 schedule=schedule,
                 lr_min=lr_min, warm_lr=warm_lr or None, compile=compile_model,
                 max_return=max_return or None, holdings_input=holdings_input,

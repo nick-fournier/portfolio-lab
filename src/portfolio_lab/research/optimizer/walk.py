@@ -18,6 +18,13 @@ weights (filled in month order the first time a month enters the window, refresh
 step, kept from month to month); for the test month, from the walk's real holdings of the
 month before after its returns. ``borrow_input`` adds the stock's borrow fee as well.
 
+With a ``ridge`` the training loss also charges each position its expected overestimate: the
+model's in-sample return per unit of weight runs about twice its out-of-sample one, the same
+multiple for small and large bets (research.optimizer.optimism, run43), so a position's
+overestimate grows as w^2. The net return in the loss is cut by sum c_i w_i^2, with c_i =
+``ridge`` times ``ridge_tilt`` for the stock's spread bucket (optimism's five buckets; more
+for illiquid names, whose overestimate is larger). Held-out scoring keeps the real return.
+
 With ``stop`` each month trains with early stopping (research.optimizer.stopping): a random
 block of ``holdout`` consecutive training months is held out, passes run one at a time (the
 rate following the schedule over at most ``first_epochs`` or ``warm_epochs`` passes) until
@@ -86,6 +93,9 @@ class Settings:
         vol_column: The inputs' column of the ranked volatility trait for those buckets.
         holdings_input: Feed each stock's holding and spread to the model (module docs).
         borrow_input: Also feed each stock's borrow fee (needs ``holdings_input``).
+        ridge: Charge per unit of w^2 in the training loss (module docs; 0: none; needs
+            ``costs``).
+        ridge_tilt: Multipliers of ``ridge`` by spread bucket, cheap to dear (``None``: 1).
         stop: Early stopping each month (module docs).
         patience: Passes without a better smoothed held-out loss before stopping.
         holdout: Consecutive training months held out each month for stopping.
@@ -116,6 +126,8 @@ class Settings:
     max_return: float | None = None
     holdings_input: bool = False
     borrow_input: bool = False
+    ridge: float = 0.0
+    ridge_tilt: tuple[float, ...] | None = None
     stop: bool = False
     patience: int = 5
     holdout: int = 12
@@ -146,12 +158,14 @@ class Pricing:
         stock: Each month's per-stock (trade cost, borrow fee).
         book: The training book table with ``holdings_input`` (module docs), else ``None``.
         borrow: Feed the borrow fee too (``borrow_input``).
+        ridge: Each month's per-stock charge per unit of w^2 (``ridge``), else ``None``.
     """
 
     links: list[costs.Link | None]
     stock: list[Pair]
     book: dict[int, torch.Tensor] | None = None
     borrow: bool = False
+    ridge: list[torch.Tensor] | None = None
 
 
 def _pricing(
@@ -172,8 +186,15 @@ def _pricing(
         raise ValueError("per-stock costs need stock_costs")
     stock = [(torch.from_numpy(c[0]).to(device), torch.from_numpy(c[1]).to(device))
              for c in stock_costs]  # fmt: skip
+    ridge = None
+    if settings.ridge:
+        tilt = torch.tensor(settings.ridge_tilt or (1.0,) * optimism.BUCKETS, device=device)
+        if len(tilt) != optimism.BUCKETS:
+            raise ValueError(f"ridge_tilt needs {optimism.BUCKETS} values")
+        cuts = optimism.edges(stock)[0]
+        ridge = [settings.ridge * tilt[torch.bucketize(s, cuts)] for s, _ in stock]
     return Pricing(costs.links(months, device), stock, {} if settings.holdings_input else None,
-                   settings.borrow_input)  # fmt: skip
+                   settings.borrow_input, ridge)  # fmt: skip
 
 
 def rate(schedule: str, start: float, floor: float, epoch: int, epochs: int) -> float:
@@ -205,7 +226,10 @@ def _priced_loss(model: Optimizer, data: list[Pair], pricing: Pricing, settings:
     w = model(holdings.inputs(data, pricing, pricing.book, k))
     if pricing.book is not None:
         pricing.book[k] = w.detach()
-    return (1 - _net(model, data, pricing, settings, k, w, settings.cost_scale)) ** 2
+    net = _net(model, data, pricing, settings, k, w, settings.cost_scale)
+    if pricing.ridge is not None:
+        net = net - (pricing.ridge[k] * w * w).sum()
+    return (1 - net) ** 2
 
 
 def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
