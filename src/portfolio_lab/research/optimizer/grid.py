@@ -92,6 +92,8 @@ class Config:
         borrow_input: Also feed each stock's log borrow fee (needs ``holdings_input``).
         inner: Hold out a random block of this many consecutive training months, never
             trained on, scored like the validation months (``inner_*``; needs ``costs``).
+        weight_decay: Decoupled weight decay (AdamW): each step shrinks every parameter by
+            ``lr x weight_decay`` of itself (0: plain Adam, the paper).
     """
 
     name: str
@@ -114,6 +116,7 @@ class Config:
     holdings_input: bool = False
     borrow_input: bool = False
     inner: int = 0
+    weight_decay: float = 0.0
 
 
 def lr_at(config: Config, epoch: int) -> float:
@@ -269,7 +272,11 @@ def fit(
     def run(k: int) -> torch.Tensor:
         return scores(features(k))
 
-    adam = torch.optim.Adam(model.parameters(), lr=config.lr)
+    adam = (
+        torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+        if config.weight_decay
+        else torch.optim.Adam(model.parameters(), lr=config.lr)
+    )
 
     def net_of(k: int, w: torch.Tensor) -> torch.Tensor:
         """Month k's return net of spreads and borrow, trading from last month's book."""
