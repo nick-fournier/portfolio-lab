@@ -21,8 +21,9 @@ month before after its returns.
 With ``stop`` each month trains with early stopping (research.optimizer.stopping): a random
 block of ``holdout`` consecutive training months is held out, passes run one at a time (the
 rate following the schedule over at most ``first_epochs`` or ``warm_epochs`` passes) until
-the block's Sharpe has not improved for ``patience`` passes, and the model goes back to the
-best pass; the log records the passes kept and the block's Sharpe.
+the block's loss, smoothed over ``smooth`` passes, has not improved for ``patience`` passes,
+and the model goes back to the best pass; the log records the passes kept, the best smoothed
+held-out loss and every pass's held-out loss (``held_curve``).
 """
 
 import math
@@ -71,8 +72,9 @@ class Settings:
             ``None``: kept as they are.
         holdings_input: Feed each stock's holding and spread to the model (module docs).
         stop: Early stopping each month (module docs).
-        patience: Passes without a better held-out Sharpe before stopping.
+        patience: Passes without a better smoothed held-out loss before stopping.
         holdout: Consecutive training months held out each month for stopping.
+        smooth: Passes the held-out loss is averaged over before the rule reads it.
     """
 
     model: str
@@ -95,8 +97,9 @@ class Settings:
     max_return: float | None = None
     holdings_input: bool = False
     stop: bool = False
-    patience: int = 3
+    patience: int = 5
     holdout: int = 12
+    smooth: int = 3
 
 
 Pair = tuple[torch.Tensor, torch.Tensor]
@@ -203,9 +206,9 @@ def _pass(model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train
     return losses
 
 
-def _held_sharpe(model: Optimizer, data: list[Pair], pricing: Pricing | None,
-                 settings: Settings, months: list[int]) -> float:  # fmt: skip
-    """Monthly Sharpe over ``months`` (net of costs with ``pricing``); leaves the book alone."""
+def _held_loss(model: Optimizer, data: list[Pair], pricing: Pricing | None,
+               settings: Settings, months: list[int]) -> float:  # fmt: skip
+    """Mean loss over ``months`` (net of costs with ``pricing``); leaves the book alone."""
     with torch.no_grad():
         r = []
         for k in months:
@@ -213,15 +216,15 @@ def _held_sharpe(model: Optimizer, data: list[Pair], pricing: Pricing | None,
             r.append(w @ data[k][1] if pricing is None
                      else _net(model, data, pricing, settings, k, w))  # fmt: skip
         r = torch.stack(r)
-    return float(r.mean() / r.std())
+    return float(((1 - r) ** 2).mean())
 
 
 def _fit(  # noqa: PLR0913 - one month's training pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
     epochs: int, settings: Settings, rng: np.random.Generator, pricing: Pricing | None, *,
     start_lr: float, span: range,
-) -> tuple[list, int, float]:  # fmt: skip
-    """One month's training: losses of the pass kept, passes kept, held-out Sharpe.
+) -> tuple[list, int, float, list[float]]:  # fmt: skip
+    """One month's training: losses of the pass kept, passes kept, held-out loss, its curve.
 
     ``epochs`` passes (with ``settings.stop``: at most), the rate following
     ``settings.schedule`` from ``start_lr`` over them. With a book (``holdings_input``) the
@@ -237,8 +240,9 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
         return _pass(model, adam, data, fit, settings, rng, pricing, lr)
 
     return stopping.fit_stopped(model, adam, one_pass,
-                                lambda: _held_sharpe(model, data, pricing, settings, block),
-                                bool(block), epochs, settings.patience)  # fmt: skip
+                                lambda: _held_loss(model, data, pricing, settings, block),
+                                bool(block), epochs, settings.patience,
+                                settings.smooth)  # fmt: skip
 
 
 def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, torch.optim.Adam]:
@@ -272,7 +276,8 @@ def walk(
         portfolio's next-month return over the T-bill before costs, ``long`` and ``short`` =
         the sums of the positive and negative weights, ``largest`` = the largest absolute
         weight's share of the sum of absolute weights, mean training loss over the last pass,
-        passes kept and held-out Sharpe with ``stop``, seconds); and the final model.
+        passes kept, best smoothed held-out loss and its per-pass curve with ``stop``,
+        seconds); and the final model.
     """
     rng = np.random.default_rng(settings.seed)
     model, adam = _new_model(settings, months[0].x.shape[1], device)
@@ -288,9 +293,9 @@ def walk(
         train = [k for k in range(lo, t) if known[k]]
         epochs = settings.warm_epochs if trained else settings.first_epochs
         start_lr = settings.warm_lr if trained and settings.warm_lr else settings.lr
-        losses, passes, held_sharpe = _fit(model, adam, data, train, epochs, settings, rng,
-                                           pricing, start_lr=start_lr,
-                                           span=range(lo, t))  # fmt: skip
+        losses, passes, held_loss, curve = _fit(model, adam, data, train, epochs, settings, rng,
+                                                pricing, start_lr=start_lr,
+                                                span=range(lo, t))  # fmt: skip
         trained = True
         w = holdings.pick(model, data, pricing, last, t)
         last = holdings.remember(pricing, w, data, t)
@@ -301,6 +306,6 @@ def walk(
                     "long": float(w[w > 0].sum()), "short": float(w[w < 0].sum()),
                     "largest": float(np.abs(w).max()) / gross if gross else None,
                     "loss": float(torch.stack(losses).mean()) if losses else math.nan,
-                    "passes": passes, "held_sharpe": held_sharpe,
+                    "passes": passes, "held_loss": held_loss, "held_curve": curve,
                     "seconds": time.perf_counter() - clock})  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model

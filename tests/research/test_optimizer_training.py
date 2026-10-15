@@ -248,7 +248,7 @@ def test_held_block_is_consecutive_and_left_out_of_the_fit():
     assert stopping.held_block(short, 12, np.random.default_rng(0)) == (short, [])
 
 
-def test_fit_stopped_stops_after_patience_and_rolls_back_to_the_best_pass():
+def test_fit_stopped_reads_the_smoothed_score_and_rolls_back_to_the_best_window():
     torch = pytest.importorskip("torch")
     from portfolio_lab.research.optimizer import stopping  # noqa: PLC0415
 
@@ -256,21 +256,25 @@ def test_fit_stopped_stops_after_patience_and_rolls_back_to_the_best_pass():
     with torch.no_grad():
         model.weight.zero_()
     adam = torch.optim.Adam(model.parameters())
-    held = iter([1.0, 2.0, 3.0, 2.5, 2.4, 2.3, 9.0])  # best after pass 3; the 9 is never reached
+    # raw scores: a noise spike at pass 2 must not win; means of 3 bottom at passes 3-5 (2.0)
+    scores = iter([9.0, 0.5, 3.0, 2.5, 0.5, 4.0, 3.0, 3.0, 3.0, 3.0, 3.0, 1.0])
 
     def one_pass(p):
         with torch.no_grad():
             model.weight += 1  # the weight counts the passes
         return [float(model.weight)]
 
-    losses, passes, best = stopping.fit_stopped(model, adam, one_pass, lambda: next(held), True,
-                                                most=40, patience=3)  # fmt: skip
-    assert (passes, best, losses) == (3, 3.0, [3.0])
-    assert float(model.weight) == 3.0  # rolled back from pass 6
+    losses, passes, best, curve = stopping.fit_stopped(
+        model, adam, one_pass, lambda: next(scores), True, most=40, patience=5, smooth=3
+    )
+    assert (passes, best, losses) == (5, 2.0, [5.0])
+    assert float(model.weight) == 5.0  # rolled back from pass 10
+    assert curve == [9.0, 0.5, 3.0, 2.5, 0.5, 4.0, 3.0, 3.0, 3.0, 3.0]
     calls = []
-    losses, passes, best = stopping.fit_stopped(model, adam, lambda p: calls.append(p) or [0.0],
-                                                lambda: 0.0, False, most=4, patience=3)  # fmt: skip
-    assert calls == [0, 1, 2, 3] and passes == 4 and np.isnan(best)
+    losses, passes, best, curve = stopping.fit_stopped(
+        model, adam, lambda p: calls.append(p) or [0.0], lambda: 0.0, False, most=4, patience=3
+    )
+    assert calls == [0, 1, 2, 3] and passes == 4 and np.isnan(best) and curve == []
 
 
 def test_walk_with_early_stopping_logs_passes_and_leaves_the_book_to_training():
@@ -287,10 +291,11 @@ def test_walk_with_early_stopping_logs_passes_and_leaves_the_book_to_training():
     stock = [(np.full(8, 0.005, np.float32), np.full(8, 0.05, np.float32))] * 30
     settings = Settings("linear", window=20, first_epochs=8, warm_epochs=8,
                         start=date(2001, 9, 1), costs="table.parquet", holdings_input=True,
-                        stop=True, patience=2, holdout=6)  # fmt: skip
+                        stop=True, patience=2, holdout=6, smooth=2)  # fmt: skip
     _, log, _ = walk(months, settings, stock_costs=stock)
     assert log.height == 10
-    assert all(1 <= p <= 8 for p in log["passes"]) and log["held_sharpe"].is_finite().all()
+    assert all(2 <= p <= 8 for p in log["passes"]) and log["held_loss"].is_finite().all()
+    assert all(len(c) >= p for c, p in zip(log["held_curve"], log["passes"], strict=True))
     _, plain, _ = walk(months, Settings("linear", window=20, first_epochs=8, warm_epochs=8,
                                         start=date(2001, 9, 1)))  # fmt: skip
-    assert (plain["passes"] == 8).all() and plain["held_sharpe"].is_nan().all()
+    assert (plain["passes"] == 8).all() and plain["held_loss"].is_nan().all()
