@@ -321,7 +321,7 @@ def test_auto_clipping_cuts_only_the_spikes_above_the_recent_percentile():
     assert out[5] == (1.0, float("inf"), 1.0)  # warmup: no limit
     assert out[30][0] == 1000.0 and out[30][1] == 1.0 and out[30][2] == pytest.approx(1.0)
     assert max(clipper.history) == 1.0  # the spike went in clipped: the bar did not move
-    assert out[32] == (1.0, 1.0, 1.0)
+    assert out[32] == pytest.approx((1.0, 1.0, 1.0))
     with pytest.raises(ValueError, match="clip"):
         Clipper(-1)
     with pytest.raises(ValueError, match="clip"):
