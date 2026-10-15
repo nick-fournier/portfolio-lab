@@ -24,6 +24,9 @@ rate following the schedule over at most ``first_epochs`` or ``warm_epochs`` pas
 the block's loss, smoothed over ``smooth`` passes, has not improved for ``patience`` passes,
 and the model goes back to the best pass; the log records the passes kept, the best smoothed
 held-out loss and every pass's held-out loss (``held_curve``).
+
+With ``average`` the walk holds a moving average of the model's parameters instead of its
+latest step (research.optimizer.averaging); training is unchanged.
 """
 
 import math
@@ -36,6 +39,7 @@ import polars as pl
 import torch
 
 from portfolio_lab.research.optimizer import costs, holdings, stopping
+from portfolio_lab.research.optimizer.averaging import Average
 from portfolio_lab.research.optimizer.clipping import Clipper
 from portfolio_lab.research.optimizer.data import Month
 from portfolio_lab.research.optimizer.model import Optimizer, loss
@@ -77,6 +81,7 @@ class Settings:
         patience: Passes without a better smoothed held-out loss before stopping.
         holdout: Consecutive training months held out each month for stopping.
         smooth: Passes the held-out loss is averaged over before the rule reads it.
+        average: Decay of the parameter average held each month (0: hold the latest model).
     """
 
     model: str
@@ -102,6 +107,7 @@ class Settings:
     patience: int = 5
     holdout: int = 12
     smooth: int = 3
+    average: float = 0.0
 
 
 Pair = tuple[torch.Tensor, torch.Tensor]
@@ -187,7 +193,7 @@ def _priced_loss(model: Optimizer, data: list[Pair], pricing: Pricing, settings:
 def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
     settings: Settings, rng: np.random.Generator, pricing: Pricing | None, lr: float,
-    clipper: Clipper, norms: list[torch.Tensor],
+    clipper: Clipper, norms: list[torch.Tensor], average: Average | None,
 ) -> list[torch.Tensor]:  # fmt: skip
     """One pass over the ``train`` months in shuffled order at rate ``lr``; its losses.
 
@@ -206,6 +212,8 @@ def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
         value.backward()
         norms.append(clipper(model.parameters()))
         adam.step()
+        if average is not None:
+            average.update()
         losses.append(value.detach())
     return losses
 
@@ -226,7 +234,7 @@ def _held_loss(model: Optimizer, data: list[Pair], pricing: Pricing | None,
 def _fit(  # noqa: PLR0913 - one month's training pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
     epochs: int, settings: Settings, rng: np.random.Generator, pricing: Pricing | None, *,
-    start_lr: float, span: range, clipper: Clipper,
+    start_lr: float, span: range, clipper: Clipper, average: Average | None,
 ) -> tuple[list, int, float, list[float], list[torch.Tensor]]:  # fmt: skip
     """One month's training: losses, passes, held-out loss, its curve, gradient sizes.
 
@@ -246,11 +254,13 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
 
     def one_pass(p: int) -> list:
         lr = rate(settings.schedule, start_lr, settings.lr_min, p, epochs)
-        return _pass(model, adam, data, fit, settings, rng, pricing, lr, clipper, norms)
+        return _pass(model, adam, data, fit, settings, rng, pricing, lr, clipper, norms,
+                     average)  # fmt: skip
 
     return (*stopping.fit_stopped(model, adam, one_pass,
                                   lambda: _held_loss(model, data, pricing, settings, block),
-                                  bool(block), epochs, settings.patience, settings.smooth),
+                                  bool(block), epochs, settings.patience, settings.smooth,
+                                  average),
             norms)  # fmt: skip
 
 
@@ -292,6 +302,7 @@ def walk(
     rng = np.random.default_rng(settings.seed)
     clipper = Clipper(settings.clip)
     model, adam = _new_model(settings, months[0].x.shape[1], device)
+    average = Average(model, settings.average) if settings.average else None
     data = _data(months, settings, device)
     known = [bool(np.isfinite(m.r).all()) for m in months]
     pricing = _pricing(months, settings, device, stock_costs)
@@ -307,11 +318,15 @@ def walk(
         losses, passes, held_loss, curve, norms = _fit(model, adam, data, train, epochs,
                                                        settings, rng, pricing,
                                                        start_lr=start_lr,
-                                                       span=range(lo, t),
-                                                       clipper=clipper)  # fmt: skip
+                                                       span=range(lo, t), clipper=clipper,
+                                                       average=average)  # fmt: skip
         grad, limit = torch.stack(norms).T if norms else (torch.zeros(0), torch.zeros(0))
         trained = True
-        w = holdings.pick(model, data, pricing, last, t)
+        if average is None:
+            w = holdings.pick(model, data, pricing, last, t)
+        else:
+            with average.swapped():
+                w = holdings.pick(model, data, pricing, last, t)
         last = holdings.remember(pricing, w, data, t)
         gross = float(np.abs(w).sum())  # 0 only if no stock is held: all cash
         weights.append(pl.DataFrame({"date": [month.date] * len(w), "symbol": month.symbols,

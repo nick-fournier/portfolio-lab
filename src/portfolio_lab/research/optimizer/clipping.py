@@ -6,9 +6,11 @@ gradient's norm over every parameter) and keeps its direction. A fixed limit (Pa
 2013) needs a number: 1.0 clipped 95% of all steps here (typical size ~17, run34), changing
 every step rather than catching the spikes. :class:`Clipper` with ``"auto"`` instead clips at
 a percentile of the recent steps' sizes (AutoClip, Seetharaman et al. 2020): the 95th of the
-last ``window`` steps leaves normal training alone and cuts the spikes. The history stores the
-sizes after clipping, so a spike cannot raise its own bar, and the first ``warmup`` steps are
-not clipped (nothing to compare against yet).
+last ``window`` steps leaves normal training alone and cuts the spikes. The history stores each
+size capped at ``headroom`` times the limit: the bar can follow a real shift in the steps'
+sizes, but a spike cannot drag it up to its own size (storing the clipped sizes instead made
+the bar a one-way ratchet that only ever fell, run35). The first ``warmup`` steps are not
+clipped (nothing to compare against yet).
 """
 
 import math
@@ -25,11 +27,12 @@ class Clipper:
         percentile: With ``"auto"``, the percentile of recent sizes used as the limit.
         window: Recent steps the percentile is taken over.
         warmup: Steps before ``"auto"`` starts clipping.
+        headroom: Stored sizes are capped at this multiple of the limit.
     """
 
     def __init__(
         self, clip: float | str | None, percentile: float = 95.0, window: int = 500,
-        warmup: int = 20,
+        warmup: int = 20, headroom: float = 3.0,
     ):  # fmt: skip
         if clip == "auto":
             self.fixed = None
@@ -39,7 +42,7 @@ class Clipper:
             self.fixed = float(clip)
         else:
             raise ValueError(f"clip must be None, a positive number or 'auto', not {clip!r}")
-        self.q, self.warmup = percentile / 100, warmup
+        self.q, self.warmup, self.headroom = percentile / 100, warmup, headroom
         self.history: deque[float] = deque(maxlen=window)
 
     def __call__(self, parameters) -> torch.Tensor:
@@ -54,7 +57,7 @@ class Clipper:
         total = torch.nn.utils.clip_grad_norm_(parameters, limit)
         size = float(total)
         if math.isfinite(size):
-            self.history.append(min(size, limit))
+            self.history.append(min(size, self.headroom * limit))
         return torch.stack([total, total.new_tensor(limit)])
 
     def _limit(self) -> float:

@@ -320,8 +320,12 @@ def test_auto_clipping_cuts_only_the_spikes_above_the_recent_percentile():
         out[-1] = (float(out[-1][0]), float(out[-1][1]), float(w.grad.norm()))
     assert out[5] == (1.0, float("inf"), 1.0)  # warmup: no limit
     assert out[30][0] == 1000.0 and out[30][1] == 1.0 and out[30][2] == pytest.approx(1.0)
-    assert max(clipper.history) == 1.0  # the spike went in clipped: the bar did not move
+    assert max(clipper.history) == 3.0  # the spike went in capped at 3x the limit
     assert out[32] == pytest.approx((1.0, 1.0, 1.0))
+    for _ in range(100):  # a real shift to 2.0 lifts the bar; the spike never set it to 1000
+        w.grad = torch.full((4,), 1.0)
+        clipper([w])
+    assert clipper._limit() == pytest.approx(2.0)
     with pytest.raises(ValueError, match="clip"):
         Clipper(-1)
     with pytest.raises(ValueError, match="clip"):
@@ -336,3 +340,50 @@ def test_auto_clipping_cuts_only_the_spikes_above_the_recent_percentile():
     _, log, _ = walk(months, Settings("linear", window=12, first_epochs=10, warm_epochs=2,
                                       start=date(2000, 1, 1), clip="auto"))  # fmt: skip
     assert log["limit"].is_finite().all() and (log["clipped"] <= 0.5).all()
+
+
+def test_parameter_average_is_bias_corrected_swaps_in_and_rolls_back_with_stopping():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import stopping  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.averaging import Average  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    model = torch.nn.Linear(1, 1, bias=False)
+    with torch.no_grad():
+        model.weight.fill_(5.0)
+    avg = Average(model, 0.5)
+    avg.update()
+    assert avg.values()[0].item() == pytest.approx(5.0)  # one step: the value itself
+    with torch.no_grad():
+        model.weight.fill_(1.0)
+    avg.update()  # (0.5 x 5 + 0.5 x 1) / (1 - 0.25) scaled from the zero start
+    assert avg.values()[0].item() == pytest.approx((0.25 * 5 + 0.5 * 1) / 0.75)
+    with avg.swapped():
+        assert model.weight.item() == pytest.approx((0.25 * 5 + 0.5 * 1) / 0.75)
+    assert model.weight.item() == 1.0
+    with pytest.raises(ValueError, match="decay"):
+        Average(model, 1.0)
+    adam = torch.optim.Adam(model.parameters())
+    scores = iter([3.0, 3.0, 3.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0])
+
+    def one_pass(p):
+        with torch.no_grad():
+            model.weight += 1
+        avg.update()
+        return [0.0]
+
+    stopping.fit_stopped(model, adam, one_pass, lambda: next(scores), True, most=20,
+                         patience=2, smooth=3, average=avg)  # fmt: skip
+    assert model.weight.item() == 4.0 and avg.steps == 5  # both rolled back to pass 3
+    rng = np.random.default_rng(21)
+    months = [
+        data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCD"),
+                   rng.uniform(-0.5, 0.5, (4, 2)).astype(np.float32),
+                   rng.normal(0.01, 0.05, 4).astype(np.float32))
+        for k in range(16)
+    ]  # fmt: skip
+    base = dict(window=12, first_epochs=10, warm_epochs=2, start=date(2000, 1, 1), seed=3)
+    held, _, _ = walk(months, Settings("linear", **base, average=0.9))
+    latest, _, _ = walk(months, Settings("linear", **base))
+    assert held["weight"].is_finite().all()
+    assert held["weight"].to_list() != latest["weight"].to_list()
