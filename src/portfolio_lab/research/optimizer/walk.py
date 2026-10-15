@@ -76,6 +76,9 @@ class Settings:
         max_return: Training months' returns above this in size are set to 0 (data errors such
             as a $0.001 stock "returning" 94,800% in a month); the test month's are kept.
             ``None``: kept as they are.
+        cost_scale: Costs in the training loss are charged at this multiple (held-out scoring
+            and the walk's own measures use the real costs): in-sample returns run about twice
+            what the model earns out of sample, so at 1x costs look half as large as they are.
         holdings_input: Feed each stock's holding and spread to the model (module docs).
         borrow_input: Also feed each stock's borrow fee (needs ``holdings_input``).
         stop: Early stopping each month (module docs).
@@ -98,6 +101,7 @@ class Settings:
     clip: float | str | None = 1.0
     costs: str | None = None
     short_hurdle: float = 0.0
+    cost_scale: float = 1.0
     schedule: str = "flat"
     lr_min: float = 1e-5
     warm_lr: float | None = None
@@ -176,16 +180,16 @@ def rate(schedule: str, start: float, floor: float, epoch: int, epochs: int) -> 
 
 
 def _net(model: Optimizer, data: list[Pair], pricing: Pricing, settings: Settings, k: int,
-         w: torch.Tensor) -> torch.Tensor:  # fmt: skip
-    """Month k's return on weights ``w`` net of costs, trading from the month before's weights."""
+         w: torch.Tensor, scale: float = 1.0) -> torch.Tensor:  # fmt: skip
+    """Month k's return on ``w`` net of costs times ``scale``, traded from last month's weights."""
     before = spread_before = None
     if k > 0:
         with torch.no_grad():
             before = model(holdings.inputs(data, pricing, pricing.book, k - 1))
-        spread_before = pricing.stock[k - 1][0]
+        spread_before = pricing.stock[k - 1][0] * scale
     spread, fee = pricing.stock[k]
-    return costs.net_return(w, data[k][1], before, pricing.links[k], spread,
-                            fee + settings.short_hurdle, spread_before)  # fmt: skip
+    return costs.net_return(w, data[k][1], before, pricing.links[k], spread * scale,
+                            (fee + settings.short_hurdle) * scale, spread_before)  # fmt: skip
 
 
 def _priced_loss(model: Optimizer, data: list[Pair], pricing: Pricing, settings: Settings,
@@ -194,7 +198,7 @@ def _priced_loss(model: Optimizer, data: list[Pair], pricing: Pricing, settings:
     w = model(holdings.inputs(data, pricing, pricing.book, k))
     if pricing.book is not None:
         pricing.book[k] = w.detach()
-    return (1 - _net(model, data, pricing, settings, k, w)) ** 2
+    return (1 - _net(model, data, pricing, settings, k, w, settings.cost_scale)) ** 2
 
 
 def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces

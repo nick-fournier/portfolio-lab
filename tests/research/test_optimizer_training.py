@@ -44,7 +44,7 @@ def test_walk_with_trading_costs_trades_less_than_without():
         w = w.pivot("symbol", index="date").drop("date").to_numpy()
         return float(np.abs(np.diff(w, axis=0)).sum())
 
-    assert traded(costs="table.parquet") < traded()
+    assert traded(costs="table.parquet", cost_scale=3.0) < traded(costs="table.parquet") < traded()
 
 
 def test_per_stock_costs_charge_each_stock_its_own_rate_and_sold_stocks_last_months():
