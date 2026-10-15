@@ -305,7 +305,7 @@ def test_walk_with_early_stopping_logs_passes_and_leaves_the_book_to_training():
     assert (big["clipped"] == 1.0).all()  # every step's gradient is over a tiny limit
 
 
-def test_auto_clipping_cuts_only_the_spikes_above_the_recent_percentile():
+def test_auto_clipping_sets_the_bar_once_from_the_first_steps_and_holds_it():
     torch = pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.clipping import Clipper  # noqa: PLC0415
     from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
@@ -333,9 +333,10 @@ def test_auto_clipping_cuts_only_the_spikes_above_the_recent_percentile():
                    rng.normal(0.01, 0.05, 4).astype(np.float32))
         for k in range(16)
     ]  # fmt: skip
-    _, log, _ = walk(months, Settings("linear", window=12, first_epochs=10, warm_epochs=2,
+    _, log, _ = walk(months, Settings("linear", window=12, first_epochs=50, warm_epochs=2,
                                       start=date(2000, 1, 1), clip="auto"))  # fmt: skip
-    assert log["limit"].is_finite().all() and (log["clipped"] <= 0.5).all()
+    assert log["limit"].is_finite().all() and log["limit"].n_unique() == 1  # set once, held
+    assert (log["clipped"] <= 0.5).all()
 
 
 def test_parameter_average_is_bias_corrected_swaps_in_and_rolls_back_with_stopping():

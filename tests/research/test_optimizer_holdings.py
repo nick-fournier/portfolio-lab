@@ -96,7 +96,7 @@ def test_walk_holdings_input_feeds_the_real_book_to_the_test_month_and_needs_cos
     assert x.shape == (4, 5) and x[:, 4].tolist() == pytest.approx([np.log(0.05 / 0.03)] * 4)
     # the test month's holding column is last month's real book after its returns
     spreads = [(torch.from_numpy(s), torch.from_numpy(f)) for s, f in stock]
-    pricing = SimpleNamespace(links=costs.links(months), book={}, stock=spreads)
+    pricing = SimpleNamespace(links=costs.links(months), book={}, stock=spreads, borrow=False)
     last = torch.tensor([0.3, -0.2, 0.1, 0.4])
     got = holdings.pick(lambda x: x[:, 2], tensors, pricing, last, 13)
     want = holdings.holding(last, tensors[12][1], pricing.links[13], 4)
