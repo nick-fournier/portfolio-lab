@@ -12,10 +12,11 @@ trait, ``vol``: its column in the inputs). Spread and fee edges are fixed quanti
 whole cost table, so those buckets mean the same stocks in every month.
 
 :func:`edges` sets the cost buckets; :func:`measure` returns, for one set of months, the mean
-over months of each bucket's sum of w r and sum of |w|: rows (w r, |w|) for spread, fee on
-shorts, size and volatility, in that order.
-Optimism of bucket b over a run = (sum in-sample w r / sum in-sample |w|) / (the same out of
-sample), summed over months before dividing.
+over months of each bucket's sums of w r, |w| and w^2: rows (w r, |w|, w^2) for spread, fee on
+shorts, size and volatility, in that order. Two readings per bucket: return per dollar held
+(sum w r / sum |w|), and the pricing slope (sum w r / sum w^2: realized return per unit of
+the model's prediction, its weight; free of how much is bet). Optimism = in-sample over
+out-of-sample, sums taken over the months before dividing.
 """
 
 import numpy as np
@@ -25,6 +26,7 @@ from portfolio_lab.research.optimizer import holdings
 
 BUCKETS = 5
 GROUPS = ("spread", "short_fee", "size", "vol")
+ROWS = 3  # per group: sum w r, sum |w|, sum w^2
 #: Edges of a ranked trait in [-0.5, 0.5] into five equal buckets.
 RANK_EDGES = (-0.3, -0.1, 0.1, 0.3)
 
@@ -42,12 +44,12 @@ def edges(stock: list[tuple[torch.Tensor, torch.Tensor]]) -> tuple[torch.Tensor,
 def _sums(w: torch.Tensor, r: torch.Tensor, spread: torch.Tensor, fee: torch.Tensor,
           cuts: tuple[torch.Tensor, torch.Tensor],
           vol: torch.Tensor | None = None) -> torch.Tensor:  # fmt: skip
-    """(8 x BUCKETS): rows of w r and |w| by spread, fee (shorts), size, volatility bucket.
+    """(12 x BUCKETS): rows of w r, |w|, w^2 by spread, fee (shorts), size, volatility bucket.
 
     ``vol``: the stocks' ranked volatility (``None``: those rows stay 0).
     """
-    out = w.new_zeros(2 * len(GROUPS), BUCKETS)
-    gain, size = w * r, w.abs()
+    out = w.new_zeros(ROWS * len(GROUPS), BUCKETS)
+    gain, size, square = w * r, w.abs(), w * w
     short = w < 0
     rank = torch.argsort(torch.argsort(size)).float() / max(len(w), 1)
     groups = [(torch.bucketize(spread, cuts[0]), None),
@@ -56,9 +58,9 @@ def _sums(w: torch.Tensor, r: torch.Tensor, spread: torch.Tensor, fee: torch.Ten
     if vol is not None:
         groups.append((torch.bucketize(vol, vol.new_tensor(RANK_EDGES)), None))
     for g, (bucket, keep) in enumerate(groups):
-        b, x, s = (bucket, gain, size) if keep is None else (bucket[keep], gain[keep], size[keep])
-        out[2 * g].index_add_(0, b, x)
-        out[2 * g + 1].index_add_(0, b, s)
+        for j, x in enumerate((gain, size, square)):
+            out[ROWS * g + j].index_add_(0, bucket if keep is None else bucket[keep],
+                                         x if keep is None else x[keep])  # fmt: skip
     return out
 
 
@@ -69,7 +71,7 @@ def measure(model, data: list, pricing, months: list[int], cuts,
     Training months' inputs come from the pricing's book, as in training.
     """
     with torch.no_grad():
-        total = data[0][1].new_zeros(2 * len(GROUPS), BUCKETS)
+        total = data[0][1].new_zeros(ROWS * len(GROUPS), BUCKETS)
         for k in months:
             w = model(holdings.inputs(data, pricing, pricing.book, k))
             v = None if vol is None else data[k][0][:, vol]
@@ -86,19 +88,25 @@ def test_month(w: np.ndarray, data: list, pricing, t: int, cuts,
 
 
 def summary(log, column_in: str = "opt_in", column_out: str = "opt_out") -> dict[str, list]:
-    """Per group and bucket over a walk's log: return per dollar in and out of sample, the gap.
+    """Per group and bucket: return per dollar in and out of sample, the gap, the pricing slope.
 
-    Logs from before the size and volatility groups have only the first two.
+    The slope needs logs with w^2; older logs (2 rows per group) give the per-dollar readings.
     """
     raw_in, raw_out = np.array(log[column_in].to_list()), np.array(log[column_out].to_list())
     rows = raw_in.shape[1] // BUCKETS
+    per = ROWS if rows == ROWS * len(GROUPS) else 2
     a = raw_in.reshape(-1, rows, BUCKETS).sum(axis=0)
     b = raw_out.reshape(-1, rows, BUCKETS).sum(axis=0)
     out = {}
-    for g, name in enumerate(GROUPS[: rows // 2]):
+    for g, name in enumerate(GROUPS[: rows // per]):
+        i = per * g
         with np.errstate(invalid="ignore", divide="ignore"):
-            pin, pout = a[2 * g] / a[2 * g + 1], b[2 * g] / b[2 * g + 1]
-        out |= {f"{name}_in": pin.tolist(), f"{name}_out": pout.tolist(),
-                f"{name}_gap": (pin - pout).tolist(),
-                f"{name}_share": (a[2 * g + 1] / a[2 * g + 1].sum()).tolist()}  # fmt: skip
+            pin, pout = a[i] / a[i + 1], b[i] / b[i + 1]
+            out |= {f"{name}_in": pin.tolist(), f"{name}_out": pout.tolist(),
+                    f"{name}_gap": (pin - pout).tolist(),
+                    f"{name}_share": (a[i + 1] / a[i + 1].sum()).tolist()}  # fmt: skip
+            if per == ROWS:
+                sin, sout = a[i] / a[i + 2], b[i] / b[i + 2]
+                out |= {f"{name}_slope_in": sin.tolist(), f"{name}_slope_out": sout.tolist(),
+                        f"{name}_slope_ratio": (sin / sout).tolist()}  # fmt: skip
     return out

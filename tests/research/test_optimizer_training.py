@@ -404,12 +404,13 @@ def test_optimism_logs_in_and_out_of_sample_return_per_dollar_by_cost_bucket():
     out = optimism._sums(w, r, spread, fee, cuts, vol)
     assert out[0].tolist() == pytest.approx([0.1 - 0.2, 0, 0, 0, -0.3 - 0.8])
     assert out[1].tolist() == pytest.approx([3, 0, 0, 0, 7])
-    assert out[2].tolist() == pytest.approx([-0.2, 0, 0, 0, -0.8])
-    assert out[3].tolist() == pytest.approx([2, 0, 0, 0, 4])
+    assert out[2].tolist() == pytest.approx([5, 0, 0, 0, 25])  # sum w^2
+    assert out[3].tolist() == pytest.approx([-0.2, 0, 0, 0, -0.8])
+    assert out[4].tolist() == pytest.approx([2, 0, 0, 0, 4])
     # size: |w| 1, 2, 3, 4 rank 0..3 of 4 -> buckets 0, 1, 2, 3
-    assert out[5].tolist() == pytest.approx([1, 2, 3, 4, 0])
-    assert out[4].tolist() == pytest.approx([0.1, -0.2, -0.3, -0.8, 0])
-    assert out[7].tolist() == pytest.approx([1, 0, 5, 0, 4])
+    assert out[6].tolist() == pytest.approx([0.1, -0.2, -0.3, -0.8, 0])
+    assert out[7].tolist() == pytest.approx([1, 2, 3, 4, 0])
+    assert out[10].tolist() == pytest.approx([1, 0, 5, 0, 4])
     rng = np.random.default_rng(22)
     months = [
         data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"),
@@ -423,9 +424,10 @@ def test_optimism_logs_in_and_out_of_sample_return_per_dollar_by_cost_bucket():
                         start=date(2000, 1, 1), costs="table.parquet",
                         measure_optimism=True, vol_column=1)  # fmt: skip
     _, log, _ = walk(months, settings, stock_costs=stock)
-    assert all(len(v) == 8 * optimism.BUCKETS for v in log["opt_in"])
+    assert all(len(v) == 12 * optimism.BUCKETS for v in log["opt_in"])
     got = optimism.summary(log)
     assert len(got["vol_gap"]) == optimism.BUCKETS
+    assert len(got["size_slope_ratio"]) == optimism.BUCKETS
     assert sum(got["size_share"]) == pytest.approx(1.0)
     with pytest.raises(ValueError, match="measure_optimism"):
         walk(months, Settings("linear", window=12, start=date(2000, 1, 1), measure_optimism=True))
