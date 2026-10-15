@@ -1,4 +1,4 @@
-"""Class 3 optimizer: costs in the loss, init, grid, schedules, seed averaging."""
+"""Class 3 optimizer: costs in the loss, init, grid, schedules, early stopping, seed averaging."""
 
 from datetime import date
 
@@ -235,3 +235,62 @@ def test_max_return_zeroes_garbage_training_returns_only():
     ((_, r),) = _data([m], Settings("linear"), "cpu")
     assert float(r[0]) == 948.0
     assert torch.is_tensor(r)
+
+
+def test_held_block_is_consecutive_and_left_out_of_the_fit():
+    from portfolio_lab.research.optimizer import stopping  # noqa: PLC0415
+
+    train = list(range(10, 70))
+    fit, block = stopping.held_block(train, 12, np.random.default_rng(0))
+    assert len(block) == 12 and block == list(range(block[0], block[0] + 12))
+    assert sorted(fit + block) == train and not set(fit) & set(block)
+    short = list(range(14))
+    assert stopping.held_block(short, 12, np.random.default_rng(0)) == (short, [])
+
+
+def test_fit_stopped_stops_after_patience_and_rolls_back_to_the_best_pass():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import stopping  # noqa: PLC0415
+
+    model = torch.nn.Linear(1, 1, bias=False)
+    with torch.no_grad():
+        model.weight.zero_()
+    adam = torch.optim.Adam(model.parameters())
+    held = iter([1.0, 2.0, 3.0, 2.5, 2.4, 2.3, 9.0])  # best after pass 3; the 9 is never reached
+
+    def one_pass(p):
+        with torch.no_grad():
+            model.weight += 1  # the weight counts the passes
+        return [float(model.weight)]
+
+    losses, passes, best = stopping.fit_stopped(model, adam, one_pass, lambda: next(held), True,
+                                                most=40, patience=3)  # fmt: skip
+    assert (passes, best, losses) == (3, 3.0, [3.0])
+    assert float(model.weight) == 3.0  # rolled back from pass 6
+    calls = []
+    losses, passes, best = stopping.fit_stopped(model, adam, lambda p: calls.append(p) or [0.0],
+                                                lambda: 0.0, False, most=4, patience=3)  # fmt: skip
+    assert calls == [0, 1, 2, 3] and passes == 4 and np.isnan(best)
+
+
+def test_walk_with_early_stopping_logs_passes_and_leaves_the_book_to_training():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    rng = np.random.default_rng(19)
+    months = [
+        data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"),
+                   rng.uniform(-0.5, 0.5, (8, 2)).astype(np.float32),
+                   rng.normal(0.01, 0.05, 8).astype(np.float32))
+        for k in range(30)
+    ]  # fmt: skip
+    stock = [(np.full(8, 0.005, np.float32), np.full(8, 0.05, np.float32))] * 30
+    settings = Settings("linear", window=20, first_epochs=8, warm_epochs=8,
+                        start=date(2001, 9, 1), costs="table.parquet", holdings_input=True,
+                        stop=True, patience=2, holdout=6)  # fmt: skip
+    _, log, _ = walk(months, settings, stock_costs=stock)
+    assert log.height == 10
+    assert all(1 <= p <= 8 for p in log["passes"]) and log["held_sharpe"].is_finite().all()
+    _, plain, _ = walk(months, Settings("linear", window=20, first_epochs=8, warm_epochs=8,
+                                        start=date(2001, 9, 1)))  # fmt: skip
+    assert (plain["passes"] == 8).all() and plain["held_sharpe"].is_nan().all()

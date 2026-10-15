@@ -51,15 +51,15 @@ def _months(table: Path, inputs: str = "all") -> list:
 
 
 def _walk_one(table: Path, out: Path, settings, device: str, threads: int, precision: str,
-              inputs: str) -> str:  # fmt: skip
-    """One walk: train, save weights, log, model and settings; return a summary line."""
+              inputs: str, end: date | None = None) -> str:  # fmt: skip
+    """One walk (test months up to ``end``, if any): save weights, log, model and settings."""
     import torch  # noqa: PLC0415
 
     from portfolio_lab.research.optimizer import walk  # noqa: PLC0415
 
     torch.set_num_threads(threads)
     torch.set_float32_matmul_precision(precision)
-    months = _months(table, inputs)
+    months = [m for m in _months(table, inputs) if end is None or m.date <= end]
     stock = None
     if settings.costs:
         from portfolio_lab.research.optimizer import costs  # noqa: PLC0415
@@ -70,7 +70,10 @@ def _walk_one(table: Path, out: Path, settings, device: str, threads: int, preci
     weights.write_parquet(out / "weights.parquet")
     log.write_parquet(out / "log.parquet")
     torch.save(fitted.state_dict(), out / "model.pt")
-    meta = asdict(replace(settings, start=settings.start.isoformat())) | {"inputs": inputs}
+    meta = asdict(replace(settings, start=settings.start.isoformat())) | {
+        "inputs": inputs,
+        "end": end.isoformat() if end else None,
+    }
     (out / "settings.json").write_text(json.dumps(meta, indent=2))
     graded = log.filter(pl.col("ret").is_not_null())
     return (f"{settings.model} seed {settings.seed}: {graded.height} months, Sharpe "
@@ -112,6 +115,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     seeds: Annotated[str, typer.Option(help='Seeds: "0", "0-9" or "1,4,7".')] = "0",
     jobs: Annotated[int, typer.Option(help="Seeds trained at once (processes on the GPU).")] = 4,
     start: Annotated[str, typer.Option(help="First test month end.")] = "2003-12-31",
+    end: Annotated[str, typer.Option(help="Last test month end (empty: the latest).")] = "",
     device: Annotated[str, typer.Option()] = "cuda",
     fast_attention: Annotated[
         bool, typer.Option(help="bfloat16 fused attention (~5x faster transformer).")
@@ -139,6 +143,11 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     holdings_input: Annotated[
         bool, typer.Option(help="Feed each stock's holding and spread to the model (--costs).")
     ] = False,
+    stop: Annotated[
+        bool, typer.Option(help="Early stopping each month on a held-out block (walk docs).")
+    ] = False,
+    patience: Annotated[int, typer.Option(help="Passes without improvement (--stop).")] = 3,
+    holdout: Annotated[int, typer.Option(help="Months held out each month (--stop).")] = 12,
     inputs: Annotated[str, typer.Option(help="Characteristics: all, ours, jkp or paper.")] = "all",
     precision: Annotated[
         str, typer.Option(help="float32 matrix products: highest, or high (TF32, faster).")
@@ -157,6 +166,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     from portfolio_lab.research.optimizer import walk  # noqa: PLC0415
 
     picked = _seeds(seeds)
+    last = date.fromisoformat(end) if end else None
     _months(table, inputs)  # build the cache once first
     runs = [out / f"seed-{s}" for s in picked]
     threads = max(1, (os.cpu_count() or 1) // min(jobs, len(picked)))
@@ -169,10 +179,11 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 date.fromisoformat(start), fast_attention=fast_attention, clip=clip or None,
                 costs=costs or None, short_hurdle=short_hurdle, schedule=schedule,
                 lr_min=lr_min, warm_lr=warm_lr or None, compile=compile_model,
-                max_return=max_return or None, holdings_input=holdings_input,
+                max_return=max_return or None, holdings_input=holdings_input, stop=stop,
+                patience=patience, holdout=holdout,
             )  # fmt: skip
             futures.append(pool_.submit(_walk_one, table, run, settings, device, threads,
-                                        precision, inputs))  # fmt: skip
+                                        precision, inputs, last))  # fmt: skip
         for f in futures:
             typer.echo(f.result())
     if len(runs) > 1:

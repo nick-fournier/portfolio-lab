@@ -17,6 +17,12 @@ and spread (research.optimizer.holdings): in training, from a book table of each
 weights (filled in month order the first time a month enters the window, refreshed at every
 step, kept from month to month); for the test month, from the walk's real holdings of the
 month before after its returns.
+
+With ``stop`` each month trains with early stopping (research.optimizer.stopping): a random
+block of ``holdout`` consecutive training months is held out, passes run one at a time (the
+rate following the schedule over at most ``first_epochs`` or ``warm_epochs`` passes) until
+the block's Sharpe has not improved for ``patience`` passes, and the model goes back to the
+best pass; the log records the passes kept and the block's Sharpe.
 """
 
 import math
@@ -28,7 +34,7 @@ import numpy as np
 import polars as pl
 import torch
 
-from portfolio_lab.research.optimizer import costs, holdings
+from portfolio_lab.research.optimizer import costs, holdings, stopping
 from portfolio_lab.research.optimizer.data import Month
 from portfolio_lab.research.optimizer.model import Optimizer, loss
 
@@ -42,8 +48,10 @@ class Settings:
         blocks: Blocks for ``mlp`` / ``transformer``.
         hidden: Feed-forward hidden width.
         window: Training months before each test month (``None``: all earlier months).
-        first_epochs: Passes over the training months for the first test month.
-        warm_epochs: Passes for every later test month, continuing from the last model.
+        first_epochs: Passes over the training months for the first test month (with
+            ``stop``: at most this many).
+        warm_epochs: Passes for every later test month, continuing from the last model
+            (with ``stop``: at most this many).
         lr: Adam's learning rate.
         seed: Random seed (initial weights and month order).
         start: First test month end.
@@ -62,6 +70,9 @@ class Settings:
             as a $0.001 stock "returning" 94,800% in a month); the test month's are kept.
             ``None``: kept as they are.
         holdings_input: Feed each stock's holding and spread to the model (module docs).
+        stop: Early stopping each month (module docs).
+        patience: Passes without a better held-out Sharpe before stopping.
+        holdout: Consecutive training months held out each month for stopping.
     """
 
     model: str
@@ -83,6 +94,9 @@ class Settings:
     compile: bool = False
     max_return: float | None = None
     holdings_input: bool = False
+    stop: bool = False
+    patience: int = 3
+    holdout: int = 12
 
 
 Pair = tuple[torch.Tensor, torch.Tensor]
@@ -143,53 +157,88 @@ def rate(schedule: str, start: float, floor: float, epoch: int, epochs: int) -> 
     raise ValueError(f"schedule must be flat or cosine, not {schedule!r}")
 
 
-def _priced_loss(model: Optimizer, data: list[Pair], pricing: Pricing, settings: Settings,
-                 k: int) -> torch.Tensor:  # fmt: skip
-    """Month k's paper loss on its return net of costs (module docs)."""
-    w = model(holdings.inputs(data, pricing, pricing.book, k))
+def _net(model: Optimizer, data: list[Pair], pricing: Pricing, settings: Settings, k: int,
+         w: torch.Tensor) -> torch.Tensor:  # fmt: skip
+    """Month k's return on weights ``w`` net of costs, trading from the month before's weights."""
     before = spread_before = None
     if k > 0:
         with torch.no_grad():
             before = model(holdings.inputs(data, pricing, pricing.book, k - 1))
         spread_before = pricing.stock[k - 1][0]
+    spread, fee = pricing.stock[k]
+    return costs.net_return(w, data[k][1], before, pricing.links[k], spread,
+                            fee + settings.short_hurdle, spread_before)  # fmt: skip
+
+
+def _priced_loss(model: Optimizer, data: list[Pair], pricing: Pricing, settings: Settings,
+                 k: int) -> torch.Tensor:  # fmt: skip
+    """Month k's paper loss on its return net of costs (module docs); stores w in the book."""
+    w = model(holdings.inputs(data, pricing, pricing.book, k))
     if pricing.book is not None:
         pricing.book[k] = w.detach()
-    spread, fee = pricing.stock[k]
-    net = costs.net_return(w, data[k][1], before, pricing.links[k], spread,
-                           fee + settings.short_hurdle, spread_before)  # fmt: skip
-    return (1 - net) ** 2
+    return (1 - _net(model, data, pricing, settings, k, w)) ** 2
 
 
-def _train(  # noqa: PLR0913 - one month's training pieces
+def _pass(model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
+          settings: Settings, rng: np.random.Generator, pricing: Pricing | None,
+          lr: float) -> list[torch.Tensor]:  # fmt: skip
+    """One pass over the ``train`` months in shuffled order at rate ``lr``; its losses.
+
+    A step whose loss is not finite is skipped rather than poison Adam.
+    """
+    for group in adam.param_groups:
+        group["lr"] = lr
+    losses = []  # kept on the device: reading each one would wait for the GPU
+    for k in rng.permutation(train):
+        adam.zero_grad()
+        value = (loss(model, *data[k]) if pricing is None
+                 else _priced_loss(model, data, pricing, settings, int(k)))  # fmt: skip
+        if not torch.isfinite(value):
+            continue
+        value.backward()
+        if settings.clip:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), settings.clip)
+        adam.step()
+        losses.append(value.detach())
+    return losses
+
+
+def _held_sharpe(model: Optimizer, data: list[Pair], pricing: Pricing | None,
+                 settings: Settings, months: list[int]) -> float:  # fmt: skip
+    """Monthly Sharpe over ``months`` (net of costs with ``pricing``); leaves the book alone."""
+    with torch.no_grad():
+        r = []
+        for k in months:
+            w = model(holdings.inputs(data, pricing, pricing.book if pricing else None, k))
+            r.append(w @ data[k][1] if pricing is None
+                     else _net(model, data, pricing, settings, k, w))  # fmt: skip
+        r = torch.stack(r)
+    return float(r.mean() / r.std())
+
+
+def _fit(  # noqa: PLR0913 - one month's training pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
     epochs: int, settings: Settings, rng: np.random.Generator, pricing: Pricing | None, *,
     start_lr: float, span: range,
-) -> list[torch.Tensor]:  # fmt: skip
-    """``epochs`` passes over the ``train`` months; the last pass's losses.
+) -> tuple[list, int, float]:  # fmt: skip
+    """One month's training: losses of the pass kept, passes kept, held-out Sharpe.
 
-    The learning rate follows ``settings.schedule`` from ``start_lr``. With a book
-    (``holdings_input``) the ``span`` months not in it get the model's weights first, in month
-    order. A step whose loss is not finite is skipped rather than poison Adam.
+    ``epochs`` passes (with ``settings.stop``: at most), the rate following
+    ``settings.schedule`` from ``start_lr`` over them. With a book (``holdings_input``) the
+    ``span`` months not in it get the model's weights first, in month order.
     """
     if pricing is not None:
         holdings.fill(model, data, pricing, span)
-    losses = []
-    for epoch in range(epochs):
-        for group in adam.param_groups:
-            group["lr"] = rate(settings.schedule, start_lr, settings.lr_min, epoch, epochs)
-        losses = []  # kept on the device: reading each one would wait for the GPU
-        for k in rng.permutation(train):
-            adam.zero_grad()
-            value = (loss(model, *data[k]) if pricing is None
-                     else _priced_loss(model, data, pricing, settings, int(k)))  # fmt: skip
-            if not torch.isfinite(value):
-                continue
-            value.backward()
-            if settings.clip:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), settings.clip)
-            adam.step()
-            losses.append(value.detach())
-    return losses
+    fit, block = (stopping.held_block(train, settings.holdout, rng) if settings.stop
+                  else (train, []))  # fmt: skip
+
+    def one_pass(p: int) -> list:
+        lr = rate(settings.schedule, start_lr, settings.lr_min, p, epochs)
+        return _pass(model, adam, data, fit, settings, rng, pricing, lr)
+
+    return stopping.fit_stopped(model, adam, one_pass,
+                                lambda: _held_sharpe(model, data, pricing, settings, block),
+                                bool(block), epochs, settings.patience)  # fmt: skip
 
 
 def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, torch.optim.Adam]:
@@ -223,7 +272,7 @@ def walk(
         portfolio's next-month return over the T-bill before costs, ``long`` and ``short`` =
         the sums of the positive and negative weights, ``largest`` = the largest absolute
         weight's share of the sum of absolute weights, mean training loss over the last pass,
-        seconds); and the final model.
+        passes kept and held-out Sharpe with ``stop``, seconds); and the final model.
     """
     rng = np.random.default_rng(settings.seed)
     model, adam = _new_model(settings, months[0].x.shape[1], device)
@@ -239,8 +288,9 @@ def walk(
         train = [k for k in range(lo, t) if known[k]]
         epochs = settings.warm_epochs if trained else settings.first_epochs
         start_lr = settings.warm_lr if trained and settings.warm_lr else settings.lr
-        losses = _train(model, adam, data, train, epochs, settings, rng, pricing,
-                        start_lr=start_lr, span=range(lo, t))  # fmt: skip
+        losses, passes, held_sharpe = _fit(model, adam, data, train, epochs, settings, rng,
+                                           pricing, start_lr=start_lr,
+                                           span=range(lo, t))  # fmt: skip
         trained = True
         w = holdings.pick(model, data, pricing, last, t)
         last = holdings.remember(pricing, w, data, t)
@@ -251,5 +301,6 @@ def walk(
                     "long": float(w[w > 0].sum()), "short": float(w[w < 0].sum()),
                     "largest": float(np.abs(w).max()) / gross if gross else None,
                     "loss": float(torch.stack(losses).mean()) if losses else math.nan,
+                    "passes": passes, "held_sharpe": held_sharpe,
                     "seconds": time.perf_counter() - clock})  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model
