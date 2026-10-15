@@ -333,12 +333,13 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     epochs: int, settings: Settings, rng: np.random.Generator, pricing: Pricing | None, *,
     start_lr: float, span: range, clipper: Clipper, average: Average | None, test: int,
     hold_rng: np.random.Generator, raw: list[Pair],
-) -> tuple[list, int, float, list[float], list[torch.Tensor], list[float]]:  # fmt: skip
+) -> tuple[list, int, float, list[float], list[torch.Tensor], list[float], int]:  # fmt: skip
     """One month's training: losses, passes, held-out loss, its curve, gradient sizes.
 
     Returns the kept pass's losses, the passes kept, the best smoothed held-out loss, its
     per-pass curve, every step's (gradient size before clipping, limit) over all the passes
-    run and the test month ``test``'s loss after each pass (``test`` < 0: none).
+    run, the test month ``test``'s loss after each pass (``test`` < 0: none) and the passes
+    rolled back (:class:`.stopping.Guard`).
     ``epochs`` passes (with ``settings.stop``: at most), the rate following
     ``settings.schedule`` from ``start_lr`` over them. With a book (``holdings_input``) the
     ``span`` months not in it get the model's weights first, in month order. The held-out
@@ -358,19 +359,20 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
         return _held_loss(model, raw, pricing, settings, block)
 
     norms: list[torch.Tensor] = []
+    guard = stopping.Guard(model, adam, average)
 
     def one_pass(p: int) -> list:
-        lr = rate(settings.schedule, start_lr, settings.lr_min, p, epochs)
+        lr = rate(settings.schedule, start_lr, settings.lr_min, p, epochs) * guard.scale
         losses = _pass(model, adam, data, fit, settings, rng, pricing, lr, clipper, norms,
                        average)  # fmt: skip
         if not block and settings.watch and test >= 0:  # nothing held out: still log the test
             tests.append(_held_loss(model, raw, pricing, settings, [test]))
         return losses
 
-    return (*stopping.fit_stopped(model, adam, one_pass, score, bool(block), epochs,
-                                  settings.patience, settings.smooth, average,
-                                  keep_last=settings.watch),
-            norms, tests)  # fmt: skip
+    return (*stopping.fit_stopped(model, adam, lambda p: guard(one_pass, p), score,
+                                  bool(block), epochs, settings.patience, settings.smooth,
+                                  average, keep_last=settings.watch),
+            norms, tests, guard.rollbacks)  # fmt: skip
 
 
 def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, torch.optim.Adam]:
@@ -451,23 +453,11 @@ def walk(
         epochs = settings.warm_epochs if warm else settings.first_epochs
         start_lr = settings.warm_lr if warm and settings.warm_lr else settings.lr
         watched = t if known[t] and (settings.stop or settings.watch) else -1
-        losses, passes, held_loss, curve, norms, tests = _fit(
-            model,
-            adam,
-            data,
-            train,
-            epochs,
-            settings,
-            rng,
-            pricing,
-            start_lr=start_lr,
-            span=range(lo, t),
-            clipper=clipper,
-            average=average,
-            test=watched,
-            hold_rng=hold_rng,
-            raw=raw,
-        )
+        losses, passes, held_loss, curve, norms, tests, rollbacks = _fit(
+            model, adam, data, train, epochs, settings, rng, pricing, start_lr=start_lr,
+            span=range(lo, t), clipper=clipper, average=average, test=watched,
+            hold_rng=hold_rng, raw=raw,
+        )  # fmt: skip
         grad, limit = torch.stack(norms).T if norms else (torch.zeros(0), torch.zeros(0))
         if not trained:
             clipper.arm()  # "auto" calibrates on the steps after the cold start
@@ -491,7 +481,7 @@ def walk(
                     "largest": float(np.abs(w).max()) / gross if gross else None,
                     "loss": float(torch.stack(losses).mean()) if losses else math.nan,
                     "passes": passes, "held_loss": held_loss, "held_curve": curve,
-                    "test_curve": tests,
+                    "test_curve": tests, "rollbacks": rollbacks,
                     "grad_median": float(grad.median()) if norms else math.nan,
                     "grad_max": float(grad.max()) if norms else math.nan,
                     "clipped": float((grad > limit).float().mean()) if norms else 0.0,

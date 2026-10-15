@@ -1,5 +1,6 @@
 """Class 3 optimizer: which training months are held out, and cold sampled months."""
 
+import math
 from datetime import date
 
 import numpy as np
@@ -127,3 +128,22 @@ def test_clipped_runs_score_held_out_months_on_their_real_returns():
     assert _held_loss(model, clipped, None, s, held) != pytest.approx(
         _held_loss(model, real, None, s, held), rel=1e-3
     )
+
+
+def test_guard_rolls_back_a_pass_that_breaks_the_model_and_halves_later_rates():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import stopping  # noqa: PLC0415
+
+    model = torch.nn.Linear(3, 1)
+    adam = torch.optim.Adam(model.parameters())
+    guard = stopping.Guard(model, adam)
+    before = model.weight.detach().clone()
+
+    def blow_up(p):
+        with torch.no_grad():
+            model.weight.fill_(math.nan)
+        return ["loss"]
+
+    assert guard(blow_up, 0) == []
+    assert torch.equal(model.weight, before) and guard.scale == 0.5 and guard.rollbacks == 1
+    assert guard(lambda p: ["fine"], 1) == ["fine"] and guard.rollbacks == 1

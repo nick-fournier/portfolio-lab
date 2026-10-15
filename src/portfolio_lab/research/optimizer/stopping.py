@@ -84,3 +84,30 @@ def fit_stopped(  # noqa: PLR0913, PLR0917 - the rule's pieces
     if average is not None:
         average.load(kept[3])
     return kept[2], best_at, best, curve
+
+
+class Guard:
+    """Rolls back a pass that leaves the model broken; the passes after it run at half rate.
+
+    A pass whose weights come out not finite (a blown-up step, bench1-3) is undone: model,
+    Adam and ``average`` go back to where the pass began, ``rollbacks`` counts it and
+    ``scale`` (the factor on every later pass's rate) halves, so a month never ends broken.
+    """
+
+    def __init__(self, model, adam, average=None):
+        self.model, self.adam, self.average = model, adam, average
+        self.scale, self.rollbacks = 1.0, 0
+
+    def __call__(self, one_pass, p: int) -> list:
+        """Run ``one_pass(p)``; its losses, or none if it was rolled back."""
+        saved = (copy.deepcopy(self.model.state_dict()), copy.deepcopy(self.adam.state_dict()),
+                 self.average.state() if self.average is not None else None)  # fmt: skip
+        losses = one_pass(p)
+        if all(bool(q.isfinite().all()) for q in self.model.parameters()):
+            return losses
+        self.model.load_state_dict(saved[0])
+        self.adam.load_state_dict(saved[1])
+        if self.average is not None:
+            self.average.load(saved[2])
+        self.scale, self.rollbacks = self.scale / 2, self.rollbacks + 1
+        return []
