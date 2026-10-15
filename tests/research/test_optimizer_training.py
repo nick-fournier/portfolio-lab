@@ -256,7 +256,7 @@ def test_fit_stopped_reads_the_smoothed_score_and_rolls_back_to_the_best_window(
     with torch.no_grad():
         model.weight.zero_()
     adam = torch.optim.Adam(model.parameters())
-    # raw scores: a noise spike at pass 2 must not win; means of 3 bottom at passes 3-5 (2.0)
+    # raw scores: the spike at pass 2 must not win; means of 3 bottom at pass 4 (2.0, tied at 5)
     scores = iter([9.0, 0.5, 3.0, 2.5, 0.5, 4.0, 3.0, 3.0, 3.0, 3.0, 3.0, 1.0])
 
     def one_pass(p):
@@ -267,9 +267,9 @@ def test_fit_stopped_reads_the_smoothed_score_and_rolls_back_to_the_best_window(
     losses, passes, best, curve = stopping.fit_stopped(
         model, adam, one_pass, lambda: next(scores), True, most=40, patience=5, smooth=3
     )
-    assert (passes, best, losses) == (5, 2.0, [5.0])
-    assert float(model.weight) == 5.0  # rolled back from pass 10
-    assert curve == [9.0, 0.5, 3.0, 2.5, 0.5, 4.0, 3.0, 3.0, 3.0, 3.0]
+    assert (passes, best, losses) == (4, 2.0, [4.0])
+    assert float(model.weight) == 4.0  # rolled back from pass 9
+    assert curve == [9.0, 0.5, 3.0, 2.5, 0.5, 4.0, 3.0, 3.0, 3.0]
     calls = []
     losses, passes, best, curve = stopping.fit_stopped(
         model, adam, lambda p: calls.append(p) or [0.0], lambda: 0.0, False, most=4, patience=3
