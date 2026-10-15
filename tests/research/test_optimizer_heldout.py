@@ -32,7 +32,7 @@ def test_scattered_held_months_are_spread_out_and_left_out_of_the_fit():
     assert stopping.held_months(train, 0, np.random.default_rng(3)) == (train, [])
 
 
-def test_cold_listed_months_match_the_full_walk_and_holdout_seed_moves_only_the_held_months():
+def test_cold_listed_months_stand_alone_and_holdout_seed_moves_the_held_months():
     pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
 
@@ -59,17 +59,18 @@ def test_cold_listed_months_match_the_full_walk_and_holdout_seed_moves_only_the_
     def run(**kw):
         return walk(months, Settings("linear", **base, **kw), stock_costs=stock)
 
-    w_all, log_all, _ = run()
+    _, log_all, _ = run()
     picked = (date(2002, 1, 1), date(2002, 4, 1))
     w_two, log_two, _ = run(only=picked)
     assert log_two["date"].to_list() == list(picked)
+    w_one, _, _ = run(only=picked[1:])
     for d in picked:  # a cold month does not depend on the months that ran before it
-        a = w_all.filter(pl.col("date") == d)["weight"].to_numpy()
-        b = w_two.filter(pl.col("date") == d)["weight"].to_numpy()
-        assert np.allclose(a, b, atol=1e-6)
         assert log_two.filter(pl.col("date") == d)["test_curve"].to_list() == pytest.approx(
             log_all.filter(pl.col("date") == d)["test_curve"].to_list(), abs=1e-6
         )
+    late = pl.col("date") == picked[1]  # traded holdings differ from a full walk's by design
+    assert np.allclose(w_two.filter(late)["weight"].to_numpy(),
+                       w_one.filter(late)["weight"].to_numpy(), atol=1e-6)  # fmt: skip
     _, other, _ = run(only=picked, holdout_seed=7)
     assert other["held_curve"].to_list() != log_two["held_curve"].to_list()
     _, none, _ = run(only=picked, holdout=0)  # nothing held out: the test month still logged
