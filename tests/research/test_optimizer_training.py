@@ -229,10 +229,10 @@ def test_max_return_zeroes_garbage_training_returns_only():
 
     m = data.Month(date(2000, 1, 31), ["A", "B"], np.zeros((2, 1), np.float32),
                    np.array([948.0, 0.05], np.float32))  # fmt: skip
-    ((_, r),) = _data([m], Settings("linear", max_return=3.0), "cpu")
+    ((_, r),), _ = _data([m], Settings("linear", max_return=3.0), "cpu")
     assert r.tolist() == pytest.approx([0.0, 0.05])
     assert m.r[0] == 948.0  # the month itself (the test month's return) is untouched
-    ((_, r),) = _data([m], Settings("linear"), "cpu")
+    ((_, r),), _ = _data([m], Settings("linear"), "cpu")
     assert float(r[0]) == 948.0
     assert torch.is_tensor(r)
 
