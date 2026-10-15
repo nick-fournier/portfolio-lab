@@ -51,6 +51,17 @@ def test_grid_carry_and_holdings_input_score_held_out_months_from_the_carried_bo
     assert (curves["val_net_ret"] <= curves["val_gross_ret"]).all()
     with pytest.raises(ValueError, match="carry"):
         grid.fit(months, 16, grid.Config("x", carry=True), window=12, validation=3, device="cpu")
+    inner = grid.fit(months, 16, grid.Config("inner", holdings_input=True, borrow_input=True,
+                                             inner=3, **base),
+                     window=12, validation=3, device="cpu", stock_costs=stock)  # fmt: skip
+    for row in inner:
+        assert np.isfinite(row["inner_net_loss"]) and np.isfinite(row["val_net_loss"])
+        assert np.isfinite(row["inner_net_sharpe"])
+    with pytest.raises(ValueError, match="inner"):
+        grid.fit(months, 16, grid.Config("x", inner=3), window=12, validation=3, device="cpu")
+    with pytest.raises(ValueError, match="borrow_input"):
+        grid.fit(months, 16, grid.Config("x", costs=True, borrow_input=True), window=12,
+                 validation=3, device="cpu", stock_costs=stock)  # fmt: skip
 
 
 def test_walk_holdings_input_feeds_the_real_book_to_the_test_month_and_needs_costs():

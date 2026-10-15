@@ -38,6 +38,13 @@ order from the last training month's book (each month trades from the one before
 year ``val_net_ret``, ``val_gross_ret``, ``val_spread`` and ``val_borrow``, plus
 ``val_turnover`` (dollars traded a year per dollar of gross).
 
+Stopping check (``inner``, 2026-10-15): a random block of consecutive training months is held
+out of training and scored each epoch exactly like the validation months (rolled forward from
+the month before it), as ``inner_net_loss`` and the other ``inner_*`` measures; with
+``val_net_loss`` (the paper loss net of costs on the validation months, which come after the
+training months) it shows whether a block inside the window tracks months the model has
+truly never seen, epoch by epoch.
+
 Training loss L of a best-scaled portfolio equals 1 / (1 + S^2), S its monthly Sharpe, so a
 low training loss is an in-sample Sharpe, not a better model.
 """
@@ -54,6 +61,7 @@ from portfolio_lab.research.optimizer import costs as cost_model
 from portfolio_lab.research.optimizer.data import Month
 from portfolio_lab.research.optimizer.holdings import carried, with_holdings
 from portfolio_lab.research.optimizer.model import Optimizer
+from portfolio_lab.research.optimizer.stopping import held_block
 from portfolio_lab.research.optimizer.walk import rate
 
 
@@ -81,6 +89,9 @@ class Config:
         max_return: Training returns above this in size set to 0 (``None``: kept).
         carry: Charge spreads from the stored, drifted book (module docs).
         holdings_input: Feed each stock's holding and spread to the model (module docs).
+        borrow_input: Also feed each stock's log borrow fee (needs ``holdings_input``).
+        inner: Hold out a random block of this many consecutive training months, never
+            trained on, scored like the validation months (``inner_*``; needs ``costs``).
     """
 
     name: str
@@ -101,6 +112,8 @@ class Config:
     max_return: float | None = None
     carry: bool = False
     holdings_input: bool = False
+    borrow_input: bool = False
+    inner: int = 0
 
 
 def lr_at(config: Config, epoch: int) -> float:
@@ -204,8 +217,10 @@ def _epoch(model: Optimizer, adam, step_loss, order: list[int], clip: float | No
 
 
 def _check(config: Config) -> None:
-    if (config.carry or config.holdings_input) and not config.costs:
-        raise ValueError("carry and holdings_input need costs")
+    if (config.carry or config.holdings_input or config.inner) and not config.costs:
+        raise ValueError("carry, holdings_input and inner need costs")
+    if config.borrow_input and not config.holdings_input:
+        raise ValueError("borrow_input needs holdings_input")
 
 
 def _before(config: Config, run, book: dict, tensors: list, k: int) -> torch.Tensor | None:
@@ -240,7 +255,8 @@ def fit(
     known = [bool(torch.isfinite(r).all()) for _, r in tensors]
     train = [k for k in range(window - validation) if known[k]]
     held = [k for k in range(window - validation, window) if known[k]]
-    width = tensors[0][0].shape[1] + (2 if config.holdings_input else 0)
+    train, block = held_block(train, config.inner, rng) if config.inner else (train, [])
+    width = tensors[0][0].shape[1] + 2 * config.holdings_input + config.borrow_input
     model = _new_model(config, width, device)
     scores = torch.compile(model, dynamic=True) if config.compile else model
     book: dict[int, torch.Tensor] = {}  # month -> its stored weights (carried holdings)
@@ -248,7 +264,7 @@ def fit(
     def features(k: int) -> torch.Tensor:
         if not config.holdings_input:
             return tensors[k][0]
-        return with_holdings(tensors, links, stock, book, k)
+        return with_holdings(tensors, links, stock, book, k, config.borrow_input)
 
     def run(k: int) -> torch.Tensor:
         return scores(features(k))
@@ -286,6 +302,10 @@ def fit(
         scored = carried(
             run, tensors, held, links, stock, book if table else None, config.short_hurdle
         )
+        if block:
+            inner = carried(run, tensors, block, links, stock, book if table else None,
+                            config.short_hurdle)  # fmt: skip
+            scored |= {"inner" + key[3:]: value for key, value in inner.items()}
         rows.append({"config": config.name, "end": months[end].date, "epoch": epoch + 1,
                      "lr": lr_at(config, epoch),
                      "train_loss": float(torch.stack(losses).mean()) if losses else math.nan,

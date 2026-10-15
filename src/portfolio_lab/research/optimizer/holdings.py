@@ -51,13 +51,17 @@ def carried(run, tensors: list, held: list[int], links: list, stock: list | None
     """Held-out months rolled forward in order from the last training month's book (grid docs).
 
     ``book`` (carried holdings, else ``None``) supplies the starting book and gets each held-out
-    month's; without it the start is the model's weights on the last training month.
+    month's; without it the start is the model's weights on the last training month. Also
+    ``val_net_loss``: the mean paper loss on the return net of costs at the model's size.
     """
     if stock is None or not held:
         return {}
-    parts = []
+    parts, losses = [], []
     with torch.no_grad():
-        prev = run(held[0] - 1) if book is None else book.get(held[0] - 1)
+        if book is not None:
+            prev = book.get(held[0] - 1)
+        else:
+            prev = run(held[0] - 1) if held[0] > 0 else None
         for k in held:
             w, r = run(k), tensors[k][1]
             before = None if prev is None else prev * (1 + tensors[k - 1][1])
@@ -66,8 +70,9 @@ def carried(run, tensors: list, held: list[int], links: list, stock: list | None
                                                         stock[k - 1][0])  # fmt: skip
             kept = w.new_zeros(len(w)) if before is None else cost_model.carry(before, links[k])
             sold = 0.0 if before is None else before[links[k].gone].abs().sum()
-            parts.append(torch.stack([gross, spread_cost,
-                                      ((fee + hurdle) / 12 * torch.relu(-w)).sum(),
+            borrow = ((fee + hurdle) / 12 * torch.relu(-w)).sum()
+            losses.append((1 - (gross - spread_cost - borrow)) ** 2)
+            parts.append(torch.stack([gross, spread_cost, borrow,
                                       (w - kept).abs().sum() + sold]) / w.abs().sum())  # fmt: skip
             if book is not None:
                 book[k] = w
@@ -78,7 +83,8 @@ def carried(run, tensors: list, held: list[int], links: list, stock: list | None
     return {"val_net_sharpe": sharpe(net), "val_carry_sharpe": sharpe(g),
             "val_net_ret": float(24 * net.mean()), "val_gross_ret": float(24 * g.mean()),
             "val_spread": float(24 * sp.mean()), "val_borrow": float(24 * bo.mean()),
-            "val_turnover": float(12 * tr.mean())}  # fmt: skip
+            "val_turnover": float(12 * tr.mean()),
+            "val_net_loss": float(torch.stack(losses).mean())}  # fmt: skip
 
 
 def inputs(source: list, pricing, book: dict | None, k: int) -> torch.Tensor:
