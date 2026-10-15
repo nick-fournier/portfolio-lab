@@ -31,7 +31,7 @@ def held_block(train: list[int], holdout: int, rng: np.random.Generator) -> tupl
 
 def fit_stopped(  # noqa: PLR0913, PLR0917 - the rule's pieces
     model, adam, one_pass, score, held: bool, most: int, patience: int, smooth: int = 3,
-    average=None,
+    average=None, keep_last: bool = False,
 ) -> tuple[list, int, float, list[float]]:  # fmt: skip
     """Train by ``one_pass(p)`` until the smoothed ``score()`` stops falling (module docs).
 
@@ -39,7 +39,8 @@ def fit_stopped(  # noqa: PLR0913, PLR0917 - the rule's pieces
     held-out block (lower is better); ``average`` (research.optimizer.averaging) is rolled back
     with the model. Returns the kept pass's training losses, the passes kept, the best
     smoothed score and every pass's raw score (without a block, ``held`` False: ``most``
-    passes, ``nan``, empty).
+    passes, ``nan``, empty). ``keep_last``: score every pass but run all ``most`` and keep
+    the last (watching the curve without acting on it).
     """
     losses: list = []
     if not held:
@@ -56,8 +57,10 @@ def fit_stopped(  # noqa: PLR0913, PLR0917 - the rule's pieces
             best, best_at = value, p + 1
             kept = (copy.deepcopy(model.state_dict()), copy.deepcopy(adam.state_dict()), losses,
                     average.state() if average is not None else None)  # fmt: skip
-        elif p + 1 - max(best_at, smooth) >= patience:
+        elif not keep_last and p + 1 - max(best_at, smooth) >= patience:
             break
+    if keep_last:
+        return losses, most, best, curve
     if kept is None:  # never a finite smoothed score: keep the last pass
         return losses, p + 1, math.nan, curve
     model.load_state_dict(kept[0])

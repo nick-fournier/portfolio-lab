@@ -32,11 +32,20 @@ the block's loss, smoothed over ``smooth`` passes, has not improved for ``patien
 and the model goes back to the best pass; the log records the passes kept, the best smoothed
 held-out loss and every pass's held-out loss (``held_curve``).
 
+With ``cold`` (2026-10-15) every month trains a fresh model instead of continuing last
+month's: the seed's same starting weights, a fresh Adam and average, ``first_epochs`` passes
+from ``lr``. A warm model has already trained on most of this month's held-out block (the block
+moves every month), so its stopping score is not out of sample; a fresh one has not. With
+``watch`` the block is held out and scored every pass (``held_curve``) but every pass runs and
+the last is kept; with either, ``test_curve`` is the test month's loss after each pass (a
+diagnostic: it uses the month's return, which the walk does not know when it picks).
+
 With ``average`` the walk holds a moving average of the model's parameters instead of its
 latest step (research.optimizer.averaging); training is unchanged.
 """
 
 import contextlib
+import copy
 import math
 import time
 from dataclasses import dataclass
@@ -101,6 +110,8 @@ class Settings:
         holdout: Consecutive training months held out each month for stopping.
         smooth: Passes the held-out loss is averaged over before the rule reads it.
         average: Decay of the parameter average held each month (0: hold the latest model).
+        cold: Train a fresh model every month (module docs).
+        watch: Hold out and score the block every pass without stopping (module docs).
     """
 
     model: str
@@ -133,6 +144,8 @@ class Settings:
     holdout: int = 12
     smooth: int = 3
     average: float = 0.0
+    cold: bool = False
+    watch: bool = False
 
 
 Pair = tuple[torch.Tensor, torch.Tensor]
@@ -276,21 +289,27 @@ def _held_loss(model: Optimizer, data: list[Pair], pricing: Pricing | None,
 def _fit(  # noqa: PLR0913 - one month's training pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
     epochs: int, settings: Settings, rng: np.random.Generator, pricing: Pricing | None, *,
-    start_lr: float, span: range, clipper: Clipper, average: Average | None,
-) -> tuple[list, int, float, list[float], list[torch.Tensor]]:  # fmt: skip
+    start_lr: float, span: range, clipper: Clipper, average: Average | None, test: int,
+) -> tuple[list, int, float, list[float], list[torch.Tensor], list[float]]:  # fmt: skip
     """One month's training: losses, passes, held-out loss, its curve, gradient sizes.
 
     Returns the kept pass's losses, the passes kept, the best smoothed held-out loss, its
-    per-pass curve and every step's (gradient size before clipping, limit) over all the
-    passes run.
+    per-pass curve, every step's (gradient size before clipping, limit) over all the passes
+    run and the test month ``test``'s loss after each pass (``test`` < 0: none).
     ``epochs`` passes (with ``settings.stop``: at most), the rate following
     ``settings.schedule`` from ``start_lr`` over them. With a book (``holdings_input``) the
     ``span`` months not in it get the model's weights first, in month order.
     """
     if pricing is not None:
         holdings.fill(model, data, pricing, span)
-    fit, block = (stopping.held_block(train, settings.holdout, rng) if settings.stop
-                  else (train, []))  # fmt: skip
+    fit, block = (stopping.held_block(train, settings.holdout, rng)
+                  if settings.stop or settings.watch else (train, []))  # fmt: skip
+    tests: list[float] = []
+
+    def score() -> float:
+        if test >= 0:
+            tests.append(_held_loss(model, data, pricing, settings, [test]))
+        return _held_loss(model, data, pricing, settings, block)
 
     norms: list[torch.Tensor] = []
 
@@ -299,11 +318,10 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
         return _pass(model, adam, data, fit, settings, rng, pricing, lr, clipper, norms,
                      average)  # fmt: skip
 
-    return (*stopping.fit_stopped(model, adam, one_pass,
-                                  lambda: _held_loss(model, data, pricing, settings, block),
-                                  bool(block), epochs, settings.patience, settings.smooth,
-                                  average),
-            norms)  # fmt: skip
+    return (*stopping.fit_stopped(model, adam, one_pass, score, bool(block), epochs,
+                                  settings.patience, settings.smooth, average,
+                                  keep_last=settings.watch),
+            norms, tests)  # fmt: skip
 
 
 def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, torch.optim.Adam]:
@@ -344,7 +362,10 @@ def walk(
     """
     rng = np.random.default_rng(settings.seed)
     clipper = Clipper(settings.clip)
+    if settings.stop and settings.watch:
+        raise ValueError("stop and watch are alternatives")
     model, adam = _new_model(settings, months[0].x.shape[1], device)
+    start_state = copy.deepcopy(model.state_dict()) if settings.cold else None
     average = Average(model, settings.average) if settings.average else None
     data = _data(months, settings, device)
     known = [bool(np.isfinite(m.r).all()) for m in months]
@@ -359,13 +380,29 @@ def walk(
             continue
         clock = time.perf_counter()
         train = [k for k in range(lo, t) if known[k]]
-        epochs = settings.warm_epochs if trained else settings.first_epochs
-        start_lr = settings.warm_lr if trained and settings.warm_lr else settings.lr
-        losses, passes, held_loss, curve, norms = _fit(model, adam, data, train, epochs,
-                                                       settings, rng, pricing,
-                                                       start_lr=start_lr,
-                                                       span=range(lo, t), clipper=clipper,
-                                                       average=average)  # fmt: skip
+        if settings.cold and trained:  # same starting weights, fresh Adam and average
+            model.load_state_dict(start_state)
+            adam = torch.optim.Adam(model.parameters(), lr=settings.lr)
+            average = Average(model, settings.average) if settings.average else None
+        warm = trained and not settings.cold
+        epochs = settings.warm_epochs if warm else settings.first_epochs
+        start_lr = settings.warm_lr if warm and settings.warm_lr else settings.lr
+        watched = t if known[t] and (settings.stop or settings.watch) else -1
+        losses, passes, held_loss, curve, norms, tests = _fit(
+            model,
+            adam,
+            data,
+            train,
+            epochs,
+            settings,
+            rng,
+            pricing,
+            start_lr=start_lr,
+            span=range(lo, t),
+            clipper=clipper,
+            average=average,
+            test=watched,
+        )
         grad, limit = torch.stack(norms).T if norms else (torch.zeros(0), torch.zeros(0))
         if not trained:
             clipper.arm()  # "auto" calibrates on the steps after the cold start
@@ -387,6 +424,7 @@ def walk(
                     "largest": float(np.abs(w).max()) / gross if gross else None,
                     "loss": float(torch.stack(losses).mean()) if losses else math.nan,
                     "passes": passes, "held_loss": held_loss, "held_curve": curve,
+                    "test_curve": tests,
                     "grad_median": float(grad.median()) if norms else math.nan,
                     "grad_max": float(grad.max()) if norms else math.nan,
                     "clipped": float((grad > limit).float().mean()) if norms else 0.0,

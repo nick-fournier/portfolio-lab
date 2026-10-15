@@ -303,6 +303,17 @@ def test_walk_with_early_stopping_logs_passes_and_leaves_the_book_to_training():
     _, big, _ = walk(months, Settings("linear", window=20, first_epochs=8, warm_epochs=8,
                                       start=date(2001, 9, 1), clip=1e-9))  # fmt: skip
     assert (big["clipped"] == 1.0).all()  # every step's gradient is over a tiny limit
+    watched = Settings("linear", window=20, first_epochs=6, warm_epochs=2,
+                       start=date(2001, 9, 1), costs="table.parquet", holdings_input=True,
+                       holdout=6, cold=True, watch=True)  # fmt: skip
+    _, cold, _ = walk(months, watched, stock_costs=stock)
+    assert (cold["passes"] == 6).all()  # cold: every month gets first_epochs, all run
+    assert all(len(c) == 6 for c in cold["held_curve"])
+    assert all(len(c) == 6 for c in cold["test_curve"].drop_nulls())
+    with pytest.raises(ValueError, match="alternatives"):
+        walk(months, Settings("linear", window=20, start=date(2001, 9, 1), costs="t",
+                              holdings_input=True, stop=True, watch=True),
+             stock_costs=stock)  # fmt: skip
 
 
 def test_auto_clipping_sets_the_bar_once_from_the_first_steps_and_holds_it():

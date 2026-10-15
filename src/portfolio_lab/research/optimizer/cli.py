@@ -181,6 +181,10 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     average: Annotated[
         float, typer.Option(help="Hold a moving average of the model (decay per step; 0: off).")
     ] = 0.0,
+    cold: Annotated[bool, typer.Option(help="Fresh model every month (walk docs).")] = False,
+    watch: Annotated[
+        bool, typer.Option(help="Score the held-out block every pass, never stop (walk docs).")
+    ] = False,
     inputs: Annotated[str, typer.Option(help="Characteristics: all, ours, jkp or paper.")] = "all",
     precision: Annotated[
         str, typer.Option(help="float32 matrix products: highest, or high (TF32, faster).")
@@ -218,6 +222,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 max_return=max_return or None, holdings_input=holdings_input,
                 borrow_input=borrow_input, stop=stop,
                 patience=patience, holdout=holdout, smooth=smooth, average=average,
+                cold=cold, watch=watch,
             )  # fmt: skip
             futures.append(pool_.submit(_walk_one, table, run, settings, device, threads,
                                         precision, inputs, last))  # fmt: skip
