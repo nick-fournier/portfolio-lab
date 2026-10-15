@@ -36,6 +36,7 @@ import polars as pl
 import torch
 
 from portfolio_lab.research.optimizer import costs, holdings, stopping
+from portfolio_lab.research.optimizer.clipping import Clipper
 from portfolio_lab.research.optimizer.data import Month
 from portfolio_lab.research.optimizer.model import Optimizer, loss
 
@@ -57,7 +58,8 @@ class Settings:
         seed: Random seed (initial weights and month order).
         start: First test month end.
         fast_attention: bfloat16 fused attention (model.Block).
-        clip: Largest total gradient size per step (``None``: no clipping, the paper).
+        clip: Largest gradient size per step: a number, ``"auto"`` (the 95th percentile of
+            recent steps, research.optimizer.clipping) or ``None`` (no clipping, the paper).
         costs: A per-stock cost table (``costs.align``) for the loss; the walk gets it aligned
             as ``stock_costs``. Recorded here as its path.
         short_hurdle: Extra yearly cost per dollar shorted in the loss, on top of the borrow
@@ -87,7 +89,7 @@ class Settings:
     seed: int = 0
     start: date = date(2003, 12, 31)
     fast_attention: bool = False
-    clip: float | None = 1.0
+    clip: float | str | None = 1.0
     costs: str | None = None
     short_hurdle: float = 0.0
     schedule: str = "flat"
@@ -185,12 +187,12 @@ def _priced_loss(model: Optimizer, data: list[Pair], pricing: Pricing, settings:
 def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
     settings: Settings, rng: np.random.Generator, pricing: Pricing | None, lr: float,
-    norms: list[torch.Tensor],
+    clipper: Clipper, norms: list[torch.Tensor],
 ) -> list[torch.Tensor]:  # fmt: skip
     """One pass over the ``train`` months in shuffled order at rate ``lr``; its losses.
 
-    Each step's gradient size before clipping goes on ``norms``. A step whose loss is not
-    finite is skipped rather than poison Adam.
+    Each step's (gradient size before clipping, limit) goes on ``norms``. A step whose loss
+    is not finite is skipped rather than poison Adam.
     """
     for group in adam.param_groups:
         group["lr"] = lr
@@ -202,7 +204,7 @@ def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
         if not torch.isfinite(value):
             continue
         value.backward()
-        norms.append(torch.nn.utils.clip_grad_norm_(model.parameters(), settings.clip or math.inf))
+        norms.append(clipper(model.parameters()))
         adam.step()
         losses.append(value.detach())
     return losses
@@ -224,12 +226,13 @@ def _held_loss(model: Optimizer, data: list[Pair], pricing: Pricing | None,
 def _fit(  # noqa: PLR0913 - one month's training pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
     epochs: int, settings: Settings, rng: np.random.Generator, pricing: Pricing | None, *,
-    start_lr: float, span: range,
+    start_lr: float, span: range, clipper: Clipper,
 ) -> tuple[list, int, float, list[float], list[torch.Tensor]]:  # fmt: skip
     """One month's training: losses, passes, held-out loss, its curve, gradient sizes.
 
     Returns the kept pass's losses, the passes kept, the best smoothed held-out loss, its
-    per-pass curve and every step's gradient size (before clipping) over all the passes run.
+    per-pass curve and every step's (gradient size before clipping, limit) over all the
+    passes run.
     ``epochs`` passes (with ``settings.stop``: at most), the rate following
     ``settings.schedule`` from ``start_lr`` over them. With a book (``holdings_input``) the
     ``span`` months not in it get the model's weights first, in month order.
@@ -243,7 +246,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
 
     def one_pass(p: int) -> list:
         lr = rate(settings.schedule, start_lr, settings.lr_min, p, epochs)
-        return _pass(model, adam, data, fit, settings, rng, pricing, lr, norms)
+        return _pass(model, adam, data, fit, settings, rng, pricing, lr, clipper, norms)
 
     return (*stopping.fit_stopped(model, adam, one_pass,
                                   lambda: _held_loss(model, data, pricing, settings, block),
@@ -283,10 +286,11 @@ def walk(
         the sums of the positive and negative weights, ``largest`` = the largest absolute
         weight's share of the sum of absolute weights, mean training loss over the last pass,
         passes kept, best smoothed held-out loss and its per-pass curve with ``stop``, the
-        median and largest gradient size over the month's steps before clipping and the
-        share of steps clipped, seconds); and the final model.
+        median and largest gradient size over the month's steps before clipping, the share
+        of steps clipped and the last step's limit, seconds); and the final model.
     """
     rng = np.random.default_rng(settings.seed)
+    clipper = Clipper(settings.clip)
     model, adam = _new_model(settings, months[0].x.shape[1], device)
     data = _data(months, settings, device)
     known = [bool(np.isfinite(m.r).all()) for m in months]
@@ -303,8 +307,9 @@ def walk(
         losses, passes, held_loss, curve, norms = _fit(model, adam, data, train, epochs,
                                                        settings, rng, pricing,
                                                        start_lr=start_lr,
-                                                       span=range(lo, t))  # fmt: skip
-        grad = torch.stack(norms) if norms else torch.zeros(0)
+                                                       span=range(lo, t),
+                                                       clipper=clipper)  # fmt: skip
+        grad, limit = torch.stack(norms).T if norms else (torch.zeros(0), torch.zeros(0))
         trained = True
         w = holdings.pick(model, data, pricing, last, t)
         last = holdings.remember(pricing, w, data, t)
@@ -318,7 +323,7 @@ def walk(
                     "passes": passes, "held_loss": held_loss, "held_curve": curve,
                     "grad_median": float(grad.median()) if norms else math.nan,
                     "grad_max": float(grad.max()) if norms else math.nan,
-                    "clipped": float((grad > settings.clip).float().mean())
-                    if norms and settings.clip else 0.0,
+                    "clipped": float((grad > limit).float().mean()) if norms else 0.0,
+                    "limit": float(limit[-1]) if norms else math.nan,
                     "seconds": time.perf_counter() - clock})  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model

@@ -303,3 +303,36 @@ def test_walk_with_early_stopping_logs_passes_and_leaves_the_book_to_training():
     _, big, _ = walk(months, Settings("linear", window=20, first_epochs=8, warm_epochs=8,
                                       start=date(2001, 9, 1), clip=1e-9))  # fmt: skip
     assert (big["clipped"] == 1.0).all()  # every step's gradient is over a tiny limit
+
+
+def test_auto_clipping_cuts_only_the_spikes_above_the_recent_percentile():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.clipping import Clipper  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    w = torch.nn.Parameter(torch.zeros(4))
+    clipper = Clipper("auto", percentile=90, window=100, warmup=10)
+    sizes = [1.0] * 30 + [1000.0, 1.0, 1.0]
+    out = []
+    for size in sizes:
+        w.grad = torch.full((4,), size / 2)  # gradient norm = size
+        out.append(clipper([w]))
+        out[-1] = (float(out[-1][0]), float(out[-1][1]), float(w.grad.norm()))
+    assert out[5] == (1.0, float("inf"), 1.0)  # warmup: no limit
+    assert out[30][0] == 1000.0 and out[30][1] == 1.0 and out[30][2] == pytest.approx(1.0)
+    assert max(clipper.history) == 1.0  # the spike went in clipped: the bar did not move
+    assert out[32] == (1.0, 1.0, 1.0)
+    with pytest.raises(ValueError, match="clip"):
+        Clipper(-1)
+    with pytest.raises(ValueError, match="clip"):
+        Clipper("max")
+    rng = np.random.default_rng(20)
+    months = [
+        data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCD"),
+                   rng.uniform(-0.5, 0.5, (4, 2)).astype(np.float32),
+                   rng.normal(0.01, 0.05, 4).astype(np.float32))
+        for k in range(16)
+    ]  # fmt: skip
+    _, log, _ = walk(months, Settings("linear", window=12, first_epochs=10, warm_epochs=2,
+                                      start=date(2000, 1, 1), clip="auto"))  # fmt: skip
+    assert log["limit"].is_finite().all() and (log["clipped"] <= 0.5).all()

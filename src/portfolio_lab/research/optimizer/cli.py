@@ -92,6 +92,13 @@ def _die_with_parent() -> None:
     ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
 
 
+def _clip(text: str) -> float | str | None:
+    """``"auto"``, or a number (0: none)."""
+    if text == "auto":
+        return text
+    return float(text) or None
+
+
 def _seeds(text: str) -> list[int]:
     """``"3"`` -> [3]; ``"0-9"`` -> [0, ..., 9]; ``"1,4,7"`` -> [1, 4, 7]."""
     out = []
@@ -120,7 +127,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     fast_attention: Annotated[
         bool, typer.Option(help="bfloat16 fused attention (~5x faster transformer).")
     ] = False,
-    clip: Annotated[float, typer.Option(help="Gradient clipping (0: none).")] = 1.0,
+    clip: Annotated[str, typer.Option(help="Gradient clipping: a limit, auto, or 0 (none).")] = "1",
     costs: Annotated[
         str, typer.Option(help="Loss: per-stock cost table (date, symbol, trade_cost, borrow_fee).")
     ] = "",
@@ -177,7 +184,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         for s, run in zip(picked, runs, strict=True):
             settings = walk.Settings(
                 model, blocks, hidden, window or None, first_epochs, warm_epochs, lr, s,
-                date.fromisoformat(start), fast_attention=fast_attention, clip=clip or None,
+                date.fromisoformat(start), fast_attention=fast_attention, clip=_clip(clip),
                 costs=costs or None, short_hurdle=short_hurdle, schedule=schedule,
                 lr_min=lr_min, warm_lr=warm_lr or None, compile=compile_model,
                 max_return=max_return or None, holdings_input=holdings_input, stop=stop,
