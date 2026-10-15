@@ -312,6 +312,9 @@ def test_auto_clipping_sets_the_bar_once_from_the_first_steps_and_holds_it():
 
     w = torch.nn.Parameter(torch.zeros(4))
     clipper = Clipper("auto", percentile=90, calibrate=10)
+    w.grad = torch.full((4,), 500.0)  # a start-up transient before arming: not recorded
+    clipper([w])
+    clipper.arm()
     sizes = [1.0] * 9 + [2.0] + [1000.0, 1.0, 300.0]
     out = []
     for size in sizes:
@@ -319,7 +322,7 @@ def test_auto_clipping_sets_the_bar_once_from_the_first_steps_and_holds_it():
         out.append(clipper([w]))
         out[-1] = (float(out[-1][0]), float(out[-1][1]), float(w.grad.norm()))
     assert out[5] == (1.0, float("inf"), 1.0)  # calibrating: no limit
-    assert clipper.fixed == 1.0  # the 90th percentile of the first 10 sizes, then frozen
+    assert clipper.fixed == 1.0  # the 90th percentile of the 10 armed sizes, then frozen
     assert out[10][0] == 1000.0 and out[10][1] == 1.0 and out[10][2] == pytest.approx(1.0)
     assert out[12][0] == 300.0 and out[12][1] == 1.0  # later sizes never move the bar
     with pytest.raises(ValueError, match="clip"):
@@ -333,9 +336,10 @@ def test_auto_clipping_sets_the_bar_once_from_the_first_steps_and_holds_it():
                    rng.normal(0.01, 0.05, 4).astype(np.float32))
         for k in range(16)
     ]  # fmt: skip
-    _, log, _ = walk(months, Settings("linear", window=12, first_epochs=50, warm_epochs=2,
+    _, log, _ = walk(months, Settings("linear", window=12, first_epochs=5, warm_epochs=50,
                                       start=date(2000, 1, 1), clip="auto"))  # fmt: skip
-    assert log["limit"].is_finite().all() and log["limit"].n_unique() == 1  # set once, held
+    assert log["limit"][0] == float("inf")  # the cold start is not clipped
+    assert log["limit"][1:].is_finite().all() and log["limit"][1:].n_unique() == 1
     assert (log["clipped"] <= 0.5).all()
 
 

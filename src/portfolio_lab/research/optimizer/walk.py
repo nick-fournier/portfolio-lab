@@ -329,6 +329,8 @@ def walk(
                                                        span=range(lo, t), clipper=clipper,
                                                        average=average)  # fmt: skip
         grad, limit = torch.stack(norms).T if norms else (torch.zeros(0), torch.zeros(0))
+        if not trained:
+            clipper.arm()  # "auto" calibrates on the steps after the cold start
         trained = True
         if average is None:
             w = holdings.pick(model, data, pricing, last, t)
