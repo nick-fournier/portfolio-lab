@@ -16,7 +16,7 @@ With ``holdings_input`` (2026-10-15; needs ``costs``) each stock's row also gets
 and spread (research.optimizer.holdings): in training, from a book table of each month's
 weights (filled in month order the first time a month enters the window, refreshed at every
 step, kept from month to month); for the test month, from the walk's real holdings of the
-month before after its returns.
+month before after its returns. ``borrow_input`` adds the stock's borrow fee as well.
 
 With ``stop`` each month trains with early stopping (research.optimizer.stopping): a random
 block of ``holdout`` consecutive training months is held out, passes run one at a time (the
@@ -77,6 +77,7 @@ class Settings:
             as a $0.001 stock "returning" 94,800% in a month); the test month's are kept.
             ``None``: kept as they are.
         holdings_input: Feed each stock's holding and spread to the model (module docs).
+        borrow_input: Also feed each stock's borrow fee (needs ``holdings_input``).
         stop: Early stopping each month (module docs).
         patience: Passes without a better smoothed held-out loss before stopping.
         holdout: Consecutive training months held out each month for stopping.
@@ -103,6 +104,7 @@ class Settings:
     compile: bool = False
     max_return: float | None = None
     holdings_input: bool = False
+    borrow_input: bool = False
     stop: bool = False
     patience: int = 5
     holdout: int = 12
@@ -132,11 +134,13 @@ class Pricing:
         links: ``costs.links`` of the months.
         stock: Each month's per-stock (trade cost, borrow fee).
         book: The training book table with ``holdings_input`` (module docs), else ``None``.
+        borrow: Feed the borrow fee too (``borrow_input``).
     """
 
     links: list[costs.Link | None]
     stock: list[Pair]
     book: dict[int, torch.Tensor] | None = None
+    borrow: bool = False
 
 
 def _pricing(
@@ -149,13 +153,16 @@ def _pricing(
     """
     if settings.holdings_input and not settings.costs:
         raise ValueError("holdings_input needs per-stock costs")
+    if settings.borrow_input and not settings.holdings_input:
+        raise ValueError("borrow_input needs holdings_input")
     if not settings.costs:
         return None
     if stock_costs is None:
         raise ValueError("per-stock costs need stock_costs")
     stock = [(torch.from_numpy(c[0]).to(device), torch.from_numpy(c[1]).to(device))
              for c in stock_costs]  # fmt: skip
-    return Pricing(costs.links(months, device), stock, {} if settings.holdings_input else None)
+    return Pricing(costs.links(months, device), stock, {} if settings.holdings_input else None,
+                   settings.borrow_input)  # fmt: skip
 
 
 def rate(schedule: str, start: float, floor: float, epoch: int, epochs: int) -> float:
@@ -265,10 +272,11 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
 
 
 def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, torch.optim.Adam]:
-    """A freshly initialized model and its Adam; ``holdings_input`` adds two input columns."""
+    """A freshly initialized model and its Adam; the holdings inputs add their columns."""
     torch.manual_seed(settings.seed)
-    model = Optimizer(settings.model, width + 2 * settings.holdings_input, settings.blocks,
-                      settings.hidden, settings.fast_attention)  # fmt: skip
+    extra = 2 * settings.holdings_input + settings.borrow_input
+    model = Optimizer(settings.model, width + extra, settings.blocks, settings.hidden,
+                      settings.fast_attention)  # fmt: skip
     model.to(device)
     if settings.compile:
         model.compile(dynamic=True)

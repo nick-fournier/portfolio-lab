@@ -150,6 +150,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     holdings_input: Annotated[
         bool, typer.Option(help="Feed each stock's holding and spread to the model (--costs).")
     ] = False,
+    borrow_input: Annotated[
+        bool, typer.Option(help="Also feed each stock's borrow fee (--holdings-input).")
+    ] = False,
     stop: Annotated[
         bool, typer.Option(help="Early stopping each month on a held-out block (walk docs).")
     ] = False,
@@ -190,7 +193,8 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 date.fromisoformat(start), fast_attention=fast_attention, clip=_clip(clip),
                 costs=costs or None, short_hurdle=short_hurdle, schedule=schedule,
                 lr_min=lr_min, warm_lr=warm_lr or None, compile=compile_model,
-                max_return=max_return or None, holdings_input=holdings_input, stop=stop,
+                max_return=max_return or None, holdings_input=holdings_input,
+                borrow_input=borrow_input, stop=stop,
                 patience=patience, holdout=holdout, smooth=smooth, average=average,
             )  # fmt: skip
             futures.append(pool_.submit(_walk_one, table, run, settings, device, threads,

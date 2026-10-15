@@ -4,17 +4,16 @@ A shock month (March 2020 entering the window) gives gradients 10^7-10^11 times 
 size, and one such step wrecks the model for months (run33). Clipping caps a step's size (the
 gradient's norm over every parameter) and keeps its direction. A fixed limit (Pascanu et al.
 2013) needs a number: 1.0 clipped 95% of all steps here (typical size ~17, run34), changing
-every step rather than catching the spikes. :class:`Clipper` with ``"auto"`` instead clips at
-a percentile of the recent steps' sizes (AutoClip, Seetharaman et al. 2020): the 95th of the
-last ``window`` steps leaves normal training alone and cuts the spikes. The history stores each
-size capped at ``headroom`` times the limit: the bar can follow a real shift in the steps'
-sizes, but a spike cannot drag it up to its own size (storing the clipped sizes instead made
-the bar a one-way ratchet that only ever fell, run35). The first ``warmup`` steps are not
-clipped (nothing to compare against yet).
+every step rather than catching the spikes. :class:`Clipper` with ``"auto"`` instead sets
+the limit from the model's own healthy steps: the ``percentile`` of the first ``calibrate``
+steps' sizes (the cold start; not clipped themselves), then frozen. A bar that keeps
+following recent sizes (AutoClip, Seetharaman et al. 2020) tracks the symptom: when training
+goes bad the gradients grow for months (15 -> 250 through 2022, run37) and the bar followed
+them into the thousands while the fit faded; the same bar frozen at its 2019 value held the
+fit through 2022 (run38).
 """
 
 import math
-from collections import deque
 
 import torch
 
@@ -24,16 +23,11 @@ class Clipper:
 
     Args:
         clip: ``None`` (no clipping), a positive limit, or ``"auto"``.
-        percentile: With ``"auto"``, the percentile of recent sizes used as the limit.
-        window: Recent steps the percentile is taken over.
-        warmup: Steps before ``"auto"`` starts clipping.
-        headroom: Stored sizes are capped at this multiple of the limit.
+        percentile: With ``"auto"``, the percentile of the calibration steps' sizes.
+        calibrate: Steps whose sizes set the limit (not clipped themselves).
     """
 
-    def __init__(
-        self, clip: float | str | None, percentile: float = 95.0, window: int = 500,
-        warmup: int = 20, headroom: float = 3.0,
-    ):  # fmt: skip
+    def __init__(self, clip: float | str | None, percentile: float = 95.0, calibrate: int = 500):
         if clip == "auto":
             self.fixed = None
         elif clip is None:
@@ -42,26 +36,23 @@ class Clipper:
             self.fixed = float(clip)
         else:
             raise ValueError(f"clip must be None, a positive number or 'auto', not {clip!r}")
-        self.q, self.warmup, self.headroom = percentile / 100, warmup, headroom
-        self.history: deque[float] = deque(maxlen=window)
+        self.q, self.calibrate = percentile / 100, calibrate
+        self.history: list[float] = []
 
     def __call__(self, parameters) -> torch.Tensor:
         """Clip the parameters' gradients; returns (size before clipping, limit) as a tensor.
 
-        With a fixed limit nothing is read back from the device; ``"auto"`` reads each size.
+        With a fixed limit nothing is read back from the device; ``"auto"`` reads each size
+        while calibrating.
         """
         if self.fixed is not None:
             total = torch.nn.utils.clip_grad_norm_(parameters, self.fixed)
             return torch.stack([total, total.new_tensor(self.fixed)])
-        limit = self._limit()
-        total = torch.nn.utils.clip_grad_norm_(parameters, limit)
+        total = torch.nn.utils.clip_grad_norm_(parameters, math.inf)
         size = float(total)
         if math.isfinite(size):
-            self.history.append(min(size, self.headroom * limit))
-        return torch.stack([total, total.new_tensor(limit)])
-
-    def _limit(self) -> float:
-        if len(self.history) < self.warmup:
-            return math.inf
-        ranked = sorted(self.history)
-        return ranked[min(len(ranked) - 1, math.ceil(self.q * len(ranked)) - 1)]
+            self.history.append(size)
+        if len(self.history) >= self.calibrate:
+            ranked = sorted(self.history)
+            self.fixed = ranked[min(len(ranked) - 1, math.ceil(self.q * len(ranked)) - 1)]
+        return torch.stack([total, total.new_tensor(math.inf)])

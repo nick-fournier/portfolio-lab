@@ -80,8 +80,21 @@ def test_walk_holdings_input_feeds_the_real_book_to_the_test_month_and_needs_cos
     assert model(torch.zeros(4, 4)).shape == (4,)  # 2 traits + holding + spread
     with pytest.raises(ValueError, match="holdings_input"):
         walk(months, Settings("linear", window=12, start=date(2000, 1, 1), holdings_input=True))
+    with pytest.raises(ValueError, match="borrow_input"):
+        walk(months, Settings("linear", window=12, start=date(2000, 1, 1), costs="t.parquet",
+                              borrow_input=True), stock_costs=stock)  # fmt: skip
+    _, _, fed = walk(months, Settings("transformer", window=12, first_epochs=3, warm_epochs=1,
+                                      start=date(2000, 1, 1), costs="table.parquet",
+                                      holdings_input=True, borrow_input=True),
+                     stock_costs=stock)  # fmt: skip
+    assert fed(torch.zeros(4, 5)).shape == (4,)  # + borrow fee
+    x = holdings.with_holdings(tensors := [(torch.from_numpy(m.x), torch.from_numpy(m.r))
+                                            for m in months],
+                               costs.links(months),
+                               [(torch.from_numpy(s), torch.from_numpy(f)) for s, f in stock],
+                               {}, 3, borrow=True)  # fmt: skip
+    assert x.shape == (4, 5) and x[:, 4].tolist() == pytest.approx([np.log(0.05 / 0.03)] * 4)
     # the test month's holding column is last month's real book after its returns
-    tensors = [(torch.from_numpy(m.x), torch.from_numpy(m.r)) for m in months]
     spreads = [(torch.from_numpy(s), torch.from_numpy(f)) for s, f in stock]
     pricing = SimpleNamespace(links=costs.links(months), book={}, stock=spreads)
     last = torch.tensor([0.3, -0.2, 0.1, 0.4])

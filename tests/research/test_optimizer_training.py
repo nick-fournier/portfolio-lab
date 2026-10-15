@@ -311,21 +311,17 @@ def test_auto_clipping_cuts_only_the_spikes_above_the_recent_percentile():
     from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
 
     w = torch.nn.Parameter(torch.zeros(4))
-    clipper = Clipper("auto", percentile=90, window=100, warmup=10)
-    sizes = [1.0] * 30 + [1000.0, 1.0, 1.0]
+    clipper = Clipper("auto", percentile=90, calibrate=10)
+    sizes = [1.0] * 9 + [2.0] + [1000.0, 1.0, 300.0]
     out = []
     for size in sizes:
         w.grad = torch.full((4,), size / 2)  # gradient norm = size
         out.append(clipper([w]))
         out[-1] = (float(out[-1][0]), float(out[-1][1]), float(w.grad.norm()))
-    assert out[5] == (1.0, float("inf"), 1.0)  # warmup: no limit
-    assert out[30][0] == 1000.0 and out[30][1] == 1.0 and out[30][2] == pytest.approx(1.0)
-    assert max(clipper.history) == 3.0  # the spike went in capped at 3x the limit
-    assert out[32] == pytest.approx((1.0, 1.0, 1.0))
-    for _ in range(100):  # a real shift to 2.0 lifts the bar; the spike never set it to 1000
-        w.grad = torch.full((4,), 1.0)
-        clipper([w])
-    assert clipper._limit() == pytest.approx(2.0)
+    assert out[5] == (1.0, float("inf"), 1.0)  # calibrating: no limit
+    assert clipper.fixed == 1.0  # the 90th percentile of the first 10 sizes, then frozen
+    assert out[10][0] == 1000.0 and out[10][1] == 1.0 and out[10][2] == pytest.approx(1.0)
+    assert out[12][0] == 300.0 and out[12][1] == 1.0  # later sizes never move the bar
     with pytest.raises(ValueError, match="clip"):
         Clipper(-1)
     with pytest.raises(ValueError, match="clip"):
