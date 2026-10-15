@@ -43,8 +43,8 @@ diagnostic: it uses the month's return, which the walk does not know when it pic
 from an empty book, so the holdings inputs of its training months come from its own model, not
 from earlier months' models that trained on them, and its month order and held-out draw come
 from random streams of its own (the seed and the month), so a month's result does not depend
-on which months ran before it; before each score the held-out months' book
-entries are rolled forward, in month order, with the model as it stands.
+on which months ran before it; before each score the held-out months' book entries are rolled
+forward, in month order, with the model as it stands.
 
 Held-out design (2026-10-15): ``scatter`` holds out ``holdout`` single months drawn anywhere in
 the window instead of one consecutive block; ``holdout_seed`` draws them from their own random
@@ -54,8 +54,7 @@ listed test months (with ``cold`` each is independent of the others): a cheap sa
 walk. The month before a listed one is then not a traded month, so the test month's holdings
 inputs come from the model's own weights for it.
 
-With ``average`` the walk holds a moving average of the model's parameters instead of its
-latest step (research.optimizer.averaging); training is unchanged.
+``average``: the walk holds a moving average of the model's parameters, not its latest step.
 """
 
 import contextlib
@@ -134,6 +133,9 @@ class Settings:
         scatter: Hold out single months drawn anywhere in the window, not a block.
         holdout_seed: Seed of the held-out draw's own random stream (``None``: ``seed``'s).
         only: Train and trade only these test month ends (``None``: every month).
+        dropout: Dropout share in the model's blocks while training (``model`` docs).
+        stock_drop: Share of the month's stocks each training step hides from the loss, drawn
+            afresh (returns 0, the rest x 1 / (1 - share)); the model sees all. No ``costs``.
     """
 
     model: str
@@ -172,6 +174,8 @@ class Settings:
     scatter: bool = False
     holdout_seed: int | None = None
     only: tuple[date, ...] | None = None
+    dropout: float = 0.0
+    stock_drop: float = 0.0
 
 
 Pair = tuple[torch.Tensor, torch.Tensor]
@@ -291,9 +295,14 @@ def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
     for group in adam.param_groups:
         group["lr"] = lr
     losses = []  # kept on the device: reading each one would wait for the GPU
+    model.train()  # dropout on; everything else scores the whole model
     for k in rng.permutation(train):
         adam.zero_grad()
-        value = (loss(model, *data[k]) if pricing is None
+        x, r = data[k]
+        if settings.stock_drop:
+            kept = torch.from_numpy(rng.random(len(r)) >= settings.stock_drop).to(r)
+            r = r * kept / (1 - settings.stock_drop)
+        value = (loss(model, x, r) if pricing is None
                  else _priced_loss(model, data, pricing, settings, int(k)))  # fmt: skip
         if not torch.isfinite(value):
             continue
@@ -303,6 +312,7 @@ def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
         if average is not None:
             average.update()
         losses.append(value.detach())
+    model.eval()
     return losses
 
 
@@ -380,7 +390,7 @@ def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, 
     torch.manual_seed(settings.seed)
     extra = 2 * settings.holdings_input + settings.borrow_input
     model = Optimizer(settings.model, width + extra, settings.blocks, settings.hidden,
-                      settings.fast_attention)  # fmt: skip
+                      settings.fast_attention, settings.dropout)  # fmt: skip
     model.to(device)
     if settings.compile:
         model.compile(dynamic=True)
@@ -423,8 +433,8 @@ def walk(
     hold_rng = (rng if settings.holdout_seed is None
                 else np.random.default_rng(settings.holdout_seed))  # fmt: skip
     clipper = Clipper(settings.clip)
-    if settings.stop and settings.watch:
-        raise ValueError("stop and watch are alternatives")
+    if (settings.stop and settings.watch) or (settings.stock_drop and settings.costs):
+        raise ValueError("stop and watch are alternatives; stock_drop is gross loss only")
     model, adam = _new_model(settings, months[0].x.shape[1], device)
     start_state = copy.deepcopy(model.state_dict()) if settings.cold else None
     average = Average(model, settings.average) if settings.average else None

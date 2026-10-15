@@ -170,6 +170,10 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     winsor: Annotated[
         float, typer.Option(help="Training returns pulled in to each month's q, 1-q quantiles.")
     ] = 0.0,
+    dropout: Annotated[float, typer.Option(help="Dropout share in the blocks (training).")] = 0.0,
+    stock_drop: Annotated[
+        float, typer.Option(help="Share of each month's stocks hidden from each step's loss.")
+    ] = 0.0,
     holdings_input: Annotated[
         bool, typer.Option(help="Feed each stock's holding and spread to the model (--costs).")
     ] = False,
@@ -238,6 +242,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 cold=cold, watch=watch, scatter=scatter,
                 holdout_seed=None if holdout_seed < 0 else holdout_seed,
                 only=tuple(date.fromisoformat(d) for d in only.split(",")) if only else None,
+                dropout=dropout, stock_drop=stock_drop,
             )  # fmt: skip
             futures.append(pool_.submit(_walk_one, table, run, settings, device, threads,
                                         precision, inputs, last))  # fmt: skip

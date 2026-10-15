@@ -147,3 +147,35 @@ def test_guard_rolls_back_a_pass_that_breaks_the_model_and_halves_later_rates():
     assert guard(blow_up, 0) == []
     assert torch.equal(model.weight, before) and guard.scale == 0.5 and guard.rollbacks == 1
     assert guard(lambda p: ["fine"], 1) == ["fine"] and guard.rollbacks == 1
+
+
+def test_dropout_acts_only_while_training_and_the_model_starts_in_eval():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+
+    torch.manual_seed(0)
+    model = Optimizer("transformer", 4, blocks=2, hidden=8, dropout=0.5)
+    x = torch.randn(30, 4)
+    assert not model.training and torch.equal(model(x), model(x))
+    model.train()
+    assert not torch.equal(model(x), model(x))
+
+
+def test_stock_drop_changes_training_and_needs_the_gross_loss():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    rng = np.random.default_rng(9)
+    months = [
+        data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"),
+                   rng.uniform(-0.5, 0.5, (8, 2)).astype(np.float32),
+                   rng.normal(0.01, 0.05, 8).astype(np.float32))
+        for k in range(26)
+    ]  # fmt: skip
+    base = dict(window=20, first_epochs=3, start=date(2001, 9, 1), cold=True)
+    w0, _, _ = walk(months, Settings("linear", **base))
+    w1, log, _ = walk(months, Settings("linear", **base, stock_drop=0.25))
+    assert not np.allclose(w0["weight"].to_numpy(), w1["weight"].to_numpy())
+    assert log["loss"].is_finite().all()
+    with pytest.raises(ValueError, match="stock_drop"):
+        walk(months, Settings("linear", **base, stock_drop=0.25, costs="t.parquet"))
