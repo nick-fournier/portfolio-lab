@@ -185,6 +185,15 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     watch: Annotated[
         bool, typer.Option(help="Score the held-out block every pass, never stop (walk docs).")
     ] = False,
+    scatter: Annotated[
+        bool, typer.Option(help="Hold out single months anywhere, not a block (walk docs).")
+    ] = False,
+    holdout_seed: Annotated[
+        int, typer.Option(help="Seed of the held-out draw (-1: the run's seed).")
+    ] = -1,
+    only: Annotated[
+        str, typer.Option(help="Train and trade only these month ends: 2020-03-31,2021-06-30.")
+    ] = "",
     inputs: Annotated[str, typer.Option(help="Characteristics: all, ours, jkp or paper.")] = "all",
     precision: Annotated[
         str, typer.Option(help="float32 matrix products: highest, or high (TF32, faster).")
@@ -222,7 +231,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 max_return=max_return or None, holdings_input=holdings_input,
                 borrow_input=borrow_input, stop=stop,
                 patience=patience, holdout=holdout, smooth=smooth, average=average,
-                cold=cold, watch=watch,
+                cold=cold, watch=watch, scatter=scatter,
+                holdout_seed=None if holdout_seed < 0 else holdout_seed,
+                only=tuple(date.fromisoformat(d) for d in only.split(",")) if only else None,
             )  # fmt: skip
             futures.append(pool_.submit(_walk_one, table, run, settings, device, threads,
                                         precision, inputs, last))  # fmt: skip

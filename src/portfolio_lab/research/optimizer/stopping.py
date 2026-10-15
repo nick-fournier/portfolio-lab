@@ -23,10 +23,26 @@ def held_block(train: list[int], holdout: int, rng: np.random.Generator) -> tupl
 
     With too few months to spare a block (``holdout`` + 2 or fewer), nothing is held out.
     """
-    if len(train) <= holdout + 2:
+    if holdout <= 0 or len(train) <= holdout + 2:
         return train, []
     a = int(rng.integers(len(train) - holdout + 1))
     return train[:a] + train[a + holdout :], train[a : a + holdout]
+
+
+def held_months(train: list[int], holdout: int, rng: np.random.Generator,
+                scatter: bool = False) -> tuple[list, list]:  # fmt: skip
+    """``holdout`` months of ``train`` held out: one block (:func:`held_block`) or scattered.
+
+    ``scatter``: single months drawn at random anywhere in ``train`` (in month order), so no
+    one stretch of the market (a crash) decides alone; same too-few-months rule as the block.
+    """
+    if not scatter:
+        return held_block(train, holdout, rng)
+    if holdout <= 0 or len(train) <= holdout + 2:
+        return train, []
+    pick = set(rng.choice(len(train), holdout, replace=False).tolist())
+    return ([k for i, k in enumerate(train) if i not in pick],
+            [k for i, k in enumerate(train) if i in pick])  # fmt: skip
 
 
 def fit_stopped(  # noqa: PLR0913, PLR0917 - the rule's pieces

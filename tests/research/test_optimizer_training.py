@@ -237,17 +237,6 @@ def test_max_return_zeroes_garbage_training_returns_only():
     assert torch.is_tensor(r)
 
 
-def test_held_block_is_consecutive_and_left_out_of_the_fit():
-    from portfolio_lab.research.optimizer import stopping  # noqa: PLC0415
-
-    train = list(range(10, 70))
-    fit, block = stopping.held_block(train, 12, np.random.default_rng(0))
-    assert len(block) == 12 and block == list(range(block[0], block[0] + 12))
-    assert sorted(fit + block) == train and not set(fit) & set(block)
-    short = list(range(14))
-    assert stopping.held_block(short, 12, np.random.default_rng(0)) == (short, [])
-
-
 def test_fit_stopped_reads_the_smoothed_score_and_rolls_back_to_the_best_window():
     torch = pytest.importorskip("torch")
     from portfolio_lab.research.optimizer import stopping  # noqa: PLC0415

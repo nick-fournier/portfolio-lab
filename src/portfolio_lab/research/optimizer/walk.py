@@ -38,7 +38,21 @@ from ``lr``. A warm model has already trained on most of this month's held-out b
 moves every month), so its stopping score is not out of sample; a fresh one has not. With
 ``watch`` the block is held out and scored every pass (``held_curve``) but every pass runs and
 the last is kept; with either, ``test_curve`` is the test month's loss after each pass (a
-diagnostic: it uses the month's return, which the walk does not know when it picks).
+diagnostic: it uses the month's return, which the walk does not know when it picks; with
+``watch`` and nothing held out, ``holdout`` 0, it is still logged). A cold month also starts
+from an empty book, so the holdings inputs of its training months come from its own model, not
+from earlier months' models that trained on them, and its month order and held-out draw come
+from random streams of its own (the seed and the month), so a month's result does not depend
+on which months ran before it; before each score the held-out months' book
+entries are rolled forward, in month order, with the model as it stands.
+
+Held-out design (2026-10-15): ``scatter`` holds out ``holdout`` single months drawn anywhere in
+the window instead of one consecutive block; ``holdout_seed`` draws them from their own random
+stream, so runs that differ only in it train on the same month order with different months
+held out (several such fits are averaged like seeds). ``only`` trains and trades just the
+listed test months (with ``cold`` each is independent of the others): a cheap sample of the
+walk. The month before a listed one is then not a traded month, so the test month's holdings
+inputs come from the model's own weights for it.
 
 With ``average`` the walk holds a moving average of the model's parameters instead of its
 latest step (research.optimizer.averaging); training is unchanged.
@@ -112,6 +126,9 @@ class Settings:
         average: Decay of the parameter average held each month (0: hold the latest model).
         cold: Train a fresh model every month (module docs).
         watch: Hold out and score the block every pass without stopping (module docs).
+        scatter: Hold out single months drawn anywhere in the window, not a block.
+        holdout_seed: Seed of the held-out draw's own random stream (``None``: ``seed``'s).
+        only: Train and trade only these test month ends (``None``: every month).
     """
 
     model: str
@@ -146,6 +163,9 @@ class Settings:
     average: float = 0.0
     cold: bool = False
     watch: bool = False
+    scatter: bool = False
+    holdout_seed: int | None = None
+    only: tuple[date, ...] | None = None
 
 
 Pair = tuple[torch.Tensor, torch.Tensor]
@@ -286,10 +306,20 @@ def _held_loss(model: Optimizer, data: list[Pair], pricing: Pricing | None,
     return float(((1 - r) ** 2).mean())
 
 
+def _roll(model: Optimizer, data: list[Pair], pricing: Pricing | None, months: list[int]) -> None:
+    """With a book, ``months``' entries become the model's weights, in month order."""
+    if pricing is None or pricing.book is None:
+        return
+    with torch.no_grad():
+        for k in sorted(months):
+            pricing.book[k] = model(holdings.inputs(data, pricing, pricing.book, k))
+
+
 def _fit(  # noqa: PLR0913 - one month's training pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
     epochs: int, settings: Settings, rng: np.random.Generator, pricing: Pricing | None, *,
     start_lr: float, span: range, clipper: Clipper, average: Average | None, test: int,
+    hold_rng: np.random.Generator,
 ) -> tuple[list, int, float, list[float], list[torch.Tensor], list[float]]:  # fmt: skip
     """One month's training: losses, passes, held-out loss, its curve, gradient sizes.
 
@@ -298,15 +328,17 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     run and the test month ``test``'s loss after each pass (``test`` < 0: none).
     ``epochs`` passes (with ``settings.stop``: at most), the rate following
     ``settings.schedule`` from ``start_lr`` over them. With a book (``holdings_input``) the
-    ``span`` months not in it get the model's weights first, in month order.
+    ``span`` months not in it get the model's weights first, in month order. The held-out
+    months are drawn from ``hold_rng``.
     """
     if pricing is not None:
         holdings.fill(model, data, pricing, span)
-    fit, block = (stopping.held_block(train, settings.holdout, rng)
+    fit, block = (stopping.held_months(train, settings.holdout, hold_rng, settings.scatter)
                   if settings.stop or settings.watch else (train, []))  # fmt: skip
     tests: list[float] = []
 
     def score() -> float:
+        _roll(model, data, pricing, block)
         if test >= 0:
             tests.append(_held_loss(model, data, pricing, settings, [test]))
         return _held_loss(model, data, pricing, settings, block)
@@ -315,8 +347,11 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
 
     def one_pass(p: int) -> list:
         lr = rate(settings.schedule, start_lr, settings.lr_min, p, epochs)
-        return _pass(model, adam, data, fit, settings, rng, pricing, lr, clipper, norms,
-                     average)  # fmt: skip
+        losses = _pass(model, adam, data, fit, settings, rng, pricing, lr, clipper, norms,
+                       average)  # fmt: skip
+        if not block and settings.watch and test >= 0:  # nothing held out: still log the test
+            tests.append(_held_loss(model, data, pricing, settings, [test]))
+        return losses
 
     return (*stopping.fit_stopped(model, adam, one_pass, score, bool(block), epochs,
                                   settings.patience, settings.smooth, average,
@@ -334,6 +369,14 @@ def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, 
     if settings.compile:
         model.compile(dynamic=True)
     return model, torch.optim.Adam(model.parameters(), lr=settings.lr)
+
+
+def _streams(settings: Settings, day: date) -> tuple[np.random.Generator, np.random.Generator]:
+    """A cold month's own (month order, held-out draw) random streams: seed and month."""
+    rng = np.random.default_rng([settings.seed, day.toordinal()])
+    if settings.holdout_seed is None:
+        return rng, rng
+    return rng, np.random.default_rng([settings.holdout_seed, day.toordinal()])
 
 
 def walk(
@@ -361,6 +404,8 @@ def walk(
         of steps clipped and the last step's limit, seconds); and the final model.
     """
     rng = np.random.default_rng(settings.seed)
+    hold_rng = (rng if settings.holdout_seed is None
+                else np.random.default_rng(settings.holdout_seed))  # fmt: skip
     clipper = Clipper(settings.clip)
     if settings.stop and settings.watch:
         raise ValueError("stop and watch are alternatives")
@@ -373,10 +418,11 @@ def walk(
     if settings.measure_optimism and pricing is None:
         raise ValueError("measure_optimism needs per-stock costs")
     cuts = optimism.edges(pricing.stock) if settings.measure_optimism else None
-    weights, log, trained, last = [], [], False, None
+    only = None if settings.only is None else set(settings.only)
+    weights, log, trained, last, traded = [], [], False, None, -1
     for t, month in enumerate(months):
         lo = 0 if settings.window is None else t - settings.window
-        if month.date < settings.start or lo < 0:
+        if month.date < settings.start or lo < 0 or (only is not None and month.date not in only):
             continue
         clock = time.perf_counter()
         train = [k for k in range(lo, t) if known[k]]
@@ -384,6 +430,9 @@ def walk(
             model.load_state_dict(start_state)
             adam = torch.optim.Adam(model.parameters(), lr=settings.lr)
             average = Average(model, settings.average) if settings.average else None
+        if settings.cold:  # the month's own random streams; its model fills the book
+            rng, hold_rng = _streams(settings, month.date)
+            _ = pricing is not None and pricing.book is not None and pricing.book.clear()
         warm = trained and not settings.cold
         epochs = settings.warm_epochs if warm else settings.first_epochs
         start_lr = settings.warm_lr if warm and settings.warm_lr else settings.lr
@@ -402,6 +451,7 @@ def walk(
             clipper=clipper,
             average=average,
             test=watched,
+            hold_rng=hold_rng,
         )
         grad, limit = torch.stack(norms).T if norms else (torch.zeros(0), torch.zeros(0))
         if not trained:
@@ -409,13 +459,15 @@ def walk(
         trained = True
         extra = {}
         with average.swapped() if average is not None else contextlib.nullcontext():
+            if traded != t - 1 and pricing is not None and pricing.book is not None:
+                last = pricing.book.get(t - 1)  # last month not traded: the model's own weights
             w = holdings.pick(model, data, pricing, last, t)
             if cuts is not None and known[t]:  # the traded model, before the book takes w
                 vol = settings.vol_column
                 extra = {"opt_in": optimism.measure(model, data, pricing, train, cuts, vol),
                          "opt_out": optimism.test_month(w, data, pricing, t, cuts,
                                                         vol)}  # fmt: skip
-        last = holdings.remember(pricing, w, data, t)
+        last, traded = holdings.remember(pricing, w, data, t), t
         gross = float(np.abs(w).sum())  # 0 only if no stock is held: all cash
         weights.append(pl.DataFrame({"date": [month.date] * len(w), "symbol": month.symbols,
                                      "weight": w}))  # fmt: skip
