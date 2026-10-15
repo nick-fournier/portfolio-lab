@@ -24,96 +24,27 @@ def _table() -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
-def test_months_take_the_most_liquid_eligible_stocks_and_rank_among_them():
-    months = data.months(_table(), pool=3)
-    assert [m.date for m in months] == [date(2020, 1, 31), date(2020, 2, 28)]
-    first = months[0]
-    assert first.symbols == ["S4", "S3", "S2"]  # S5 is ineligible
-    assert first.x[:, 0].tolist() == pytest.approx([1 / 3, 0.0, -1 / 3])  # market_value
-    assert first.r.tolist() == pytest.approx([0.04, 0.03, 0.02])
-
-
 def test_the_paper_universe_drops_nano_caps_below_the_1st_percentile_of_nyse_values():
     months = data.months(_table())
     # NYSE values 10..15: the 1st percentile is 10.05, so S0 (10) is a nano cap
     assert months[0].symbols == ["S1", "S2", "S3", "S4", "S5"]
 
 
-def test_the_three_models_give_weights_that_are_positive_and_sum_to_one():
+def test_the_three_models_give_one_weight_per_stock_and_the_paper_loss():
     torch = pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.model import MODELS, Optimizer, loss  # noqa: PLC0415
 
     x = torch.rand(7, 4) - 0.5
     r = torch.rand(7) * 0.1
     for kind in MODELS:
-        model = Optimizer(kind, width=4, blocks=2, hidden=8, long_only=True)
-        w = model.weights(x)
+        model = Optimizer(kind, width=4, blocks=2, hidden=8)
+        w = model(x)
         assert w.shape == (7,)
-        assert float(w.sum()) == pytest.approx(1.0, abs=1e-6)
-        assert bool((w > 0).all())
         assert float(loss(model, x, r)) == pytest.approx(float((1 - w @ r) ** 2), rel=1e-6)
     assert not any(b.attention for b in Optimizer("mlp", 4, 2, 8).blocks)
     assert len(Optimizer("linear", 4, 2, 8).blocks) == 0
-
-
-def test_capped_softmax_holds_every_weight_at_or_under_the_cap_and_keeps_proportions():
-    torch = pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer.model import Optimizer, capped_softmax  # noqa: PLC0415
-
-    scores = torch.tensor([5.0, 4.0, 1.0, 0.5, 0.0, 0.0, -1.0, -2.0, -3.0, -3.0, -4.0, -5.0])
-    w = capped_softmax(scores, 0.2)
-    assert float(w.sum()) == pytest.approx(1.0, abs=1e-6)
-    assert float(w.max()) == pytest.approx(0.2, abs=1e-6)
-    free = torch.softmax(scores[w < 0.2 - 1e-6], dim=0)  # the uncapped keep their proportions
-    assert torch.allclose(w[w < 0.2 - 1e-6] / w[w < 0.2 - 1e-6].sum(), free, atol=1e-6)
-    assert torch.equal(capped_softmax(torch.zeros(10), 0.2), torch.full((10,), 0.1))
-    model = Optimizer("mlp", 3, 1, 8, long_only=True, cap=0.1)
-    x = torch.rand(40, 3) - 0.5
-    model.lam.data *= 100  # extreme scores: an uncapped softmax would hold one stock
-    w = model.weights(x)
-    assert float(w.max()) <= 0.1 + 1e-6 and float(w.sum()) == pytest.approx(1.0, abs=1e-5)
-    (w @ torch.rand(40)).backward()  # trains through the cap
-    assert model.lam.grad is not None and bool(model.lam.grad.abs().sum() > 0)
-
-
-def test_names_fix_the_concentration_whatever_the_scores_size():
-    torch = pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
-
-    torch.manual_seed(0)
-    model = Optimizer("linear", 3, long_only=True, cap=0.1, names=25)
-    x = torch.rand(3000, 3) - 0.5
-    w = model.weights(x)
-    model.lam.data *= 1e6  # runaway scores: same portfolio
-    assert torch.allclose(model.weights(x), w, atol=1e-6)
-    assert 20 < float(1 / (w**2).sum()) < 35  # near 25; the cap shifts it a little
-    w.sum().backward()
-
-
-def test_objectives_prefer_the_steadier_of_two_equal_return_streams():
-    torch = pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer import objectives  # noqa: PLC0415
-
-    steady = torch.tensor([0.01, 0.012, 0.008, 0.011, 0.009, 0.01])
-    wild = torch.tensor([0.10, -0.08, 0.09, -0.07, 0.08, -0.06])  # same mean, deep losses
-    for name in objectives.OBJECTIVES:
-        assert objectives.grade(name, steady) < objectives.grade(name, wild), name
-    with pytest.raises(ValueError, match="unknown objective"):
-        objectives.grade("nope", steady)
-
-
-def test_batch_steps_cover_every_training_month_once_in_consecutive_blocks():
-    pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer.walk import Settings, _steps  # noqa: PLC0415
-
-    train = list(range(10, 70))
-    steps = _steps(train, Settings("linear", objective="sharpe", batch=12),
-                   np.random.default_rng(3))  # fmt: skip
-    covered = sorted(k for s in steps for k in s)
-    assert set(covered) <= set(train) and len(covered) == len(set(covered)) >= 55
-    assert all(s == list(range(s[0], s[0] + len(s))) and 3 <= len(s) <= 12 for s in steps)
-    paper = _steps(train, Settings("linear"), np.random.default_rng(3))
-    assert sorted(k for s in paper for k in s) == train
+    with pytest.raises(ValueError, match="unknown model"):
+        Optimizer("cnn", 4)
 
 
 def test_fast_attention_matches_the_written_out_formula_to_bfloat16_precision():
@@ -127,16 +58,9 @@ def test_fast_attention_matches_the_written_out_formula_to_bfloat16_precision():
     assert torch.allclose(block(y), written, atol=1e-6)
     block.fast = True
     assert torch.allclose(block(y), written, atol=2e-2)
-    scaled = Block(width=4, hidden=8, attention=True, scaled=True)
-    logits = (y @ scaled.q) @ (y @ scaled.k).T / 2  # sqrt(4)
-    assert torch.allclose(scaled.peers(y), torch.softmax(logits, dim=-1), atol=1e-6)
-    written = y + scaled.peers(y) @ (y @ scaled.v)
-    written = written + torch.relu(written @ scaled.w1 + scaled.b1) @ scaled.w2 + scaled.b2
-    scaled.fast = True
-    assert torch.allclose(scaled(y), written, atol=2e-2)
 
 
-def test_walk_trains_on_earlier_months_and_learns_to_favor_the_stock_that_keeps_winning():
+def test_walk_trains_on_earlier_months_and_learns_to_favor_the_stocks_that_keep_winning():
     pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
 
@@ -147,125 +71,8 @@ def test_walk_trains_on_earlier_months_and_learns_to_favor_the_stock_that_keeps_
         r = np.where(x[:, 0] > 0.2, 0.05, -0.01).astype(np.float32)  # input 0 predicts return
         months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDE"), x, r))
     settings = Settings("linear", window=12, first_epochs=200, warm_epochs=5, lr=0.05,
-                        start=date(2000, 1, 1), long_only=True)  # fmt: skip
+                        start=date(2000, 1, 1))  # fmt: skip
     weights, log, _ = walk(months, settings)
     assert log["date"].to_list() == [m.date for m in months[12:]]  # needs 12 earlier months
-    assert weights.group_by("date").agg(pl.col("weight").sum())["weight"].to_list() == (
-        pytest.approx([1.0] * 18)
-    )
+    assert weights.height == 18 * 5
     assert log["ret"].mean() > 0.02  # it learned to hold the stocks with input 0 high
-
-
-def test_scaled_long_only_weights_are_m_times_a_mix_and_the_walk_saves_the_mix():
-    torch = pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
-    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
-
-    model = Optimizer("mlp", 3, 1, 8, long_only=True, scale=True)
-    with torch.no_grad():
-        model.log_m.fill_(np.log(0.5))
-    w = model.weights(torch.rand(6, 3) - 0.5)
-    assert float(w.sum()) == pytest.approx(0.5, abs=1e-6)
-    assert bool((w > 0).all())
-    rng = np.random.default_rng(1)
-    months = [
-        data.Month(
-            date(2000 + k // 12, k % 12 + 1, 1),
-            list("ABCDE"),
-            rng.uniform(-0.5, 0.5, (5, 2)).astype(np.float32),
-            rng.normal(0.01, 0.05, 5).astype(np.float32),
-        )
-        for k in range(16)
-    ]
-    settings = Settings(
-        "linear",
-        window=12,
-        first_epochs=20,
-        warm_epochs=2,
-        lr=0.05,
-        start=date(2000, 1, 1),
-        long_only=True,
-        scale=True,
-    )
-    weights, log, _ = walk(months, settings)
-    sums = weights.group_by("date").agg(pl.col("weight").sum())["weight"].to_list()
-    assert sums == pytest.approx([1.0] * 4)
-    assert (log["m"] > 0).all()
-
-
-def test_softplus_long_only_weights_are_positive_scores_over_n_and_the_walk_saves_the_mix():
-    torch = pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
-    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
-
-    model = Optimizer("linear", 2, long_only=True, softplus=True)
-    with torch.no_grad():
-        model.lam.copy_(torch.tensor([1.0, 0.0]))
-    w = model.weights(torch.tensor([[5.0, 0.0], [-5.0, 0.0], [0.0, 0.0]]))
-    expected = [np.log1p(np.exp(5.0)) / 3, np.log1p(np.exp(-5.0)) / 3, np.log(2.0) / 3]
-    assert w.tolist() == pytest.approx(expected, rel=1e-5)
-    rng = np.random.default_rng(2)
-    months = []
-    for k in range(30):
-        x = rng.uniform(-0.5, 0.5, (5, 2)).astype(np.float32)
-        r = np.where(x[:, 0] > 0.2, 0.05, -0.01).astype(np.float32)  # input 0 predicts return
-        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDE"), x, r))
-    settings = Settings("linear", window=12, first_epochs=200, warm_epochs=5, lr=0.05,
-                        start=date(2000, 1, 1), long_only=True, softplus=True)  # fmt: skip
-    weights, log, _ = walk(months, settings)
-    assert (weights["weight"] > 0).all()
-    sums = weights.group_by("date").agg(pl.col("weight").sum())["weight"].to_list()
-    assert sums == pytest.approx([1.0] * 18)  # the mix; the size is logged as m
-    assert log["ret"].mean() > 0.02  # it learned to hold the stocks with input 0 high
-
-
-def test_subset_inference_runs_the_trained_model_on_the_subset_rows_alone():
-    torch = pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
-
-    rng = np.random.default_rng(3)
-    months = []
-    for k in range(16):
-        x = rng.uniform(-0.5, 0.5, (5, 2)).astype(np.float32)
-        r = rng.normal(0.01, 0.05, 5).astype(np.float32)
-        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDE"), x, r))
-    settings = Settings("transformer", window=12, first_epochs=5, warm_epochs=1,
-                        start=date(2000, 1, 1))  # fmt: skip
-    subsets = {m.date: {"A", "C"} for m in months}
-    weights, log, model = walk(months, settings, subsets=subsets)
-    last = weights.filter(pl.col("date") == months[-1].date)
-    assert last.filter(pl.col("symbol").is_in(["B", "D", "E"]))["subset_weight"].is_null().all()
-    with torch.no_grad():  # the final month: the model on rows A and C only
-        expected = model.weights(torch.from_numpy(months[-1].x[[0, 2]])).numpy()
-    got = last.filter(pl.col("symbol").is_in(["A", "C"]))["subset_weight"].to_numpy()
-    assert got == pytest.approx(expected, rel=1e-5)
-    assert (log["stocks_subset"] == 2).all()
-
-
-def test_subset_training_only_ignores_other_rows_and_finetune_leaves_the_main_model_alone():
-    pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
-
-    rng = np.random.default_rng(4)
-    months = []
-    for k in range(16):
-        x = rng.uniform(-0.5, 0.5, (5, 2)).astype(np.float32)
-        r = rng.normal(0.01, 0.05, 5).astype(np.float32)
-        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDE"), x, r))
-    subsets = {m.date: {"A", "C", "D"} for m in months}
-    base = dict(window=12, first_epochs=5, warm_epochs=2, start=date(2000, 1, 1))
-
-    def run(months, **kw):
-        return walk(months, Settings("mlp", **base, **kw), subsets=subsets)[0]
-
-    plain, tuned = run(months), run(months, subset_train="finetune")
-    assert plain["weight"].to_list() == tuned["weight"].to_list()  # main model unchanged
-    assert plain["subset_weight"].to_list() != tuned["subset_weight"].to_list()
-    other = [  # returns of stocks outside the subset changed: "only" never sees them
-        data.Month(m.date, m.symbols, m.x, np.where(np.isin(m.symbols, ["B", "E"]), 0.5, m.r))
-        for m in months
-    ]
-    only = run(months, subset_train="only")["subset_weight"].to_numpy()
-    assert run(other, subset_train="only")["subset_weight"].to_numpy() == pytest.approx(
-        only, nan_ok=True
-    )

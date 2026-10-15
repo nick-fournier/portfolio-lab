@@ -1,4 +1,4 @@
-"""Class 3 optimizer: costs, short controls, partial trading, retraining, init, grid, schedules."""
+"""Class 3 optimizer: costs in the loss, init, grid, schedules, seed averaging."""
 
 from datetime import date
 
@@ -37,11 +37,14 @@ def test_walk_with_trading_costs_trades_less_than_without():
         months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"), x, r))
     base = dict(window=12, first_epochs=100, warm_epochs=5, lr=0.02, start=date(2000, 1, 1))
 
-    def traded(**kw):
-        w = walk(months, Settings("linear", **base, **kw))[0].pivot("symbol", index="date")
-        return float(np.abs(np.diff(w.drop("date").to_numpy(), axis=0)).sum())
+    stock = [(np.full(8, 0.05, np.float32), np.full(8, 0.5, np.float32))] * 30
 
-    assert traded(spread=0.05, short_fee=0.5) < traded()
+    def traded(**kw):
+        w = walk(months, Settings("linear", **base, **kw), stock_costs=stock)[0]
+        w = w.pivot("symbol", index="date").drop("date").to_numpy()
+        return float(np.abs(np.diff(w, axis=0)).sum())
+
+    assert traded(costs="table.parquet") < traded()
 
 
 def test_per_stock_costs_charge_each_stock_its_own_rate_and_sold_stocks_last_months():
@@ -101,98 +104,19 @@ def test_walk_with_per_stock_costs_needs_them_and_runs_with_them():
     assert log.height == 4 and weights["weight"].is_finite().all()
 
 
-def test_partial_trading_moves_holdings_part_way_from_last_month_at_the_learned_pace():
-    torch = pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
-    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
-
-    assert float(Optimizer("linear", 2, partial=True).pace()) == pytest.approx(0.881, abs=1e-3)
-    with pytest.raises(ValueError, match="partial"):
-        Optimizer("linear", 2).pace()
-    rng = np.random.default_rng(7)
-    months = []
-    for k in range(18):
-        names = ["A", "B", "C", "D"] if k % 2 else ["A", "B", "C", "E"]  # D and E come and go
-        x = rng.uniform(-0.5, 0.5, (4, 2)).astype(np.float32)
-        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 4)).astype(np.float32)
-        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), names, x, r))
-    settings = Settings("linear", window=12, first_epochs=20, warm_epochs=2, lr=0.05,
-                        start=date(2000, 1, 1), spread=0.01, partial=True)  # fmt: skip
-    weights, log, model = walk(months, settings)
-    a = float(model.pace())
-    assert log["pace"].to_list()[-1] == pytest.approx(a)
-    last, prev = months[-1], months[-2]
-    held = dict(weights.filter(pl.col("date") == prev.date).select("symbol", "weight").rows())
-    with torch.no_grad():
-        target = model.weights(torch.from_numpy(last.x)).numpy()
-    pairs = zip(last.symbols, target, strict=True)
-    expected = [(1 - a) * held.get(s, 0.0) + a * t for s, t in pairs]
-    got = weights.filter(pl.col("date") == last.date)["weight"].to_list()
-    assert got == pytest.approx(expected, rel=1e-4, abs=1e-6)
-
-
-def test_short_controls_keep_unshortable_stocks_and_no_shorts_at_or_above_zero():
-    pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
-
-    rng = np.random.default_rng(8)
-    months = []
-    for k in range(16):
-        x = rng.uniform(-0.5, 0.5, (4, 2)).astype(np.float32)
-        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 4)).astype(np.float32)  # input 0: long or short
-        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCD"), x, r))
-    easy = np.array([0.99, 0.95, 0.5, 0.1], np.float32)
-    stock = [(np.full(4, 0.001, np.float32), np.full(4, 0.003, np.float32), easy)] * 16
-    base = dict(window=12, first_epochs=50, warm_epochs=3, lr=0.05, start=date(2000, 1, 1),
-                costs="table.parquet", partial=True)  # fmt: skip
-    with pytest.raises(ValueError, match="stock_costs"):
-        walk(months, Settings("linear", short_min_easy=0.9, **base))
-    w = walk(months, Settings("linear", short_min_easy=0.9, **base), stock_costs=stock)[0]
-    assert (w.filter(pl.col("symbol").is_in(["C", "D"]))["weight"] >= 0).all()
-    assert (w.filter(pl.col("symbol").is_in(["A", "B"]))["weight"] < 0).any()  # still shorts
-    settings = Settings("linear", no_shorts=True, short_hurdle=1.0, **base)
-    assert (walk(months, settings, stock_costs=stock)[0]["weight"] >= 0).all()
-
-
-def test_fresh_retraining_makes_each_month_independent_of_the_others():
-    pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
-
-    rng = np.random.default_rng(9)
-    months = []
-    for k in range(18):
-        x = rng.uniform(-0.5, 0.5, (5, 2)).astype(np.float32)
-        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 5)).astype(np.float32)
-        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDE"), x, r))
-    base = dict(window=12, first_epochs=10, lr=0.01, start=date(2000, 1, 1), fresh=True)
-    with pytest.raises(ValueError, match="fresh"):
-        walk(months, Settings("mlp", every=2, **{**base, "fresh": False}))
-    every = walk(months, Settings("mlp", every=2, **base))[0]
-    full = walk(months, Settings("mlp", **base))[0]
-    assert every["date"].unique().sort().to_list() == [m.date for m in months[12::2]]
-    shared = full.filter(pl.col("date").is_in(every["date"].unique().implode()))
-    assert shared["weight"].to_list() == pytest.approx(every["weight"].to_list(), rel=1e-5)
-
-
-def test_std_init_keeps_rows_their_size_through_ten_blocks_and_variance_init_grows_them():
+def test_init_keeps_rows_their_size_through_ten_blocks():
     torch = pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
 
     x = torch.rand(500, 100) - 0.5
     size = float(x.norm(dim=1).mean())
 
-    def grown(init):
-        torch.manual_seed(0)
-        y = x
-        with torch.no_grad():
-            for block in Optimizer("transformer", 100, 10, 256, init=init).blocks:
-                y = block(y)
-        return float(y.norm(dim=1).mean()) / size
-
-    assert grown("std") == pytest.approx(1.0, abs=0.05)
-    assert grown("variance") > 20
-    with pytest.raises(ValueError, match="init"):
-        Optimizer("linear", 3, init="var")
+    torch.manual_seed(0)
+    y = x
+    with torch.no_grad():
+        for block in Optimizer("transformer", 100, 10, 256).blocks:
+            y = block(y)
+    assert float(y.norm(dim=1).mean()) / size == pytest.approx(1.0, abs=0.05)
 
 
 def test_grid_records_every_epoch_and_cosine_decays_to_the_floor():
@@ -225,12 +149,11 @@ def test_walk_cosine_schedule_and_warm_rate():
     pytest.importorskip("torch")
     from portfolio_lab.research.optimizer import walk as wk  # noqa: PLC0415
 
-    s = wk.Settings("linear", lr=1e-2, schedule="cosine", lr_min=1e-4, warm_lr=1e-3)
-    assert wk._lr(s, 1e-2, 0, 5) == pytest.approx(1e-2)
-    assert wk._lr(s, 1e-2, 4, 5) == pytest.approx(1e-4)
-    assert wk._start_lr(s, trained=False) == pytest.approx(1e-2)
-    assert wk._start_lr(s, trained=True) == pytest.approx(1e-3)  # continuing last month's model
-    assert wk._start_lr(wk.Settings("linear", lr=1e-2, warm_lr=1e-3, fresh=True), True) == 1e-2
+    assert wk.rate("cosine", 1e-2, 1e-4, 0, 5) == pytest.approx(1e-2)
+    assert wk.rate("cosine", 1e-2, 1e-4, 4, 5) == pytest.approx(1e-4)
+    assert wk.rate("flat", 1e-2, 1e-4, 4, 5) == pytest.approx(1e-2)
+    with pytest.raises(ValueError, match="schedule"):
+        wk.rate("step", 1e-2, 1e-4, 0, 5)
     rng = np.random.default_rng(11)
     months = [
         data.Month(
@@ -312,65 +235,3 @@ def test_max_return_zeroes_garbage_training_returns_only():
     ((_, r),) = _data([m], Settings("linear"), "cpu")
     assert float(r[0]) == 948.0
     assert torch.is_tensor(r)
-
-
-def test_grid_long_only_trains_on_fully_invested_softmax_weights():
-    pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer import grid  # noqa: PLC0415
-
-    rng = np.random.default_rng(14)
-    months = []
-    for k in range(20):
-        x = rng.uniform(-0.5, 0.5, (8, 3)).astype(np.float32)
-        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 8)).astype(np.float32)
-        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"), x, r))
-    config = grid.Config("long", blocks=1, lr=1e-2, epochs=3, long_only=True)
-    curves = grid.grid(months, [16], [config], window=12, validation=3, device="cpu")
-    assert curves["gross"].to_list() == pytest.approx([1.0] * 3)
-    assert curves["val_short_share"].to_list() == [0.0] * 3
-    assert all(1 <= n <= 8 for n in curves["names"])
-    assert all(0 < t <= 1 for t in curves["top_weight"])
-
-
-def test_grid_size_cost_holds_the_portfolio_near_one_dollar():
-    pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer import grid  # noqa: PLC0415
-
-    rng = np.random.default_rng(15)
-    months = []
-    for k in range(20):
-        x = rng.uniform(-0.5, 0.5, (8, 3)).astype(np.float32)
-        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 8)).astype(np.float32)
-        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"), x, r))
-    base = dict(blocks=1, lr=1e-2, epochs=30, short_hurdle=50.0)
-    setups = [grid.Config("free", **base), grid.Config("one", size_cost=1.0, **base)]
-    curves = grid.grid(months, [16, 18], setups, window=12, validation=3, device="cpu")
-    last = curves.filter(pl.col("epoch") == 30).group_by("config").agg(pl.col("gross").mean())
-    gross = dict(last.rows())
-    assert abs(gross["one"] - 1) < abs(gross["free"] - 1)
-    assert gross["one"] == pytest.approx(1.0, abs=0.1)
-
-
-def test_grid_growth_objective_starts_in_cash_and_stays_long_and_at_most_invested():
-    pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer import grid  # noqa: PLC0415
-
-    rng = np.random.default_rng(16)
-    months = []
-    for k in range(20):
-        x = rng.uniform(-0.5, 0.5, (8, 3)).astype(np.float32)
-        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 8)).astype(np.float32)
-        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"), x, r))
-    stock = [(np.full(8, 0.002, np.float32), np.zeros(8, np.float32), np.ones(8, np.float32))] * 20
-    config = grid.Config("g", blocks=1, lr=5e-2, epochs=30, costs=True, objective="growth",
-                         short_hurdle=50.0, over_cost=5.0)  # fmt: skip
-    curves = grid.grid(months, [16, 18], [config], window=12, validation=3, device="cpu",
-                       stock_costs=stock)  # fmt: skip
-    last = curves.filter(pl.col("epoch") == 30)
-    assert {"val_growth", "val_net_growth", "val_cost", "cash"} <= set(curves.columns)
-    assert all(g > 0.1 for g in last["gross"])  # left cash for the stocks
-    assert all(s < 0.05 for s in last["val_short_share"])
-    assert all(c > -0.1 for c in last["cash"])  # at most ~fully invested
-    assert all(n <= g for n, g in zip(last["val_net_growth"], last["val_growth"], strict=True))
-    with pytest.raises(ValueError, match="objective"):
-        grid.fit(months, 16, grid.Config("x", objective="kelly"), window=12, device="cpu")

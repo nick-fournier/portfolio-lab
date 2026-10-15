@@ -1,4 +1,4 @@
-"""Class 3 optimizer: carried holdings, holdings and spread inputs, early stopping."""
+"""Class 3 optimizer: carried holdings, holdings and spread inputs."""
 
 from datetime import date
 
@@ -77,7 +77,7 @@ def test_walk_holdings_input_feeds_the_real_book_to_the_test_month_and_needs_cos
                         holdings_input=True)  # fmt: skip
     weights, log, model = walk(months, settings, stock_costs=stock)
     assert log.height == 4 and weights["weight"].is_finite().all()
-    assert model.weights(torch.zeros(4, 4)).shape == (4,)  # 2 traits + holding + spread
+    assert model(torch.zeros(4, 4)).shape == (4,)  # 2 traits + holding + spread
     with pytest.raises(ValueError, match="holdings_input"):
         walk(months, Settings("linear", window=12, start=date(2000, 1, 1), holdings_input=True))
     # the test month's holding column is last month's real book after its returns
@@ -88,61 +88,3 @@ def test_walk_holdings_input_feeds_the_real_book_to_the_test_month_and_needs_cos
     got = holdings.pick(lambda x: x[:, 2], tensors, pricing, last, 13)
     want = holdings.holding(last, tensors[12][1], pricing.links[13], 4)
     assert got.tolist() == pytest.approx(want.tolist())
-
-
-def test_held_block_is_consecutive_and_left_out_of_the_fit():
-    from portfolio_lab.research.optimizer import stopping  # noqa: PLC0415
-
-    train = list(range(10, 70))
-    fit, block = stopping.held_block(train, 12, np.random.default_rng(0))
-    assert len(block) == 12 and block == list(range(block[0], block[0] + 12))
-    assert sorted(fit + block) == train and not set(fit) & set(block)
-    short = list(range(14))
-    assert stopping.held_block(short, 12, np.random.default_rng(0)) == (short, [])
-
-
-def test_fit_stopped_stops_after_patience_and_rolls_back_to_the_best_pass():
-    torch = pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer import stopping  # noqa: PLC0415
-
-    model = torch.nn.Linear(1, 1, bias=False)
-    with torch.no_grad():
-        model.weight.zero_()
-    adam = torch.optim.Adam(model.parameters())
-    held = iter([5.0, 4.0, 3.0, 3.5, 3.6, 3.7, 1.0])  # best after pass 3; the 1.0 is never reached
-
-    def one_pass(first):
-        with torch.no_grad():
-            model.weight += 1  # the weight counts the passes
-        return [float(model.weight)]
-
-    losses, passes, best = stopping.fit_stopped(model, adam, one_pass, lambda _: next(held), [0],
-                                                most=40, patience=3)  # fmt: skip
-    assert (passes, best, losses) == (3, 3.0, [3.0])
-    assert float(model.weight) == 3.0  # rolled back from pass 6
-    calls = []
-    losses, passes, best = stopping.fit_stopped(model, adam, lambda f: calls.append(f) or [0.0],
-                                                lambda _: 0.0, [], most=4, patience=3)  # fmt: skip
-    assert calls == [True, False, False, False] and passes == 4 and np.isnan(best)
-
-
-def test_walk_with_early_stopping_logs_passes_and_needs_the_paper_loss():
-    pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
-
-    rng = np.random.default_rng(19)
-    months = [
-        data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"),
-                   rng.uniform(-0.5, 0.5, (8, 2)).astype(np.float32),
-                   rng.normal(0.01, 0.05, 8).astype(np.float32))
-        for k in range(30)
-    ]  # fmt: skip
-    stock = [(np.full(8, 0.005, np.float32), np.full(8, 0.05, np.float32))] * 30
-    settings = Settings("linear", window=20, first_epochs=8, start=date(2001, 9, 1),
-                        costs="table.parquet", holdings_input=True, stop=True, patience=2,
-                        holdout=6)  # fmt: skip
-    _, log, _ = walk(months, settings, stock_costs=stock)
-    assert log.height == 10
-    assert all(1 <= p <= 8 for p in log["passes"]) and log["held_loss"].is_finite().all()
-    with pytest.raises(ValueError, match="stop"):
-        walk(months, Settings("linear", window=20, objective="sharpe", stop=True))

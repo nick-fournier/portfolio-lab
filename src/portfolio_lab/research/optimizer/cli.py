@@ -37,35 +37,21 @@ def data_cmd(out: Annotated[Path, typer.Option(help="Parquet file to write.")]) 
                f"{len(data.inputs(table))} characteristics -> {out}")  # fmt: skip
 
 
-def _months(
-    table: Path, pool: int | None, inputs: str = "all", min_price: float = 0, min_adv: float = 0
-) -> list:
+def _months(table: Path, inputs: str = "all") -> list:
     """``data.months`` of a table, cached next to it (ranking every month takes a while)."""
     from portfolio_lab.research.optimizer import data  # noqa: PLC0415
 
-    floor = f"-p{min_price:g}-a{min_adv:g}" if min_price or min_adv else ""
-    cache = table.with_name(f"{table.stem}.months-{pool or 'paper'}-{inputs}{floor}.pkl")
+    cache = table.with_name(f"{table.stem}.months-paper-{inputs}.pkl")
     if cache.exists() and cache.stat().st_mtime > table.stat().st_mtime:
         return pickle.loads(cache.read_bytes())
     frame = pl.read_parquet(table)
-    months = data.months(frame, pool, data.inputs(frame, inputs), min_price=min_price,
-                         min_adv=min_adv)  # fmt: skip
+    months = data.months(frame, data.inputs(frame, inputs))
     cache.write_bytes(pickle.dumps(months))
     return months
 
 
-def _walk_one(  # noqa: PLR0913, PLR0917 - one walk's pieces
-    table: Path,
-    out: Path,
-    settings,
-    pool: int,
-    device: str,
-    threads: int,
-    precision: str,
-    inputs: str,
-    floor: tuple[float, float] = (0.0, 0.0),
-    subsets: dict | None = None,
-) -> str:
+def _walk_one(table: Path, out: Path, settings, device: str, threads: int, precision: str,
+              inputs: str) -> str:  # fmt: skip
     """One walk: train, save weights, log, model and settings; return a summary line."""
     import torch  # noqa: PLC0415
 
@@ -73,29 +59,25 @@ def _walk_one(  # noqa: PLR0913, PLR0917 - one walk's pieces
 
     torch.set_num_threads(threads)
     torch.set_float32_matmul_precision(precision)
-    months = _months(table, pool or None, inputs, *floor)
+    months = _months(table, inputs)
     stock = None
     if settings.costs:
         from portfolio_lab.research.optimizer import costs  # noqa: PLC0415
 
         stock = costs.align(months, pl.read_parquet(settings.costs))
-    weights, log, fitted = walk.walk(months, settings, device, subsets, stock)
+    weights, log, fitted = walk.walk(months, settings, device, stock)
     out.mkdir(parents=True, exist_ok=True)
     weights.write_parquet(out / "weights.parquet")
     log.write_parquet(out / "log.parquet")
     torch.save(fitted.state_dict(), out / "model.pt")
-    meta = asdict(replace(settings, start=settings.start.isoformat())) | {
-        "pool": pool,
-        "inputs": inputs,
-        "infer_pool": len(next(iter(subsets.values()))) if subsets else None,
-    }
+    meta = asdict(replace(settings, start=settings.start.isoformat())) | {"inputs": inputs}
     (out / "settings.json").write_text(json.dumps(meta, indent=2))
     graded = log.filter(pl.col("ret").is_not_null())
     return (f"{settings.model} seed {settings.seed}: {graded.height} months, Sharpe "
             f"{_halves(graded['date'].to_list(), graded['ret'].to_numpy())}; "
             f"median long {graded['long'].median():.2f}, short {graded['short'].median():.2f}, "
             f"largest {graded['largest'].median() or 0:.1%} of gross; "
-            f"{(log['m'] == 0).sum()} months all cash; "
+            f"{(log['long'] - log['short'] == 0).sum()} months all cash; "
             f"{log['seconds'].sum() / 60:.1f} min")  # fmt: skip
 
 
@@ -121,7 +103,6 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     table: Annotated[Path, typer.Option(help="The table from `plab optimizer data`.")],
     out: Annotated[Path, typer.Option(help="Folder for the walk (one subfolder per seed).")],
     model: Annotated[str, typer.Option(help="linear, mlp or transformer.")],
-    pool: Annotated[int, typer.Option(help="0: the paper's universe; N: N most liquid.")] = 0,
     blocks: Annotated[int, typer.Option()] = 1,
     hidden: Annotated[int, typer.Option()] = 256,
     window: Annotated[int, typer.Option(help="Training months (0: all earlier months).")] = 60,
@@ -132,51 +113,16 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     jobs: Annotated[int, typer.Option(help="Seeds trained at once (processes on the GPU).")] = 4,
     start: Annotated[str, typer.Option(help="First test month end.")] = "2003-12-31",
     device: Annotated[str, typer.Option()] = "cuda",
-    long_only: Annotated[bool, typer.Option(help="Softmax weights (not the paper's).")] = False,
-    scale: Annotated[bool, typer.Option(help="Long-only with a learned overall size m.")] = False,
-    cap: Annotated[float, typer.Option(help="Long-only's largest weight (0: no cap).")] = 0.0,
-    names: Annotated[float, typer.Option(help="Long-only: effective names held (0: off).")] = 0.0,
-    softplus: Annotated[bool, typer.Option(help="Long-only: weights = softplus(score)/N.")] = False,
-    objective: Annotated[
-        str, typer.Option(help="paper, or a batch objective: sharpe, meanvar, log, downside, ...")
-    ] = "paper",
-    batch: Annotated[int, typer.Option(help="Consecutive months per step (objectives).")] = 12,
-    gamma: Annotated[float, typer.Option(help="Objective's risk appetite (0: default).")] = 0.0,
     fast_attention: Annotated[
         bool, typer.Option(help="bfloat16 fused attention (~5x faster transformer).")
     ] = False,
     clip: Annotated[float, typer.Option(help="Gradient clipping (0: none).")] = 1.0,
-    infer_pool: Annotated[
-        int, typer.Option(help="Also pick from only the N most liquid eligible stocks (0: off).")
-    ] = 0,
-    subset_train: Annotated[
-        str, typer.Option(help="With --infer-pool, train the picker: all, only (pool) or finetune.")
-    ] = "all",
-    finetune_epochs: Annotated[int, typer.Option(help="Passes over the pool (finetune).")] = 5,
-    spread: Annotated[float, typer.Option(help="Loss: cost per $ traded (0.005: 0.5%).")] = 0.0,
-    short_fee: Annotated[float, typer.Option(help="Loss: yearly cost per dollar shorted.")] = 0.0,
     costs: Annotated[
         str, typer.Option(help="Loss: per-stock cost table (date, symbol, trade_cost, borrow_fee).")
     ] = "",
-    partial: Annotated[
-        bool, typer.Option(help="Trade part way to the new weights at a learned pace.")
-    ] = False,
     short_hurdle: Annotated[
         float, typer.Option(help="Loss: extra yearly cost per dollar shorted (willingness).")
     ] = 0.0,
-    short_min_easy: Annotated[
-        float, typer.Option(help="Short only stocks at least this likely easy to borrow (0: off).")
-    ] = 0.0,
-    scaled_attention: Annotated[
-        bool, typer.Option(help="Divide attention scores by sqrt(D) (standard; not the paper).")
-    ] = False,
-    fresh: Annotated[
-        bool, typer.Option(help="Retrain from scratch each test month (the paper's way).")
-    ] = False,
-    every: Annotated[int, typer.Option(help="Only every Nth test month (needs --fresh).")] = 1,
-    init: Annotated[
-        str, typer.Option(help="Paper's N(0, a) read as variance (default) or std.")
-    ] = "variance",
     schedule: Annotated[
         str, typer.Option(help="Learning rate per month: flat or cosine.")
     ] = "flat",
@@ -190,23 +136,13 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     max_return: Annotated[
         float, typer.Option(help="Training returns above this in size set to 0 (0: off).")
     ] = 0.0,
-    no_shorts: Annotated[
-        bool, typer.Option(help="Hold no shorts (pair with --short-hurdle).")
-    ] = False,
-    inputs: Annotated[str, typer.Option(help="Characteristics: all, ours, jkp or paper.")] = "all",
-    min_price: Annotated[float, typer.Option(help="Leave out stocks below this price.")] = 0.0,
-    min_adv: Annotated[float, typer.Option(help="...or below this daily dollar volume.")] = 0.0,
-    precision: Annotated[
-        str, typer.Option(help="float32 matrix products: highest, or high (TF32, faster).")
-    ] = "highest",
     holdings_input: Annotated[
         bool, typer.Option(help="Feed each stock's holding and spread to the model (--costs).")
     ] = False,
-    stop: Annotated[
-        bool, typer.Option(help="Early stopping each month on a held-out block (walk docs).")
-    ] = False,
-    patience: Annotated[int, typer.Option(help="Passes without improvement (--stop).")] = 3,
-    holdout: Annotated[int, typer.Option(help="Months held out each month (--stop).")] = 12,
+    inputs: Annotated[str, typer.Option(help="Characteristics: all, ours, jkp or paper.")] = "all",
+    precision: Annotated[
+        str, typer.Option(help="float32 matrix products: highest, or high (TF32, faster).")
+    ] = "highest",
 ) -> None:
     """Walk a model forward, one run per seed, and save each seed's monthly portfolios.
 
@@ -221,11 +157,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     from portfolio_lab.research.optimizer import walk  # noqa: PLC0415
 
     picked = _seeds(seeds)
-    _months(table, pool or None, inputs, min_price, min_adv)  # build the cache once first
-    subsets = None
-    if infer_pool:
-        floor = (min_price, min_adv)
-        subsets = {m.date: set(m.symbols) for m in _months(table, infer_pool, inputs, *floor)}
+    _months(table, inputs)  # build the cache once first
     runs = [out / f"seed-{s}" for s in picked]
     threads = max(1, (os.cpu_count() or 1) // min(jobs, len(picked)))
     with ProcessPoolExecutor(min(jobs, len(picked)), initializer=_die_with_parent,
@@ -234,30 +166,13 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         for s, run in zip(picked, runs, strict=True):
             settings = walk.Settings(
                 model, blocks, hidden, window or None, first_epochs, warm_epochs, lr, s,
-                date.fromisoformat(start), long_only, fast_attention, clip or None, scale,
-                cap or None, names or None,
-                None if objective == "paper" else objective, batch, gamma or None, softplus,
-                None if subset_train == "all" else subset_train, finetune_epochs, spread, short_fee,
-                costs or None, partial, short_hurdle, short_min_easy or None, no_shorts,
-                scaled_attention, fresh, every, init, schedule, lr_min, warm_lr or None,
-                compile_model, max_return or None, holdings_input=holdings_input, stop=stop,
-                patience=patience, holdout=holdout,
+                date.fromisoformat(start), fast_attention=fast_attention, clip=clip or None,
+                costs=costs or None, short_hurdle=short_hurdle, schedule=schedule,
+                lr_min=lr_min, warm_lr=warm_lr or None, compile=compile_model,
+                max_return=max_return or None, holdings_input=holdings_input,
             )  # fmt: skip
-            futures.append(
-                pool_.submit(
-                    _walk_one,
-                    table,
-                    run,
-                    settings,
-                    pool,
-                    device,
-                    threads,
-                    precision,
-                    inputs,
-                    (min_price, min_adv),
-                    subsets,
-                )
-            )
+            futures.append(pool_.submit(_walk_one, table, run, settings, device, threads,
+                                        precision, inputs))  # fmt: skip
         for f in futures:
             typer.echo(f.result())
     if len(runs) > 1:
@@ -429,7 +344,7 @@ def grid_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     """Train each setup fresh on a few windows and record every epoch (research.optimizer.grid)."""
     from portfolio_lab.research.optimizer import grid  # noqa: PLC0415
 
-    months = _months(table, None, inputs)
+    months = _months(table, inputs)
     index = {m.date: i for i, m in enumerate(months)}
     picked = [index[date.fromisoformat(d.strip())] for d in ends.split(",")]
     setups = grid.configs_from(json.loads(configs.read_text()))
