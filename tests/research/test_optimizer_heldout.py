@@ -65,8 +65,8 @@ def test_cold_listed_months_stand_alone_and_holdout_seed_moves_the_held_months()
     assert log_two["date"].to_list() == list(picked)
     w_one, _, _ = run(only=picked[1:])
     for d in picked:  # a cold month does not depend on the months that ran before it
-        assert log_two.filter(pl.col("date") == d)["test_curve"].to_list() == pytest.approx(
-            log_all.filter(pl.col("date") == d)["test_curve"].to_list(), abs=1e-6
+        assert log_two.filter(pl.col("date") == d)["test_curve"][0].to_list() == pytest.approx(
+            log_all.filter(pl.col("date") == d)["test_curve"][0].to_list(), abs=1e-6
         )
     late = pl.col("date") == picked[1]  # traded holdings differ from a full walk's by design
     assert np.allclose(w_two.filter(late)["weight"].to_numpy(),
