@@ -167,6 +167,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     max_return: Annotated[
         float, typer.Option(help="Training returns above this in size set to 0 (0: off).")
     ] = 0.0,
+    winsor: Annotated[
+        float, typer.Option(help="Training returns pulled in to each month's q, 1-q quantiles.")
+    ] = 0.0,
     holdings_input: Annotated[
         bool, typer.Option(help="Feed each stock's holding and spread to the model (--costs).")
     ] = False,
@@ -229,7 +232,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 ridge_tilt=tuple(float(x) for x in ridge_tilt.split(",")) if ridge_tilt else None,
                 schedule=schedule,
                 lr_min=lr_min, warm_lr=warm_lr or None, compile=compile_model,
-                max_return=max_return or None, holdings_input=holdings_input,
+                max_return=max_return or None, winsor=winsor, holdings_input=holdings_input,
                 borrow_input=borrow_input, stop=stop,
                 patience=patience, holdout=holdout, smooth=smooth, average=average,
                 cold=cold, watch=watch, scatter=scatter,

@@ -76,3 +76,21 @@ def test_cold_listed_months_stand_alone_and_holdout_seed_moves_the_held_months()
     _, none, _ = run(only=picked, holdout=0)  # nothing held out: the test month still logged
     assert all(len(c) == 0 for c in none["held_curve"])
     assert all(len(c) == 5 for c in none["test_curve"])
+
+
+def test_winsor_pulls_training_returns_in_to_each_months_quantiles_and_keeps_the_real_ones():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.walk import Settings, _data  # noqa: PLC0415
+
+    r = np.linspace(-1.0, 1.0, 101).astype(np.float32)
+    r[-1] = 40.0  # a data error
+    months = [data.Month(date(2000, 1, 31), [str(i) for i in range(101)],
+                         np.zeros((101, 1), np.float32), r)]  # fmt: skip
+    clipped, real = _data(months, Settings("linear", winsor=0.01), "cpu")
+    c = clipped[0][1]
+    assert float(c.max()) == pytest.approx(float(torch.quantile(torch.from_numpy(r), 0.99)))
+    assert float(c.min()) == pytest.approx(-0.98, abs=1e-5)
+    assert float(real[0][1].max()) == 40.0 and clipped[0][0] is real[0][0]
+    unknown = [data.Month(date(2000, 1, 31), ["A", "B"], np.zeros((2, 1), np.float32),
+                          np.array([np.nan, 5.0], np.float32))]  # fmt: skip
+    assert torch.isnan(_data(unknown, Settings("linear", winsor=0.01), "cpu")[0][0][1][0])

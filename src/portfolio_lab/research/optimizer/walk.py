@@ -107,6 +107,11 @@ class Settings:
         max_return: Training months' returns above this in size are set to 0 (data errors such
             as a $0.001 stock "returning" 94,800% in a month); the test month's are kept.
             ``None``: kept as they are.
+        winsor: Training months' returns are pulled in to their month's ``winsor`` and
+            1 - ``winsor`` quantiles (0.01: the 1st and 99th percentiles; 0: off). The paper
+            does not clip; our returns carry data errors and lottery outcomes that a book many
+            times its capital bets on, and blow training up (bench1). The test month's own
+            return, its per-pass loss and its optimism readings stay real.
         cost_scale: Costs in the training loss are charged at this multiple (held-out scoring
             and the walk's own measures use the real costs): in-sample returns run about twice
             what the model earns out of sample, so at 1x costs look half as large as they are.
@@ -152,6 +157,7 @@ class Settings:
     warm_lr: float | None = None
     compile: bool = False
     max_return: float | None = None
+    winsor: float = 0.0
     holdings_input: bool = False
     borrow_input: bool = False
     ridge: float = 0.0
@@ -171,15 +177,22 @@ class Settings:
 Pair = tuple[torch.Tensor, torch.Tensor]
 
 
-def _data(months: list[Month], settings: Settings, device: str) -> list[Pair]:
-    """Each month's (x, r) tensors, returns above ``settings.max_return`` in size set to 0.
+def _data(months: list[Month], settings: Settings, device: str) -> tuple[list[Pair], list[Pair]]:
+    """Each month's (x, r) tensors for training, and the same with real returns.
 
-    The test month's return is read from ``month.r`` itself, so it stays untouched.
+    Training returns above ``settings.max_return`` in size are set to 0, then pulled in to
+    the month's ``settings.winsor`` quantiles (months whose returns are not all known are
+    left as they are). The real pairs share the inputs and score the test month.
     """
-    data = [(torch.from_numpy(m.x).to(device), torch.from_numpy(m.r).to(device)) for m in months]
-    if not settings.max_return:
-        return data
-    return [(x, torch.where(r.abs() > settings.max_return, 0.0, r)) for x, r in data]
+    raw = [(torch.from_numpy(m.x).to(device), torch.from_numpy(m.r).to(device)) for m in months]
+    data = raw
+    if settings.max_return:
+        data = [(x, torch.where(r.abs() > settings.max_return, 0.0, r)) for x, r in data]
+    if settings.winsor:
+        q, known = settings.winsor, [len(r) and bool(torch.isfinite(r).all()) for _, r in data]
+        data = [(x, r.clamp(torch.quantile(r, q), torch.quantile(r, 1 - q))) if ok else (x, r)
+                for (x, r), ok in zip(data, known, strict=True)]  # fmt: skip
+    return data, raw
 
 
 @dataclass(frozen=True)
@@ -319,7 +332,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
     epochs: int, settings: Settings, rng: np.random.Generator, pricing: Pricing | None, *,
     start_lr: float, span: range, clipper: Clipper, average: Average | None, test: int,
-    hold_rng: np.random.Generator,
+    hold_rng: np.random.Generator, raw: list[Pair],
 ) -> tuple[list, int, float, list[float], list[torch.Tensor], list[float]]:  # fmt: skip
     """One month's training: losses, passes, held-out loss, its curve, gradient sizes.
 
@@ -329,7 +342,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     ``epochs`` passes (with ``settings.stop``: at most), the rate following
     ``settings.schedule`` from ``start_lr`` over them. With a book (``holdings_input``) the
     ``span`` months not in it get the model's weights first, in month order. The held-out
-    months are drawn from ``hold_rng``.
+    months are drawn from ``hold_rng``; the test month is scored on its real return (``raw``).
     """
     if pricing is not None:
         holdings.fill(model, data, pricing, span)
@@ -340,7 +353,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     def score() -> float:
         _roll(model, data, pricing, block)
         if test >= 0:
-            tests.append(_held_loss(model, data, pricing, settings, [test]))
+            tests.append(_held_loss(model, raw, pricing, settings, [test]))
         return _held_loss(model, data, pricing, settings, block)
 
     norms: list[torch.Tensor] = []
@@ -350,7 +363,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
         losses = _pass(model, adam, data, fit, settings, rng, pricing, lr, clipper, norms,
                        average)  # fmt: skip
         if not block and settings.watch and test >= 0:  # nothing held out: still log the test
-            tests.append(_held_loss(model, data, pricing, settings, [test]))
+            tests.append(_held_loss(model, raw, pricing, settings, [test]))
         return losses
 
     return (*stopping.fit_stopped(model, adam, one_pass, score, bool(block), epochs,
@@ -412,7 +425,7 @@ def walk(
     model, adam = _new_model(settings, months[0].x.shape[1], device)
     start_state = copy.deepcopy(model.state_dict()) if settings.cold else None
     average = Average(model, settings.average) if settings.average else None
-    data = _data(months, settings, device)
+    data, raw = _data(months, settings, device)
     known = [bool(np.isfinite(m.r).all()) for m in months]
     pricing = _pricing(months, settings, device, stock_costs)
     if settings.measure_optimism and pricing is None:
@@ -452,6 +465,7 @@ def walk(
             average=average,
             test=watched,
             hold_rng=hold_rng,
+            raw=raw,
         )
         grad, limit = torch.stack(norms).T if norms else (torch.zeros(0), torch.zeros(0))
         if not trained:
@@ -465,7 +479,7 @@ def walk(
             if cuts is not None and known[t]:  # the traded model, before the book takes w
                 vol = settings.vol_column
                 extra = {"opt_in": optimism.measure(model, data, pricing, train, cuts, vol),
-                         "opt_out": optimism.test_month(w, data, pricing, t, cuts,
+                         "opt_out": optimism.test_month(w, raw, pricing, t, cuts,
                                                         vol)}  # fmt: skip
         last, traded = holdings.remember(pricing, w, data, t), t
         gross = float(np.abs(w).sum())  # 0 only if no stock is held: all cash
