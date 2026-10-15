@@ -77,7 +77,8 @@ def _walk_one(table: Path, out: Path, settings, device: str, threads: int, preci
     weights.write_parquet(out / "weights.parquet")
     log.write_parquet(out / "log.parquet")
     torch.save(fitted.state_dict(), out / "model.pt")
-    meta = asdict(replace(settings, start=settings.start.isoformat())) | {
+    only = settings.only and tuple(d.isoformat() for d in settings.only)
+    meta = asdict(replace(settings, start=settings.start.isoformat(), only=only)) | {
         "inputs": inputs,
         "end": end.isoformat() if end else None,
     }
