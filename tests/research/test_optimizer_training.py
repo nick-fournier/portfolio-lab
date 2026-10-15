@@ -388,3 +388,38 @@ def test_parameter_average_is_bias_corrected_swaps_in_and_rolls_back_with_stoppi
     latest, _, _ = walk(months, Settings("linear", **base))
     assert held["weight"].is_finite().all()
     assert held["weight"].to_list() != latest["weight"].to_list()
+
+
+def test_optimism_logs_in_and_out_of_sample_return_per_dollar_by_cost_bucket():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import optimism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    w = torch.tensor([1.0, -2.0, 3.0, -4.0])
+    r = torch.tensor([0.1, 0.1, -0.1, 0.2])
+    spread = torch.tensor([0.001, 0.002, 0.02, 0.03])  # buckets 0, 0, 4, 4 with these cuts
+    fee = torch.tensor([0.0, 0.01, 0.0, 0.9])  # shorts: B in bucket 0, D in bucket 4
+    cuts = (torch.tensor([0.005, 0.008, 0.01, 0.015]), torch.tensor([0.02, 0.05, 0.1, 0.5]))
+    out = optimism._sums(w, r, spread, fee, cuts)
+    assert out[0].tolist() == pytest.approx([0.1 - 0.2, 0, 0, 0, -0.3 - 0.8])
+    assert out[1].tolist() == pytest.approx([3, 0, 0, 0, 7])
+    assert out[2].tolist() == pytest.approx([-0.2, 0, 0, 0, -0.8])
+    assert out[3].tolist() == pytest.approx([2, 0, 0, 0, 4])
+    rng = np.random.default_rng(22)
+    months = [
+        data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"),
+                   rng.uniform(-0.5, 0.5, (8, 2)).astype(np.float32),
+                   rng.normal(0.01, 0.05, 8).astype(np.float32))
+        for k in range(16)
+    ]  # fmt: skip
+    stock = [(rng.uniform(0.001, 0.03, 8).astype(np.float32),
+              rng.uniform(0.003, 1.0, 8).astype(np.float32)) for _ in range(16)]  # fmt: skip
+    settings = Settings("linear", window=12, first_epochs=20, warm_epochs=2, lr=0.05,
+                        start=date(2000, 1, 1), costs="table.parquet",
+                        measure_optimism=True)  # fmt: skip
+    _, log, _ = walk(months, settings, stock_costs=stock)
+    assert all(len(v) == 4 * optimism.BUCKETS for v in log["opt_in"])
+    got = optimism.summary(log)
+    assert len(got["spread_ratio"]) == optimism.BUCKETS
+    with pytest.raises(ValueError, match="measure_optimism"):
+        walk(months, Settings("linear", window=12, start=date(2000, 1, 1), measure_optimism=True))

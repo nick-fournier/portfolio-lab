@@ -29,6 +29,7 @@ With ``average`` the walk holds a moving average of the model's parameters inste
 latest step (research.optimizer.averaging); training is unchanged.
 """
 
+import contextlib
 import math
 import time
 from dataclasses import dataclass
@@ -38,7 +39,7 @@ import numpy as np
 import polars as pl
 import torch
 
-from portfolio_lab.research.optimizer import costs, holdings, stopping
+from portfolio_lab.research.optimizer import costs, holdings, optimism, stopping
 from portfolio_lab.research.optimizer.averaging import Average
 from portfolio_lab.research.optimizer.clipping import Clipper
 from portfolio_lab.research.optimizer.data import Month
@@ -79,6 +80,8 @@ class Settings:
         cost_scale: Costs in the training loss are charged at this multiple (held-out scoring
             and the walk's own measures use the real costs): in-sample returns run about twice
             what the model earns out of sample, so at 1x costs look half as large as they are.
+        measure_optimism: Log in-sample and out-of-sample return per dollar by spread and
+            borrow fee bucket each month (research.optimizer.optimism; needs ``costs``).
         holdings_input: Feed each stock's holding and spread to the model (module docs).
         borrow_input: Also feed each stock's borrow fee (needs ``holdings_input``).
         stop: Early stopping each month (module docs).
@@ -102,6 +105,7 @@ class Settings:
     costs: str | None = None
     short_hurdle: float = 0.0
     cost_scale: float = 1.0
+    measure_optimism: bool = False
     schedule: str = "flat"
     lr_min: float = 1e-5
     warm_lr: float | None = None
@@ -318,6 +322,9 @@ def walk(
     data = _data(months, settings, device)
     known = [bool(np.isfinite(m.r).all()) for m in months]
     pricing = _pricing(months, settings, device, stock_costs)
+    if settings.measure_optimism and pricing is None:
+        raise ValueError("measure_optimism needs per-stock costs")
+    cuts = optimism.edges(pricing.stock) if settings.measure_optimism else None
     weights, log, trained, last = [], [], False, None
     for t, month in enumerate(months):
         lo = 0 if settings.window is None else t - settings.window
@@ -336,11 +343,12 @@ def walk(
         if not trained:
             clipper.arm()  # "auto" calibrates on the steps after the cold start
         trained = True
-        if average is None:
+        extra = {}
+        with average.swapped() if average is not None else contextlib.nullcontext():
             w = holdings.pick(model, data, pricing, last, t)
-        else:
-            with average.swapped():
-                w = holdings.pick(model, data, pricing, last, t)
+            if cuts is not None and known[t]:  # the traded model, before the book takes w
+                extra = {"opt_in": optimism.measure(model, data, pricing, train, cuts),
+                         "opt_out": optimism.test_month(w, data, pricing, t, cuts)}  # fmt: skip
         last = holdings.remember(pricing, w, data, t)
         gross = float(np.abs(w).sum())  # 0 only if no stock is held: all cash
         weights.append(pl.DataFrame({"date": [month.date] * len(w), "symbol": month.symbols,
@@ -354,5 +362,5 @@ def walk(
                     "grad_max": float(grad.max()) if norms else math.nan,
                     "clipped": float((grad > limit).float().mean()) if norms else 0.0,
                     "limit": float(limit[-1]) if norms else math.nan,
-                    "seconds": time.perf_counter() - clock})  # fmt: skip
+                    "seconds": time.perf_counter() - clock} | extra)  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model

@@ -137,6 +137,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     cost_scale: Annotated[
         float, typer.Option(help="Loss: charge costs at this multiple in training (1: real).")
     ] = 1.0,
+    measure_optimism: Annotated[
+        bool, typer.Option(help="Log in- vs out-of-sample return by cost bucket (--costs).")
+    ] = False,
     schedule: Annotated[
         str, typer.Option(help="Learning rate per month: flat or cosine.")
     ] = "flat",
@@ -195,6 +198,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 model, blocks, hidden, window or None, first_epochs, warm_epochs, lr, s,
                 date.fromisoformat(start), fast_attention=fast_attention, clip=_clip(clip),
                 costs=costs or None, short_hurdle=short_hurdle, cost_scale=cost_scale,
+                measure_optimism=measure_optimism,
                 schedule=schedule,
                 lr_min=lr_min, warm_lr=warm_lr or None, compile=compile_model,
                 max_return=max_return or None, holdings_input=holdings_input,
