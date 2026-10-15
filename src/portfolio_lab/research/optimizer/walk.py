@@ -182,12 +182,15 @@ def _priced_loss(model: Optimizer, data: list[Pair], pricing: Pricing, settings:
     return (1 - _net(model, data, pricing, settings, k, w)) ** 2
 
 
-def _pass(model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
-          settings: Settings, rng: np.random.Generator, pricing: Pricing | None,
-          lr: float) -> list[torch.Tensor]:  # fmt: skip
+def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
+    model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
+    settings: Settings, rng: np.random.Generator, pricing: Pricing | None, lr: float,
+    norms: list[torch.Tensor],
+) -> list[torch.Tensor]:  # fmt: skip
     """One pass over the ``train`` months in shuffled order at rate ``lr``; its losses.
 
-    A step whose loss is not finite is skipped rather than poison Adam.
+    Each step's gradient size before clipping goes on ``norms``. A step whose loss is not
+    finite is skipped rather than poison Adam.
     """
     for group in adam.param_groups:
         group["lr"] = lr
@@ -199,8 +202,7 @@ def _pass(model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train
         if not torch.isfinite(value):
             continue
         value.backward()
-        if settings.clip:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), settings.clip)
+        norms.append(torch.nn.utils.clip_grad_norm_(model.parameters(), settings.clip or math.inf))
         adam.step()
         losses.append(value.detach())
     return losses
@@ -223,9 +225,11 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
     epochs: int, settings: Settings, rng: np.random.Generator, pricing: Pricing | None, *,
     start_lr: float, span: range,
-) -> tuple[list, int, float, list[float]]:  # fmt: skip
-    """One month's training: losses of the pass kept, passes kept, held-out loss, its curve.
+) -> tuple[list, int, float, list[float], list[torch.Tensor]]:  # fmt: skip
+    """One month's training: losses, passes, held-out loss, its curve, gradient sizes.
 
+    Returns the kept pass's losses, the passes kept, the best smoothed held-out loss, its
+    per-pass curve and every step's gradient size (before clipping) over all the passes run.
     ``epochs`` passes (with ``settings.stop``: at most), the rate following
     ``settings.schedule`` from ``start_lr`` over them. With a book (``holdings_input``) the
     ``span`` months not in it get the model's weights first, in month order.
@@ -235,14 +239,16 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     fit, block = (stopping.held_block(train, settings.holdout, rng) if settings.stop
                   else (train, []))  # fmt: skip
 
+    norms: list[torch.Tensor] = []
+
     def one_pass(p: int) -> list:
         lr = rate(settings.schedule, start_lr, settings.lr_min, p, epochs)
-        return _pass(model, adam, data, fit, settings, rng, pricing, lr)
+        return _pass(model, adam, data, fit, settings, rng, pricing, lr, norms)
 
-    return stopping.fit_stopped(model, adam, one_pass,
-                                lambda: _held_loss(model, data, pricing, settings, block),
-                                bool(block), epochs, settings.patience,
-                                settings.smooth)  # fmt: skip
+    return (*stopping.fit_stopped(model, adam, one_pass,
+                                  lambda: _held_loss(model, data, pricing, settings, block),
+                                  bool(block), epochs, settings.patience, settings.smooth),
+            norms)  # fmt: skip
 
 
 def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, torch.optim.Adam]:
@@ -276,8 +282,9 @@ def walk(
         portfolio's next-month return over the T-bill before costs, ``long`` and ``short`` =
         the sums of the positive and negative weights, ``largest`` = the largest absolute
         weight's share of the sum of absolute weights, mean training loss over the last pass,
-        passes kept, best smoothed held-out loss and its per-pass curve with ``stop``,
-        seconds); and the final model.
+        passes kept, best smoothed held-out loss and its per-pass curve with ``stop``, the
+        median and largest gradient size over the month's steps before clipping and the
+        share of steps clipped, seconds); and the final model.
     """
     rng = np.random.default_rng(settings.seed)
     model, adam = _new_model(settings, months[0].x.shape[1], device)
@@ -293,9 +300,11 @@ def walk(
         train = [k for k in range(lo, t) if known[k]]
         epochs = settings.warm_epochs if trained else settings.first_epochs
         start_lr = settings.warm_lr if trained and settings.warm_lr else settings.lr
-        losses, passes, held_loss, curve = _fit(model, adam, data, train, epochs, settings, rng,
-                                                pricing, start_lr=start_lr,
-                                                span=range(lo, t))  # fmt: skip
+        losses, passes, held_loss, curve, norms = _fit(model, adam, data, train, epochs,
+                                                       settings, rng, pricing,
+                                                       start_lr=start_lr,
+                                                       span=range(lo, t))  # fmt: skip
+        grad = torch.stack(norms) if norms else torch.zeros(0)
         trained = True
         w = holdings.pick(model, data, pricing, last, t)
         last = holdings.remember(pricing, w, data, t)
@@ -307,5 +316,9 @@ def walk(
                     "largest": float(np.abs(w).max()) / gross if gross else None,
                     "loss": float(torch.stack(losses).mean()) if losses else math.nan,
                     "passes": passes, "held_loss": held_loss, "held_curve": curve,
+                    "grad_median": float(grad.median()) if norms else math.nan,
+                    "grad_max": float(grad.max()) if norms else math.nan,
+                    "clipped": float((grad > settings.clip).float().mean())
+                    if norms and settings.clip else 0.0,
                     "seconds": time.perf_counter() - clock})  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model

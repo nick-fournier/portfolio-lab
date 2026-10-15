@@ -299,3 +299,7 @@ def test_walk_with_early_stopping_logs_passes_and_leaves_the_book_to_training():
     _, plain, _ = walk(months, Settings("linear", window=20, first_epochs=8, warm_epochs=8,
                                         start=date(2001, 9, 1)))  # fmt: skip
     assert (plain["passes"] == 8).all() and plain["held_loss"].is_nan().all()
+    assert (plain["grad_max"] >= plain["grad_median"]).all() and (plain["clipped"] <= 1).all()
+    _, big, _ = walk(months, Settings("linear", window=20, first_epochs=8, warm_epochs=8,
+                                      start=date(2001, 9, 1), clip=1e-9))  # fmt: skip
+    assert (big["clipped"] == 1.0).all()  # every step's gradient is over a tiny limit
