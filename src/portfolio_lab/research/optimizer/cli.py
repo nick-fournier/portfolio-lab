@@ -202,6 +202,11 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     holdings_input: Annotated[
         bool, typer.Option(help="Feed each stock's holding and spread to the model (--costs).")
     ] = False,
+    stop: Annotated[
+        bool, typer.Option(help="Early stopping each month on a held-out block (walk docs).")
+    ] = False,
+    patience: Annotated[int, typer.Option(help="Passes without improvement (--stop).")] = 3,
+    holdout: Annotated[int, typer.Option(help="Months held out each month (--stop).")] = 12,
 ) -> None:
     """Walk a model forward, one run per seed, and save each seed's monthly portfolios.
 
@@ -235,7 +240,8 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 None if subset_train == "all" else subset_train, finetune_epochs, spread, short_fee,
                 costs or None, partial, short_hurdle, short_min_easy or None, no_shorts,
                 scaled_attention, fresh, every, init, schedule, lr_min, warm_lr or None,
-                compile_model, max_return or None, holdings_input=holdings_input,
+                compile_model, max_return or None, holdings_input=holdings_input, stop=stop,
+                patience=patience, holdout=holdout,
             )  # fmt: skip
             futures.append(
                 pool_.submit(

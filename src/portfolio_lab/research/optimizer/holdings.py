@@ -5,13 +5,15 @@ table of each month's book. :func:`holding` turns last month's book into this mo
 column, :func:`with_holdings` appends it and the spread to the traits, and :func:`carried`
 scores the held-out months trading month to month from the carried book. The walk's
 ``holdings_input`` (research.optimizer.walk) uses :func:`inputs`, :func:`fill`, :func:`pick`
-and :func:`remember` with its pricing (``links``, ``stock`` and ``book``).
+and :func:`remember` with its pricing (``links``, ``stock`` and ``book``); :func:`hold` turns
+the model's weights into the walk's holdings (short limits, partial trading).
 """
 
 import numpy as np
 import torch
 
 from portfolio_lab.research.optimizer import costs as cost_model
+from portfolio_lab.research.optimizer.data import Month
 
 #: Spread level the spread input is measured from (log(half-spread / this)).
 SPREAD_REF = 0.005
@@ -103,3 +105,29 @@ def remember(pricing, w: np.ndarray, data: list, t: int) -> torch.Tensor | None:
         return None
     pricing.book[t] = torch.from_numpy(w).to(data[t][0])
     return pricing.book[t]
+
+
+def hold(
+    model,
+    held: tuple[list[str], np.ndarray] | None,
+    month: Month,
+    w: np.ndarray,
+    shortable: np.ndarray | None,
+) -> tuple[np.ndarray, tuple[list[str], np.ndarray] | None, float | None]:
+    """The month's holdings from the model's weights ``w``.
+
+    Stocks that may not be shorted (``shortable`` False) are clamped at 0 or above, before and
+    after partial trading blends last month's real holdings in at the model's pace. Returns
+    the holdings, the state to pass next month and the pace (``None`` without partial).
+    """
+    clamp = (
+        (lambda v: v) if shortable is None else (lambda v: np.where(shortable, v, np.maximum(v, 0)))
+    )
+    w = clamp(w)
+    if model.pace_logit is None:
+        return w, None, None
+    pace = float(model.pace())
+    if held is not None:
+        before = dict(zip(*held, strict=True))
+        w = clamp((1 - pace) * np.array([before.get(s, 0.0) for s in month.symbols]) + pace * w)
+    return w, (month.symbols, w), pace

@@ -26,6 +26,11 @@ holding and spread (research.optimizer.holdings): in training, from a book table
 month's weights (filled in month order the first time a month enters the window, refreshed at
 every step, kept from month to month); for the test month, from the walk's real holdings of
 the month before after its returns.
+
+With ``stop`` each month trains with early stopping (research.optimizer.stopping): a random
+block of ``holdout`` consecutive training months is held out, passes run one at a time until
+its loss has not improved for ``patience`` passes (at most ``first_epochs``, warm or cold), and
+the model rolls back to the best pass; the log records the passes kept and the block's loss.
 """
 
 import copy
@@ -39,7 +44,7 @@ import numpy as np
 import polars as pl
 import torch
 
-from portfolio_lab.research.optimizer import costs, holdings, objectives
+from portfolio_lab.research.optimizer import costs, holdings, objectives, stopping
 from portfolio_lab.research.optimizer.data import Month
 from portfolio_lab.research.optimizer.model import Optimizer, loss
 
@@ -108,6 +113,9 @@ class Settings:
         softplus: Long-only weights = softplus(score) / N, size free (model.Optimizer); saved as
             the mix like ``scale``, the total logged as m.
         holdings_input: Feed each stock's holding and spread to the model (module docs).
+        stop: Early stopping each month (module docs); ``warm_epochs`` is then unused.
+        patience: Passes without a better held-out loss before stopping.
+        holdout: Consecutive training months held out each month for stopping.
     """
 
     model: str
@@ -148,6 +156,9 @@ class Settings:
     compile: bool = False
     max_return: float | None = None
     holdings_input: bool = False
+    stop: bool = False
+    patience: int = 3
+    holdout: int = 12
 
 
 def _tensors(m: Month, device: str) -> tuple[torch.Tensor, torch.Tensor]:
@@ -275,6 +286,36 @@ def _priced_loss(model: Optimizer, source: list, pricing: Pricing, settings: Set
     return (1 - net) ** 2
 
 
+def _held_loss(model: Optimizer, source: list, pricing: Pricing | None, settings: Settings,
+               months: list[int]) -> float:  # fmt: skip
+    """Mean loss over ``months`` (net of costs with ``pricing``), without a gradient."""
+    with torch.no_grad():
+        values = [_priced_loss(model, source, pricing, settings, k) if pricing is not None
+                  else loss(model, *source[k]) for k in months]  # fmt: skip
+    return float(torch.stack(values).mean())
+
+
+def _fit(  # noqa: PLR0913 - one month's training pieces
+    model: Optimizer, adam: torch.optim.Optimizer, source: list, fit: list[int], epochs: int,
+    settings: Settings, rng: np.random.Generator, pricing: Pricing | None, *, start_lr: float,
+    span: range,
+) -> tuple[list, int, float]:  # fmt: skip
+    """``epochs`` passes, or early stopping (``settings.stop``): losses, passes, held-out loss."""
+    if not settings.stop:
+        losses = _train(model, adam, source, fit, epochs, settings, rng, pricing,
+                        start_lr=start_lr, fill=span)  # fmt: skip
+        return losses, epochs, math.nan
+    rest, block = stopping.held_block(fit, settings.holdout, rng)
+
+    def one_pass(first: bool) -> list:
+        return _train(model, adam, source, rest, 1, settings, rng, pricing, start_lr=start_lr,
+                      fill=span if first else None)  # fmt: skip
+
+    return stopping.fit_stopped(model, adam, one_pass,
+                                lambda ks: _held_loss(model, source, pricing, settings, ks),
+                                block, settings.first_epochs, settings.patience)  # fmt: skip
+
+
 def _subset_rows(
     months: list[Month], data: list[Pair], subsets: dict[date, set[str]] | None
 ) -> tuple[list[list[int]], list[Pair | None]]:
@@ -300,6 +341,8 @@ def _pricing(
     """
     if settings.subset_train and subsets is None:
         raise ValueError("subset_train needs subsets")
+    if settings.stop and (settings.objective or subsets is not None):
+        raise ValueError("stop needs the paper loss and no subsets")
     if settings.holdings_input and (not settings.costs or settings.partial):
         raise ValueError("holdings_input needs per-stock costs and no partial trading")
     if settings.every > 1 and not settings.fresh:
@@ -321,32 +364,6 @@ def _pricing(
                      for c in stock_costs]  # fmt: skip
     book = {} if settings.holdings_input else None
     return Pricing(costs.links(months, device), stock, shortable, book)
-
-
-def _hold(
-    model: Optimizer,
-    held: tuple[list[str], np.ndarray] | None,
-    month: Month,
-    w: np.ndarray,
-    shortable: np.ndarray | None,
-) -> tuple[np.ndarray, tuple[list[str], np.ndarray] | None, float | None]:
-    """The month's holdings from the model's weights ``w``.
-
-    Stocks that may not be shorted (``shortable`` False) are clamped at 0 or above, before and
-    after partial trading blends last month's real holdings in at the model's pace. Returns
-    the holdings, the state to pass next month and the pace (``None`` without partial).
-    """
-    clamp = (
-        (lambda v: v) if shortable is None else (lambda v: np.where(shortable, v, np.maximum(v, 0)))
-    )
-    w = clamp(w)
-    if model.pace_logit is None:
-        return w, None, None
-    pace = float(model.pace())
-    if held is not None:
-        before = dict(zip(*held, strict=True))
-        w = clamp((1 - pace) * np.array([before.get(s, 0.0) for s in month.symbols]) + pace * w)
-    return w, (month.symbols, w), pace
 
 
 def _lr(settings: Settings, start: float, epoch: int, epochs: int) -> float:
@@ -442,11 +459,13 @@ def walk(
         source = sub if settings.subset_train == "only" else data
         epochs = settings.warm_epochs if trained and not settings.fresh else settings.first_epochs
         fit = [k for k in train if source[k] is not None]
-        losses = _train(model, adam, source, fit, epochs, settings, rng, pricing,
-                        start_lr=_start_lr(settings, trained), fill=range(lo, t))  # fmt: skip
+        losses, passes, held_loss = _fit(model, adam, source, fit, epochs, settings, rng, pricing,
+                                         start_lr=_start_lr(settings, trained),
+                                         span=range(lo, t))  # fmt: skip
         trained = True
         w = holdings.pick(model.weights, data, pricing, last, t)
-        w, held, pace = _hold(model, held, month, w, _shortable(pricing, settings, t, len(w)))
+        w, held, pace = holdings.hold(model, held, month, w,
+                                      _shortable(pricing, settings, t, len(w)))  # fmt: skip
         last = holdings.remember(pricing, w, data, t)
         sized = settings.scale or (settings.softplus and settings.long_only)
         m = float(w.sum()) if sized else 1.0
@@ -475,7 +494,7 @@ def walk(
                     "short": float(w[w < 0].sum()),
                     "largest": float(np.abs(w).max()) / gross if gross else None,
                     "loss": float(torch.stack(losses).mean()) if losses else math.nan,
-                    "m": m, "pace": pace,
+                    "m": m, "pace": pace, "passes": passes, "held_loss": held_loss,
                     "holdings": float(1 / (w**2).sum()) if settings.long_only and gross else None,
                     "seconds": time.perf_counter() - clock} | extra)  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model
