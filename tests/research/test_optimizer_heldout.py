@@ -57,7 +57,7 @@ def test_cold_listed_months_stand_alone_and_holdout_seed_moves_the_held_months()
     )
 
     def run(**kw):
-        return walk(months, Settings("linear", **base, **kw), stock_costs=stock)
+        return walk(months, Settings("linear", **(base | kw)), stock_costs=stock)
 
     _, log_all, _ = run()
     picked = (date(2002, 1, 1), date(2002, 4, 1))
