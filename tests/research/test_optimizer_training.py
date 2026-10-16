@@ -435,6 +435,7 @@ def test_optimism_logs_in_and_out_of_sample_return_per_dollar_by_cost_bucket():
 
 def test_ridge_charges_w_squared_by_spread_bucket_and_shrinks_the_book():
     torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import priced  # noqa: PLC0415
     from portfolio_lab.research.optimizer import walk as wk  # noqa: PLC0415
 
     rng = np.random.default_rng(23)
@@ -448,12 +449,12 @@ def test_ridge_charges_w_squared_by_spread_bucket_and_shrinks_the_book():
     base = dict(window=12, first_epochs=30, warm_epochs=3, lr=0.05, start=date(2000, 1, 1),
                 costs="table.parquet")  # fmt: skip
     tilt = (1.0, 1.0, 2.0, 3.0, 4.0)
-    pricing = wk._pricing(months, wk.Settings("linear", ridge=0.5, ridge_tilt=tilt, **base),
+    pricing = priced.pricing(months, wk.Settings("linear", ridge=0.5, ridge_tilt=tilt, **base),
                           "cpu", stock)  # fmt: skip
     assert pricing.ridge[0].tolist()[0] == pytest.approx(0.5)  # cheapest stock: bucket 0
     assert pricing.ridge[0].tolist()[-1] == pytest.approx(2.0)  # dearest: bucket 4
     with pytest.raises(ValueError, match="ridge_tilt"):
-        wk._pricing(months, wk.Settings("linear", ridge=0.5, ridge_tilt=(1.0,), **base), "cpu",
+        priced.pricing(months, wk.Settings("linear", ridge=0.5, ridge_tilt=(1.0,), **base), "cpu",
                     stock)  # fmt: skip
     _, free, _ = wk.walk(months, wk.Settings("linear", **base), stock_costs=stock)
     _, held, _ = wk.walk(months, wk.Settings("linear", ridge=5.0, **base), stock_costs=stock)

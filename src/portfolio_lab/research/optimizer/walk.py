@@ -9,8 +9,8 @@ months in a shuffled order and takes one Adam step per month (paper, Algorithm 2
 model's weights for month t's candidates are the portfolio held over the next month.
 
 With per-stock ``costs`` the loss is (1 - net)^2, net the month's return after each stock's
-spread on the dollars traded from the month before's weights (the same model's, without a
-gradient) and its borrow fee plus ``short_hurdle`` a year on shorts (research.optimizer.costs).
+spread on the dollars traded from the book held going in (the month before's weights after its
+returns) and its borrow fee plus ``short_hurdle`` a year on shorts (research.optimizer.priced).
 
 With ``holdings_input`` (2026-10-15; needs ``costs``) each stock's row also gets its holding
 and spread (research.optimizer.holdings): in training, from a book table of each month's
@@ -65,7 +65,7 @@ import numpy as np
 import polars as pl
 import torch
 
-from portfolio_lab.research.optimizer import costs, holdings, optimism, stopping
+from portfolio_lab.research.optimizer import holdings, optimism, priced, stopping
 from portfolio_lab.research.optimizer.averaging import Average
 from portfolio_lab.research.optimizer.clipping import Clipper
 from portfolio_lab.research.optimizer.data import Month
@@ -128,6 +128,8 @@ class Settings:
         scatter: Hold out single months drawn anywhere in the window, not a block.
         holdout_seed: Seed of the held-out draw's own random stream (``None``: ``seed``'s).
         only: Train and trade only these test month ends (``None``: every month).
+        real_book: Training months the walk actually traded are held as traded, not as the
+            model's own weights (research.optimizer.priced; needs ``holdings_input``).
         dropout: Dropout share in the model's blocks while training (``model`` docs).
         stock_drop: Share of the month's stocks each training step hides from the loss, drawn
             afresh (returns 0, the rest x 1 / (1 - share)); the model sees all; costs still paid.
@@ -169,6 +171,7 @@ class Settings:
     scatter: bool = False
     holdout_seed: int | None = None
     only: tuple[date, ...] | None = None
+    real_book: bool = False
     dropout: float = 0.0
     stock_drop: float = 0.0
 
@@ -194,54 +197,6 @@ def _data(months: list[Month], settings: Settings, device: str) -> tuple[list[Pa
     return data, raw
 
 
-@dataclass(frozen=True)
-class Pricing:
-    """What the cost-aware loss needs (:func:`_pricing`).
-
-    Attributes:
-        links: ``costs.links`` of the months.
-        stock: Each month's per-stock (trade cost, borrow fee).
-        book: The training book table with ``holdings_input`` (module docs), else ``None``.
-        borrow: Feed the borrow fee too (``borrow_input``).
-        ridge: Each month's per-stock charge per unit of w^2 (``ridge``), else ``None``.
-    """
-
-    links: list[costs.Link | None]
-    stock: list[Pair]
-    book: dict[int, torch.Tensor] | None = None
-    borrow: bool = False
-    ridge: list[torch.Tensor] | None = None
-
-
-def _pricing(
-    months: list[Month], settings: Settings, device: str,
-    stock_costs: list[tuple[np.ndarray, ...]] | None,
-) -> Pricing | None:  # fmt: skip
-    """The cost-aware loss's inputs (``None`` without costs); checks the settings agree.
-
-    ``stock_costs``: each month's per-stock (trade cost, borrow fee, ...) from ``costs.align``.
-    """
-    if settings.holdings_input and not settings.costs:
-        raise ValueError("holdings_input needs per-stock costs")
-    if settings.borrow_input and not settings.holdings_input:
-        raise ValueError("borrow_input needs holdings_input")
-    if not settings.costs:
-        return None
-    if stock_costs is None:
-        raise ValueError("per-stock costs need stock_costs")
-    stock = [(torch.from_numpy(c[0]).to(device), torch.from_numpy(c[1]).to(device))
-             for c in stock_costs]  # fmt: skip
-    ridge = None
-    if settings.ridge:
-        tilt = torch.tensor(settings.ridge_tilt or (1.0,) * optimism.BUCKETS, device=device)
-        if len(tilt) != optimism.BUCKETS:
-            raise ValueError(f"ridge_tilt needs {optimism.BUCKETS} values")
-        cuts = optimism.edges(stock)[0]
-        ridge = [settings.ridge * tilt[torch.bucketize(s, cuts)] for s, _ in stock]
-    return Pricing(costs.links(months, device), stock, {} if settings.holdings_input else None,
-                   settings.borrow_input, ridge)  # fmt: skip
-
-
 def rate(schedule: str, start: float, floor: float, epoch: int, epochs: int) -> float:
     """The learning rate for pass ``epoch`` (0-based) of ``epochs``: ``flat`` or ``cosine``."""
     if schedule == "flat":
@@ -252,34 +207,9 @@ def rate(schedule: str, start: float, floor: float, epoch: int, epochs: int) -> 
     raise ValueError(f"schedule must be flat or cosine, not {schedule!r}")
 
 
-def _net(model: Optimizer, data: list[Pair], pricing: Pricing, settings: Settings, k: int,
-         w: torch.Tensor, scale: float = 1.0) -> torch.Tensor:  # fmt: skip
-    """Month k's return on ``w`` net of costs times ``scale``, traded from last month's weights."""
-    before = spread_before = None
-    if k > 0:
-        with torch.no_grad():
-            before = model(holdings.inputs(data, pricing, pricing.book, k - 1))
-        spread_before = pricing.stock[k - 1][0] * scale
-    spread, fee = pricing.stock[k]
-    return costs.net_return(w, data[k][1], before, pricing.links[k], spread * scale,
-                            (fee + settings.short_hurdle) * scale, spread_before)  # fmt: skip
-
-
-def _priced_loss(model: Optimizer, data: list[Pair], pricing: Pricing, settings: Settings,
-                 k: int) -> torch.Tensor:  # fmt: skip
-    """Month k's paper loss on its return net of costs (module docs); stores w in the book."""
-    w = model(holdings.inputs(data, pricing, pricing.book, k))
-    if pricing.book is not None:
-        pricing.book[k] = w.detach()
-    net = _net(model, data, pricing, settings, k, w, settings.cost_scale)
-    if pricing.ridge is not None:
-        net = net - (pricing.ridge[k] * w * w).sum()
-    return (1 - net) ** 2
-
-
 def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
-    settings: Settings, rng: np.random.Generator, pricing: Pricing | None, lr: float,
+    settings: Settings, rng: np.random.Generator, pricing: priced.Pricing | None, lr: float,
     clipper: Clipper, norms: list[torch.Tensor], average: Average | None,
 ) -> list[torch.Tensor]:  # fmt: skip
     """One pass over the ``train`` months in shuffled order at rate ``lr``; its losses.
@@ -300,7 +230,7 @@ def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
             r = r * kept / (1 - settings.stock_drop)
             seen = [*data[:k], (x, r), *data[k + 1 :]]
         value = (loss(model, x, r) if pricing is None
-                 else _priced_loss(model, seen, pricing, settings, int(k)))  # fmt: skip
+                 else priced.loss(model, seen, pricing, settings, int(k)))  # fmt: skip
         if not torch.isfinite(value):
             continue
         value.backward()
@@ -313,33 +243,35 @@ def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
     return losses
 
 
-def _held_loss(model: Optimizer, data: list[Pair], pricing: Pricing | None, settings: Settings,
-               months: list[int], keep: list | None = None) -> float:  # fmt: skip
+def _held_loss(model: Optimizer, data: list[Pair], pricing: priced.Pricing | None,
+               settings: Settings, months: list[int],
+               keep: list | None = None) -> float:  # fmt: skip
     """Mean loss over ``months`` (net of costs with ``pricing``; their returns into ``keep``)."""
     with torch.no_grad():
         r = []
         for k in months:
-            w = model(holdings.inputs(data, pricing, pricing.book if pricing else None, k))
+            w = model(holdings.inputs(data, pricing, pricing.held() if pricing else None, k))
             r.append(w @ data[k][1] if pricing is None
-                     else _net(model, data, pricing, settings, k, w))  # fmt: skip
+                     else priced.net(model, data, pricing, settings, k, w))  # fmt: skip
         r = torch.stack(r)
     if keep is not None:
         keep[:] = r.tolist()
     return float(((1 - r) ** 2).mean())
 
 
-def _roll(model: Optimizer, data: list[Pair], pricing: Pricing | None, months: list[int]) -> None:
+def _roll(model: Optimizer, data: list[Pair], pricing: priced.Pricing | None,
+          months: list[int]) -> None:  # fmt: skip
     """With a book, ``months``' entries become the model's weights, in month order."""
     if pricing is None or pricing.book is None:
         return
     with torch.no_grad():
         for k in sorted(months):
-            pricing.book[k] = model(holdings.inputs(data, pricing, pricing.book, k))
+            pricing.book[k] = model(holdings.inputs(data, pricing, pricing.held(), k))
 
 
 def _fit(  # noqa: PLR0913 - one month's training pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
-    epochs: int, settings: Settings, rng: np.random.Generator, pricing: Pricing | None, *,
+    epochs: int, settings: Settings, rng: np.random.Generator, pricing: priced.Pricing | None, *,
     start_lr: float, span: range, clipper: Clipper, average: Average | None, test: int,
     hold_rng: np.random.Generator, raw: list[Pair],
 ) -> tuple[list, int, float, list[float], list[torch.Tensor], list[float], dict]:  # fmt: skip
@@ -440,7 +372,7 @@ def walk(
     average = Average(model, settings.average) if settings.average else None
     data, raw = _data(months, settings, device)
     known = [bool(np.isfinite(m.r).all()) for m in months]
-    pricing = _pricing(months, settings, device, stock_costs)
+    pricing = priced.pricing(months, settings, device, stock_costs)
     if settings.measure_optimism and pricing is None:
         raise ValueError("measure_optimism needs per-stock costs")
     cuts = optimism.edges(pricing.stock) if settings.measure_optimism else None

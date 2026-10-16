@@ -101,7 +101,7 @@ def fill(weights, source: list, pricing, span: range) -> None:
     with torch.no_grad():
         for k in span:
             if k not in pricing.book:
-                pricing.book[k] = weights(inputs(source, pricing, pricing.book, k))
+                pricing.book[k] = weights(inputs(source, pricing, pricing.held(), k))
 
 
 def pick(weights, data: list, pricing, last: torch.Tensor | None, t: int) -> np.ndarray:
@@ -113,8 +113,10 @@ def pick(weights, data: list, pricing, last: torch.Tensor | None, t: int) -> np.
 
 
 def remember(pricing, w: np.ndarray, data: list, t: int) -> torch.Tensor | None:
-    """Store the test month's real holdings in the book; returns them (``None`` without one)."""
+    """Store the test month's real holdings in the book (and the traded record, if kept)."""
     if pricing is None or pricing.book is None:
         return None
     pricing.book[t] = torch.from_numpy(w).to(data[t][0])
+    if pricing.traded is not None:
+        pricing.traded[t] = pricing.book[t]
     return pricing.book[t]
