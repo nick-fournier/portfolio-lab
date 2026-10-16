@@ -128,6 +128,8 @@ def test_clipped_runs_score_held_out_months_on_their_real_returns():
     assert _held_loss(model, clipped, None, s, held) != pytest.approx(
         _held_loss(model, real, None, s, held), rel=1e-3
     )
+    r = np.array(log["held_returns"][0].to_list())  # the held-out months' returns are logged
+    assert len(r) == 6 and float(((1 - r) ** 2).mean()) == pytest.approx(log["held_curve"][0][-1])
 
 
 def test_guard_rolls_back_a_pass_that_breaks_the_model_and_halves_later_rates():

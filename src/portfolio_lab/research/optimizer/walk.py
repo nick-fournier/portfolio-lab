@@ -18,12 +18,9 @@ weights (filled in month order the first time a month enters the window, refresh
 step, kept from month to month); for the test month, from the walk's real holdings of the
 month before after its returns. ``borrow_input`` adds the stock's borrow fee as well.
 
-With a ``ridge`` the training loss also charges each position its expected overestimate: the
-model's in-sample return per unit of weight runs about twice its out-of-sample one, the same
-multiple for small and large bets (research.optimizer.optimism, run43), so a position's
-overestimate grows as w^2. The net return in the loss is cut by sum c_i w_i^2, with c_i =
-``ridge`` times ``ridge_tilt`` for the stock's spread bucket (optimism's five buckets; more
-for illiquid names, whose overestimate is larger). Held-out scoring keeps the real return.
+With a ``ridge`` (run43's overestimate grows as w^2; failed its check, to be removed) the net
+return in the loss is cut by sum c_i w_i^2, c_i = ``ridge`` times ``ridge_tilt`` for the
+stock's spread bucket (research.optimizer.optimism). Held-out scoring keeps the real return.
 
 With ``stop`` each month trains with early stopping (research.optimizer.stopping): a random
 block of ``holdout`` consecutive training months is held out, passes run one at a time (the
@@ -316,9 +313,9 @@ def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
     return losses
 
 
-def _held_loss(model: Optimizer, data: list[Pair], pricing: Pricing | None,
-               settings: Settings, months: list[int]) -> float:  # fmt: skip
-    """Mean loss over ``months`` (net of costs with ``pricing``); leaves the book alone."""
+def _held_loss(model: Optimizer, data: list[Pair], pricing: Pricing | None, settings: Settings,
+               months: list[int], keep: list | None = None) -> float:  # fmt: skip
+    """Mean loss over ``months`` (net of costs with ``pricing``; their returns into ``keep``)."""
     with torch.no_grad():
         r = []
         for k in months:
@@ -326,6 +323,8 @@ def _held_loss(model: Optimizer, data: list[Pair], pricing: Pricing | None,
             r.append(w @ data[k][1] if pricing is None
                      else _net(model, data, pricing, settings, k, w))  # fmt: skip
         r = torch.stack(r)
+    if keep is not None:
+        keep[:] = r.tolist()
     return float(((1 - r) ** 2).mean())
 
 
@@ -343,30 +342,31 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     epochs: int, settings: Settings, rng: np.random.Generator, pricing: Pricing | None, *,
     start_lr: float, span: range, clipper: Clipper, average: Average | None, test: int,
     hold_rng: np.random.Generator, raw: list[Pair],
-) -> tuple[list, int, float, list[float], list[torch.Tensor], list[float], int]:  # fmt: skip
-    """One month's training: losses, passes, held-out loss, its curve, gradient sizes.
+) -> tuple[list, int, float, list[float], list[torch.Tensor], list[float], dict]:  # fmt: skip
+    """One month's training.
 
-    Returns the kept pass's losses, the passes kept, the best smoothed held-out loss, its
-    per-pass curve, every step's (gradient size before clipping, limit) over all the passes
-    run, the test month ``test``'s loss after each pass (``test`` < 0: none) and the passes
-    rolled back (:class:`.stopping.Guard`).
-    ``epochs`` passes (with ``settings.stop``: at most), the rate following
-    ``settings.schedule`` from ``start_lr`` over them. With a book (``holdings_input``) the
-    ``span`` months not in it get the model's weights first, in month order. The held-out
-    months are drawn from ``hold_rng``; they and the test month are scored on their real
-    returns (``raw``), training alone sees ``data``'s clipped ones.
+    Returns the kept pass's losses, passes kept, best smoothed held-out loss, its per-pass
+    curve, every step's (gradient size before clipping, limit), the test month ``test``'s loss
+    after each pass (``test`` < 0: none) and for the log the passes rolled back
+    (:class:`.stopping.Guard`) and the held-out months' returns at the last score (month order;
+    ``watch``: the kept model's). ``epochs`` passes (``settings.stop``: at most), the rate
+    following ``settings.schedule`` from ``start_lr``. With a book (``holdings_input``) the
+    ``span`` months not in it get the model's weights first, in month order. The held-out months
+    are drawn from ``hold_rng``; they and the test month are scored on their real returns
+    (``raw``), training alone sees ``data``'s clipped ones.
     """
     if pricing is not None:
         holdings.fill(model, data, pricing, span)
     fit, block = (stopping.held_months(train, settings.holdout, hold_rng, settings.scatter)
                   if settings.stop or settings.watch else (train, []))  # fmt: skip
     tests: list[float] = []
+    held: list[float] = []
 
     def score() -> float:
         _roll(model, raw, pricing, block)
         if test >= 0:
             tests.append(_held_loss(model, raw, pricing, settings, [test]))
-        return _held_loss(model, raw, pricing, settings, block)
+        return _held_loss(model, raw, pricing, settings, block, held)
 
     norms: list[torch.Tensor] = []
     guard = stopping.Guard(model, adam, average)
@@ -382,7 +382,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     return (*stopping.fit_stopped(model, adam, lambda p: guard(one_pass, p), score,
                                   bool(block), epochs, settings.patience, settings.smooth,
                                   average, keep_last=settings.watch),
-            norms, tests, guard.rollbacks)  # fmt: skip
+            norms, tests, {"rollbacks": guard.rollbacks, "held_returns": held})  # fmt: skip
 
 
 def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, torch.optim.Adam]:
@@ -463,7 +463,7 @@ def walk(
         epochs = settings.warm_epochs if warm else settings.first_epochs
         start_lr = settings.warm_lr if warm and settings.warm_lr else settings.lr
         watched = t if known[t] and (settings.stop or settings.watch) else -1
-        losses, passes, held_loss, curve, norms, tests, rollbacks = _fit(
+        losses, passes, held_loss, curve, norms, tests, diag = _fit(
             model, adam, data, train, epochs, settings, rng, pricing, start_lr=start_lr,
             span=range(lo, t), clipper=clipper, average=average, test=watched,
             hold_rng=hold_rng, raw=raw,
@@ -491,10 +491,10 @@ def walk(
                     "largest": float(np.abs(w).max()) / gross if gross else None,
                     "loss": float(torch.stack(losses).mean()) if losses else math.nan,
                     "passes": passes, "held_loss": held_loss, "held_curve": curve,
-                    "test_curve": tests, "rollbacks": rollbacks,
+                    "test_curve": tests,
                     "grad_median": float(grad.median()) if norms else math.nan,
                     "grad_max": float(grad.max()) if norms else math.nan,
                     "clipped": float((grad > limit).float().mean()) if norms else 0.0,
                     "limit": float(limit[-1]) if norms else math.nan,
-                    "seconds": time.perf_counter() - clock} | extra)  # fmt: skip
+                    "seconds": time.perf_counter() - clock} | diag | extra)  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model
