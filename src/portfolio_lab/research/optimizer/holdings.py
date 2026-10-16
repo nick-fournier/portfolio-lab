@@ -32,17 +32,22 @@ def holding(before: torch.Tensor | None, r: torch.Tensor, link, n: int) -> torch
 
 
 def with_holdings(tensors: list, links: list, stock: list, book: dict, k: int,
-                  borrow: bool = False) -> torch.Tensor:  # fmt: skip
+                  borrow: bool = False, raw: bool = False) -> torch.Tensor:  # fmt: skip
     """Month k's traits plus holding, log spread and (``borrow``) log borrow fee columns.
 
-    The holding is :func:`holding`; the logs are clipped to [-3, 3].
+    The holding is :func:`holding`; the logs are clipped to [-3, 3]. ``raw``: a last column
+    with the book held going in, unscaled (model units), for the model's trade speed.
     """
     x = tensors[k][0]
-    h = holding(book.get(k - 1), tensors[k - 1][1], links[k], len(x)) if k > 0 else \
-        x.new_zeros(len(x))  # fmt: skip
+    before = book.get(k - 1) if k > 0 else None
+    h = holding(before, tensors[k - 1][1], links[k], len(x)) if k > 0 else x.new_zeros(len(x))
     cols = [x, h[:, None], torch.log(stock[k][0] / SPREAD_REF).clamp(-3, 3)[:, None]]
     if borrow:
         cols.append(torch.log(stock[k][1] / FEE_REF).clamp(-3, 3)[:, None])
+    if raw:
+        held = x.new_zeros(len(x)) if before is None else \
+            cost_model.carry(before * (1 + tensors[k - 1][1]), links[k])  # fmt: skip
+        cols.append(held[:, None])
     return torch.cat(cols, dim=1)
 
 
@@ -91,7 +96,8 @@ def inputs(source: list, pricing, book: dict | None, k: int) -> torch.Tensor:
     """Month k's model inputs: its traits, plus holding and spread columns with a ``book``."""
     if pricing is None or book is None:
         return source[k][0]
-    return with_holdings(source, pricing.links, pricing.stock, book, k, pricing.borrow)
+    return with_holdings(source, pricing.links, pricing.stock, book, k, pricing.borrow,
+                         getattr(pricing, "speed", False))  # fmt: skip
 
 
 def fill(weights, source: list, pricing, span: range) -> None:

@@ -130,6 +130,8 @@ class Settings:
         only: Train and trade only these test month ends (``None``: every month).
         real_book: Training months the walk actually traded are held as traded, not as the
             model's own weights (research.optimizer.priced; needs ``holdings_input``).
+        trade_speed: Trade part of the way from the book toward the model's target at a
+            learned speed per stock from its spread (research.optimizer.model; ditto).
         dropout: Dropout share in the model's blocks while training (``model`` docs).
         stock_drop: Share of the month's stocks each training step hides from the loss, drawn
             afresh (returns 0, the rest x 1 / (1 - share)); the model sees all; costs still paid.
@@ -172,6 +174,7 @@ class Settings:
     holdout_seed: int | None = None
     only: tuple[date, ...] | None = None
     real_book: bool = False
+    trade_speed: bool = False
     dropout: float = 0.0
     stock_drop: float = 0.0
 
@@ -322,7 +325,8 @@ def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, 
     torch.manual_seed(settings.seed)
     extra = 2 * settings.holdings_input + settings.borrow_input
     model = Optimizer(settings.model, width + extra, settings.blocks, settings.hidden,
-                      settings.fast_attention, settings.dropout)  # fmt: skip
+                      settings.fast_attention, settings.dropout,
+                      width + 1 if settings.trade_speed else None)  # spread column  # fmt: skip
     model.to(device)
     if settings.compile:
         model.compile(dynamic=True)
@@ -428,5 +432,6 @@ def walk(
                     "grad_max": float(grad.max()) if norms else math.nan,
                     "clipped": float((grad > limit).float().mean()) if norms else 0.0,
                     "limit": float(limit[-1]) if norms else math.nan,
-                    "seconds": time.perf_counter() - clock} | diag | extra)  # fmt: skip
+                    "seconds": time.perf_counter() - clock} | diag | extra
+                   | ({"speed": model.speed.tolist()} if settings.trade_speed else {}))  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), model

@@ -24,6 +24,12 @@ Dropout (2026-10-15, not in the paper): with ``dropout`` > 0 each block zeroes t
 its attention and feed-forward updates at random while training (``model.train()``), scaled up
 to keep their size; scoring and trading run the whole model (``model.eval()``).
 
+Trade speed (2026-10-16, not in the paper; Garleanu & Pedersen 2013): with ``speed_column`` the
+input carries one more column after the D the blocks see, the book held going in (h, model
+units), and the model trades part of the way from it toward the blocks' output (the target):
+w = h + tau (target - h), tau = sigmoid(a + b * s) per stock, s its log-spread input column,
+a and b learned. From an all-cash book tau is 1: the first purchase is made in full.
+
 Loss for one month (paper eq. 9 without the penalty): (1 - w . r)^2, w the weights and r next
 month's returns over the T-bill. Over many months, with the weights free in size, minimizing it
 gives the maximum-Sharpe portfolio.
@@ -94,13 +100,15 @@ class Optimizer(nn.Module):
         hidden: Feed-forward hidden width.
         fast_attention: bfloat16 fused attention (:class:`Block`).
         dropout: Dropout share in every block while training (:class:`Block`).
+        speed_column: With trade speed (module docs), the index of the log-spread column; the
+            input then has ``width`` + 1 columns, the last the book held going in.
 
     Built in ``eval`` mode: training switches dropout on with ``train()``.
     """
 
     def __init__(
         self, kind: str, width: int, blocks: int = 1, hidden: int = 256,
-        fast_attention: bool = False, dropout: float = 0.0,
+        fast_attention: bool = False, dropout: float = 0.0, speed_column: int | None = None,
     ):  # fmt: skip
         super().__init__()
         if kind not in MODELS:
@@ -110,13 +118,29 @@ class Optimizer(nn.Module):
             Block(width, hidden, kind == "transformer", fast_attention, dropout) for _ in range(n)
         )
         self.lam = _normal(width, sd=1 / width)
+        self.speed_column = speed_column
+        if speed_column is not None:  # tau starts at 1/2 for every stock
+            self.speed = nn.Parameter(torch.zeros(2))
         self.eval()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(candidates x width) -> a weight per candidate."""
+        held = None
+        if self.speed_column is not None:
+            x, held = x[:, :-1], x[:, -1]
+            spread = x[:, self.speed_column]
         for block in self.blocks:
             x = block(x)
-        return x @ self.lam
+        target = x @ self.lam
+        if held is None:
+            return target
+        tau = torch.sigmoid(self.speed[0] + self.speed[1] * spread)
+        tau = torch.where(held.abs().sum() > 0, tau, torch.ones_like(tau))  # all cash: buy in full
+        return held + tau * (target - held)
+
+    def trade_speed(self, log_spread: torch.Tensor) -> torch.Tensor:
+        """Tau for stocks with these log-spread inputs (trade speed only)."""
+        return torch.sigmoid(self.speed[0] + self.speed[1] * log_spread)
 
 
 def loss(model: Optimizer, x: torch.Tensor, r: torch.Tensor) -> torch.Tensor:

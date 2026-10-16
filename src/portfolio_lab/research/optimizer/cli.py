@@ -174,6 +174,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     real_book: Annotated[
         bool, typer.Option(help="Hold traded training months as traded (--holdings-input).")
     ] = False,
+    trade_speed: Annotated[
+        bool, typer.Option(help="Trade toward the target at a learned speed (--holdings-input).")
+    ] = False,
     stock_drop: Annotated[
         float, typer.Option(help="Share of each month's stocks hidden from each step's loss.")
     ] = 0.0,
@@ -246,6 +249,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 holdout_seed=None if holdout_seed < 0 else holdout_seed,
                 only=tuple(date.fromisoformat(d) for d in only.split(",")) if only else None,
                 dropout=dropout, stock_drop=stock_drop, real_book=real_book,
+                trade_speed=trade_speed,
             )  # fmt: skip
             futures.append(pool_.submit(_walk_one, table, run, settings, device, threads,
                                         precision, inputs, last))  # fmt: skip
