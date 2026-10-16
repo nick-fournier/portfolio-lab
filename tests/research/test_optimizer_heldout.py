@@ -163,7 +163,7 @@ def test_dropout_acts_only_while_training_and_the_model_starts_in_eval():
     assert not torch.equal(model(x), model(x))
 
 
-def test_stock_drop_changes_training_and_needs_the_gross_loss():
+def test_stock_drop_changes_training_with_or_without_costs():
     pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
 
@@ -179,5 +179,10 @@ def test_stock_drop_changes_training_and_needs_the_gross_loss():
     w1, log, _ = walk(months, Settings("linear", **base, stock_drop=0.25))
     assert not np.allclose(w0["weight"].to_numpy(), w1["weight"].to_numpy())
     assert log["loss"].is_finite().all()
-    with pytest.raises(ValueError, match="stock_drop"):
-        walk(months, Settings("linear", **base, stock_drop=0.25, costs="t.parquet"))
+    stock = [(np.full(8, 0.005, np.float32), np.full(8, 0.05, np.float32))] * 26
+    priced = dict(costs="t.parquet", holdings_input=True)
+    c0, _, _ = walk(months, Settings("linear", **base, **priced), stock_costs=stock)
+    dropped = Settings("linear", **base, **priced, stock_drop=0.25)
+    c1, log, _ = walk(months, dropped, stock_costs=stock)
+    assert not np.allclose(c0["weight"].to_numpy(), c1["weight"].to_numpy())
+    assert log["loss"].is_finite().all()

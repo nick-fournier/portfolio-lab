@@ -115,10 +115,8 @@ class Settings:
             fee, position size and volatility bucket each month (research.optimizer.optimism;
             needs ``costs``).
         vol_column: The inputs' column of the ranked volatility trait for those buckets.
-        holdings_input: Feed each stock's holding and spread to the model (module docs).
-        borrow_input: Also feed each stock's borrow fee (needs ``holdings_input``).
-        ridge: Charge per unit of w^2 in the training loss (module docs; 0: none; needs
-            ``costs``).
+        holdings_input / borrow_input: Feed each stock's holding and spread / also its borrow fee.
+        ridge: Charge per unit of w^2 in the training loss (module docs; 0: none; ``costs``).
         ridge_tilt: Multipliers of ``ridge`` by spread bucket, cheap to dear (``None``: 1).
         stop: Early stopping each month (module docs).
         patience: Passes without a better smoothed held-out loss before stopping.
@@ -132,7 +130,7 @@ class Settings:
         only: Train and trade only these test month ends (``None``: every month).
         dropout: Dropout share in the model's blocks while training (``model`` docs).
         stock_drop: Share of the month's stocks each training step hides from the loss, drawn
-            afresh (returns 0, the rest x 1 / (1 - share)); the model sees all. No ``costs``.
+            afresh (returns 0, the rest x 1 / (1 - share)); the model sees all; costs still paid.
     """
 
     model: str
@@ -296,11 +294,13 @@ def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
     for k in rng.permutation(train):
         adam.zero_grad()
         x, r = data[k]
+        seen = data  # with stock_drop: this step's month with the hidden stocks' returns at 0
         if settings.stock_drop:
             kept = torch.from_numpy(rng.random(len(r)) >= settings.stock_drop).to(r)
             r = r * kept / (1 - settings.stock_drop)
+            seen = [*data[:k], (x, r), *data[k + 1 :]]
         value = (loss(model, x, r) if pricing is None
-                 else _priced_loss(model, data, pricing, settings, int(k)))  # fmt: skip
+                 else _priced_loss(model, seen, pricing, settings, int(k)))  # fmt: skip
         if not torch.isfinite(value):
             continue
         value.backward()
@@ -433,8 +433,8 @@ def walk(
     hold_rng = (rng if settings.holdout_seed is None
                 else np.random.default_rng(settings.holdout_seed))  # fmt: skip
     clipper = Clipper(settings.clip)
-    if (settings.stop and settings.watch) or (settings.stock_drop and settings.costs):
-        raise ValueError("stop and watch are alternatives; stock_drop is gross loss only")
+    if settings.stop and settings.watch:
+        raise ValueError("stop and watch are alternatives")
     model, adam = _new_model(settings, months[0].x.shape[1], device)
     start_state = copy.deepcopy(model.state_dict()) if settings.cold else None
     average = Average(model, settings.average) if settings.average else None
