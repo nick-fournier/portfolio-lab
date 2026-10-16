@@ -30,6 +30,18 @@ def test_the_paper_universe_drops_nano_caps_below_the_1st_percentile_of_nyse_val
     assert months[0].symbols == ["S1", "S2", "S3", "S4", "S5"]
 
 
+def test_universe_floors_drop_cheap_thin_and_listed_stocks_before_ranking():
+    table = _table().with_columns(pl.Series("prc", [0.5, 3.0, 6.0, 9.0, 12.0, 15.0] * 2))
+    plain = data.months(table, ["market_value"])[0]
+    assert plain.symbols == ["S1", "S2", "S3", "S4", "S5"]
+    floors = {"min_price": 5.0, "min_adv": 3.0, "drop": frozenset({"S4"})}
+    cut = data.months(table, ["market_value"], **floors)[0]
+    assert cut.symbols == ["S3", "S5"]  # S1 under $5, S2 thin, S4 listed out
+    assert cut.x[:, 0].tolist() == pytest.approx([-0.25, 0.25])  # ranked among the two left
+    assert data.months(table.with_columns(pl.lit(None, pl.Float64).alias("adv")), ["market_value"],
+                       min_adv=1.0) == []  # a missing volume fails the floor  # fmt: skip
+
+
 def test_the_three_models_give_one_weight_per_stock_and_the_paper_loss():
     torch = pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.model import MODELS, Optimizer, loss  # noqa: PLC0415

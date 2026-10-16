@@ -39,21 +39,41 @@ def data_cmd(out: Annotated[Path, typer.Option(help="Parquet file to write.")]) 
                f"{len(data.inputs(table))} characteristics -> {out}")  # fmt: skip
 
 
-def _months(table: Path, inputs: str = "all") -> list:
+#: The universe floors a walk can ask for: (min price, min daily $ volume, no blank checks).
+Floors = tuple[float, float, bool]
+NO_FLOORS: Floors = (0.0, 0.0, False)
+#: Blank-check shells' SIC code in the security master.
+BLANK_CHECK = 6770
+
+
+def _blank_checks() -> frozenset[str]:
+    """Symbols the security master files as blank-check shells (SIC 6770) today."""
+    from portfolio_lab.core.paths import DataPaths  # noqa: PLC0415
+
+    ids = pl.read_parquet(DataPaths(get_settings().data_dir).ids / "securities.parquet")
+    return frozenset(ids.filter(pl.col("sic") == BLANK_CHECK)["sid"].cast(pl.String).to_list())
+
+
+def _months(table: Path, inputs: str = "all", floors: Floors = NO_FLOORS) -> list:
     """``data.months`` of a table, cached next to it (ranking every month takes a while)."""
     from portfolio_lab.research.optimizer import data  # noqa: PLC0415
 
-    cache = table.with_name(f"{table.stem}.months-paper-{inputs}.pkl")
+    tag = "" if floors == NO_FLOORS else f"-p{floors[0]:g}-v{floors[1]:g}{'-nb' * floors[2]}"
+    cache = table.with_name(f"{table.stem}.months-paper-{inputs}{tag}.pkl")
     if cache.exists() and cache.stat().st_mtime > table.stat().st_mtime:
         return pickle.loads(cache.read_bytes())
     frame = pl.read_parquet(table)
-    months = data.months(frame, data.inputs(frame, inputs))
+    drop = _blank_checks() if floors[2] else frozenset()
+    months = data.months(frame, data.inputs(frame, inputs), min_price=floors[0],
+                         min_adv=floors[1], drop=drop)  # fmt: skip
     cache.write_bytes(pickle.dumps(months))
     return months
 
 
-def _walk_one(table: Path, out: Path, settings, device: str, threads: int, precision: str,
-              inputs: str, end: date | None = None) -> str:  # fmt: skip
+def _walk_one(  # noqa: PLR0913, PLR0917 - one walk's pieces
+    table: Path, out: Path, settings, device: str, threads: int, precision: str,
+    inputs: str, end: date | None = None, floors: Floors = NO_FLOORS,
+) -> str:  # fmt: skip
     """One walk (test months up to ``end``, if any): save weights, log, model and settings."""
     import torch  # noqa: PLC0415
 
@@ -61,7 +81,7 @@ def _walk_one(table: Path, out: Path, settings, device: str, threads: int, preci
 
     torch.set_num_threads(threads)
     torch.set_float32_matmul_precision(precision)
-    months = [m for m in _months(table, inputs) if end is None or m.date <= end]
+    months = [m for m in _months(table, inputs, floors) if end is None or m.date <= end]
     if settings.measure_optimism and settings.vol_column is None:
         from portfolio_lab.research.optimizer import data  # noqa: PLC0415
 
@@ -81,6 +101,7 @@ def _walk_one(table: Path, out: Path, settings, device: str, threads: int, preci
     meta = asdict(replace(settings, start=settings.start.isoformat(), only=only)) | {
         "inputs": inputs,
         "end": end.isoformat() if end else None,
+        "floors": list(floors),
     }
     (out / "settings.json").write_text(json.dumps(meta, indent=2))
     graded = log.filter(pl.col("ret").is_not_null())
@@ -213,6 +234,13 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     precision: Annotated[
         str, typer.Option(help="float32 matrix products: highest, or high (TF32, faster).")
     ] = "highest",
+    min_price: Annotated[float, typer.Option(help="Universe floor: month-end price.")] = 0.0,
+    min_adv: Annotated[
+        float, typer.Option(help="Universe floor: trailing median daily dollar volume.")
+    ] = 0.0,
+    no_blank_checks: Annotated[
+        bool, typer.Option(help="Leave blank-check shells (SIC 6770) out of the universe.")
+    ] = False,
 ) -> None:
     """Walk a model forward, one run per seed, and save each seed's monthly portfolios.
 
@@ -228,7 +256,8 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
 
     picked = _seeds(seeds)
     last = date.fromisoformat(end) if end else None
-    _months(table, inputs)  # build the cache once first
+    floors = (min_price, min_adv, no_blank_checks)
+    _months(table, inputs, floors)  # build the cache once first
     runs = [out / f"seed-{s}" for s in picked]
     threads = max(1, (os.cpu_count() or 1) // min(jobs, len(picked)))
     with ProcessPoolExecutor(min(jobs, len(picked)), initializer=_die_with_parent,
@@ -252,7 +281,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 dropout=dropout, stock_drop=stock_drop, real_book=real_book, inherit=inherit,
             )  # fmt: skip
             futures.append(pool_.submit(_walk_one, table, run, settings, device, threads,
-                                        precision, inputs, last))  # fmt: skip
+                                        precision, inputs, last, floors))  # fmt: skip
         for f in futures:
             typer.echo(f.result())
     if len(runs) > 1:

@@ -15,6 +15,13 @@ candidates, their characteristics ranked across the candidates into [-0.5, 0.5] 
 the middle), and their next-month excess returns. Candidates, as in the paper: stocks
 missing at most a third of the characteristics and at or above the 1st percentile of NYSE
 market values that month.
+
+Floors (2026-10-16, the user's explicit test of a tradable universe, an exception to the
+unified-universe rule): ``min_price`` and ``min_adv`` (trailing median daily dollar volume)
+drop stocks below them, and ``drop`` drops the listed symbols (blank-check shells: SIC 6770 as
+the security master has it today, so a shell that later merged keeps its pre-merger months).
+They apply before ranking, so the characteristics are ranked within the smaller universe; the
+nano-cap cut stays on all NYSE stocks.
 """
 
 from dataclasses import dataclass
@@ -219,8 +226,9 @@ def _ranked(values: np.ndarray) -> np.ndarray:
 
 
 def months(
-    table: pl.DataFrame, columns: list[str] | None = None, max_missing: float = 1 / 3
-) -> list[Month]:
+    table: pl.DataFrame, columns: list[str] | None = None, max_missing: float = 1 / 3,
+    min_price: float = 0.0, min_adv: float = 0.0, drop: frozenset[str] = frozenset(),
+) -> list[Month]:  # fmt: skip
     """Per-month candidates and their ranked characteristics (module docs).
 
     Args:
@@ -228,6 +236,10 @@ def months(
         columns: Characteristics to use (default: all of :func:`inputs`).
         max_missing: Stocks missing more than this share of the characteristics are left out
             (the paper's filter, sec. 4.1).
+        min_price: Floor on the month-end price (module docs; 0: none; a missing price
+            fails a floor above 0).
+        min_adv: Floor on the trailing median daily dollar volume (ditto).
+        drop: Symbols left out every month (module docs).
 
     Returns:
         One :class:`Month` per month end, ascending.
@@ -242,8 +254,15 @@ def months(
         .quantile(NANO_PERCENTILE, interpolation="linear")
         .over("date")
     )
+    floors = pl.lit(True)
+    if min_price:
+        floors &= pl.col("prc").fill_null(0) >= min_price
+    if min_adv:
+        floors &= pl.col("adv").fill_null(0) >= min_adv
+    if drop:
+        floors &= ~pl.col("symbol").is_in(list(drop))
     usable = table.filter(
-        (missing <= max_missing * len(columns)) & (pl.col("market_value") >= nano)
+        (missing <= max_missing * len(columns)) & (pl.col("market_value") >= nano) & floors
     )
     out = []
     for (day,), g in usable.group_by("date", maintain_order=True):
