@@ -52,6 +52,10 @@ walk. The month before a listed one is then not a traded month, so the test mont
 inputs come from the model's own weights for it.
 
 ``average``: the walk holds a moving average of the model's parameters, not its latest step.
+
+``inherit`` (2026-10-16; needs ``holdings_input``): training steps trade from books the model
+did not build (research.optimizer.priced); the noise has its own random stream (the seed, and
+with ``cold`` the month), so month order, held-out draws and stock drops are as without it.
 """
 
 import contextlib
@@ -133,6 +137,9 @@ class Settings:
         dropout: Dropout share in the model's blocks while training (``model`` docs).
         stock_drop: Share of the month's stocks each training step hides from the loss, drawn
             afresh (returns 0, the rest x 1 / (1 - share)); the model sees all; costs still paid.
+        inherit: Average L1 size, as a share of the book, of the displacement each training
+            step's book going in gets (module docs; 0: off). Each step draws its size from 0
+            to twice this.
     """
 
     model: str
@@ -174,6 +181,7 @@ class Settings:
     real_book: bool = False
     dropout: float = 0.0
     stock_drop: float = 0.0
+    inherit: float = 0.0
 
 
 Pair = tuple[torch.Tensor, torch.Tensor]
@@ -211,11 +219,12 @@ def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
     settings: Settings, rng: np.random.Generator, pricing: priced.Pricing | None, lr: float,
     clipper: Clipper, norms: list[torch.Tensor], average: Average | None,
+    noise: np.random.Generator | None = None,
 ) -> list[torch.Tensor]:  # fmt: skip
     """One pass over the ``train`` months in shuffled order at rate ``lr``; its losses.
 
     Each step's (gradient size before clipping, limit) goes on ``norms``. A step whose loss
-    is not finite is skipped rather than poison Adam.
+    is not finite is skipped rather than poison Adam. ``noise``: the inherited books' stream.
     """
     for group in adam.param_groups:
         group["lr"] = lr
@@ -230,7 +239,7 @@ def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
             r = r * kept / (1 - settings.stock_drop)
             seen = [*data[:k], (x, r), *data[k + 1 :]]
         value = (loss(model, x, r) if pricing is None
-                 else priced.loss(model, seen, pricing, settings, int(k)))  # fmt: skip
+                 else priced.loss(model, seen, pricing, settings, int(k), noise))  # fmt: skip
         if not torch.isfinite(value):
             continue
         value.backward()
@@ -273,7 +282,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
     epochs: int, settings: Settings, rng: np.random.Generator, pricing: priced.Pricing | None, *,
     start_lr: float, span: range, clipper: Clipper, average: Average | None, test: int,
-    hold_rng: np.random.Generator, raw: list[Pair],
+    hold_rng: np.random.Generator, raw: list[Pair], noise: np.random.Generator | None = None,
 ) -> tuple[list, int, float, list[float], list[torch.Tensor], list[float], dict]:  # fmt: skip
     """One month's training.
 
@@ -285,7 +294,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     following ``settings.schedule`` from ``start_lr``. With a book (``holdings_input``) the
     ``span`` months not in it get the model's weights first, in month order. The held-out months
     are drawn from ``hold_rng``; they and the test month are scored on their real returns
-    (``raw``), training alone sees ``data``'s clipped ones.
+    (``raw``), training alone sees ``data``'s clipped ones. ``noise``: the inherited books' stream.
     """
     if pricing is not None:
         holdings.fill(model, data, pricing, span)
@@ -306,7 +315,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     def one_pass(p: int) -> list:
         lr = rate(settings.schedule, start_lr, settings.lr_min, p, epochs) * guard.scale
         losses = _pass(model, adam, data, fit, settings, rng, pricing, lr, clipper, norms,
-                       average)  # fmt: skip
+                       average, noise)  # fmt: skip
         if not block and settings.watch and test >= 0:  # nothing held out: still log the test
             tests.append(_held_loss(model, raw, pricing, settings, [test]))
         return losses
@@ -329,12 +338,27 @@ def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, 
     return model, torch.optim.Adam(model.parameters(), lr=settings.lr)
 
 
-def _streams(settings: Settings, day: date) -> tuple[np.random.Generator, np.random.Generator]:
-    """A cold month's own (month order, held-out draw) random streams: seed and month."""
+def _streams(settings: Settings, day: date) -> tuple[np.random.Generator, ...]:
+    """A cold month's own (month order, held-out draw, inherited books) random streams."""
     rng = np.random.default_rng([settings.seed, day.toordinal()])
+    noise = np.random.default_rng([settings.seed, day.toordinal(), 1])
     if settings.holdout_seed is None:
-        return rng, rng
-    return rng, np.random.default_rng([settings.holdout_seed, day.toordinal()])
+        return rng, rng, noise
+    return rng, np.random.default_rng([settings.holdout_seed, day.toordinal()]), noise
+
+
+def _walk_streams(settings: Settings) -> tuple[np.random.Generator, ...]:
+    """The walk's (month order, held-out draw, inherited books) random streams: the seed's."""
+    rng = np.random.default_rng(settings.seed)
+    hold = rng if settings.holdout_seed is None else np.random.default_rng(settings.holdout_seed)
+    return rng, hold, np.random.default_rng([settings.seed, 1])
+
+
+def _traded(model: Optimizer, average: Average | None) -> Optimizer:
+    """The model as it traded: with an ``average``, the averaged parameters put in for good."""
+    if average is not None:
+        average.install()
+    return model
 
 
 def walk(
@@ -359,11 +383,10 @@ def walk(
         weight's share of the sum of absolute weights, mean training loss over the last pass,
         passes kept, best smoothed held-out loss and its per-pass curve with ``stop``, the
         median and largest gradient size over the month's steps before clipping, the share
-        of steps clipped and the last step's limit, seconds); and the final model.
+        of steps clipped and the last step's limit, seconds); and the final model (with
+        ``average``, its averaged parameters: the model that traded the last month).
     """
-    rng = np.random.default_rng(settings.seed)
-    hold_rng = (rng if settings.holdout_seed is None
-                else np.random.default_rng(settings.holdout_seed))  # fmt: skip
+    rng, hold_rng, noise = _walk_streams(settings)
     clipper = Clipper(settings.clip)
     if settings.stop and settings.watch:
         raise ValueError("stop and watch are alternatives")
@@ -389,7 +412,7 @@ def walk(
             adam = torch.optim.Adam(model.parameters(), lr=settings.lr)
             average = Average(model, settings.average) if settings.average else None
         if settings.cold:  # the month's own random streams; its model fills the book
-            rng, hold_rng = _streams(settings, month.date)
+            rng, hold_rng, noise = _streams(settings, month.date)
             _ = pricing is not None and pricing.book is not None and pricing.book.clear()
         warm = trained and not settings.cold
         epochs = settings.warm_epochs if warm else settings.first_epochs
@@ -398,7 +421,7 @@ def walk(
         losses, passes, held_loss, curve, norms, tests, diag = _fit(
             model, adam, data, train, epochs, settings, rng, pricing, start_lr=start_lr,
             span=range(lo, t), clipper=clipper, average=average, test=watched,
-            hold_rng=hold_rng, raw=raw,
+            hold_rng=hold_rng, raw=raw, noise=noise,
         )  # fmt: skip
         grad, limit = torch.stack(norms).T if norms else (torch.zeros(0), torch.zeros(0))
         if not trained:
@@ -429,4 +452,4 @@ def walk(
                     "clipped": float((grad > limit).float().mean()) if norms else 0.0,
                     "limit": float(limit[-1]) if norms else math.nan,
                     "seconds": time.perf_counter() - clock} | diag | extra)  # fmt: skip
-    return pl.concat(weights), pl.DataFrame(log), model
+    return pl.concat(weights), pl.DataFrame(log), _traded(model, average)

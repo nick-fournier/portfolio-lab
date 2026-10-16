@@ -52,6 +52,12 @@ class Average:
             s.copy_(saved)
         self.steps = state[1]
 
+    def install(self) -> None:
+        """Put the averaged parameters in place for good (training is over)."""
+        with torch.no_grad():
+            for p, a in zip(self.params, self.values(), strict=True):
+                p.copy_(a)
+
     @contextmanager
     def swapped(self):
         """Run the model with the averaged parameters in place, then put its own back."""

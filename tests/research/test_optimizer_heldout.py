@@ -120,7 +120,7 @@ def test_clipped_runs_score_held_out_months_on_their_real_returns():
                  watch=True, scatter=True, winsor=0.2, only=(day,))  # fmt: skip
     _, log, model = walk(months, s)
     clipped, real = _data(months, s, "cpu")
-    _, hold_rng = _streams(s, day)
+    _, hold_rng, _ = _streams(s, day)
     _, held = stopping.held_months(list(range(5, 25)), 6, hold_rng, scatter=True)
     assert log["held_curve"][0].to_list() == pytest.approx(
         [_held_loss(model, real, None, s, held)], rel=1e-5

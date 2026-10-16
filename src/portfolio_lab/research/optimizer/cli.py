@@ -177,6 +177,10 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     stock_drop: Annotated[
         float, typer.Option(help="Share of each month's stocks hidden from each step's loss.")
     ] = 0.0,
+    inherit: Annotated[
+        float,
+        typer.Option(help="Train from displaced books of this mean L1 share (--holdings-input)."),
+    ] = 0.0,
     holdings_input: Annotated[
         bool, typer.Option(help="Feed each stock's holding and spread to the model (--costs).")
     ] = False,
@@ -245,7 +249,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 cold=cold, watch=watch, scatter=scatter,
                 holdout_seed=None if holdout_seed < 0 else holdout_seed,
                 only=tuple(date.fromisoformat(d) for d in only.split(",")) if only else None,
-                dropout=dropout, stock_drop=stock_drop, real_book=real_book,
+                dropout=dropout, stock_drop=stock_drop, real_book=real_book, inherit=inherit,
             )  # fmt: skip
             futures.append(pool_.submit(_walk_one, table, run, settings, device, threads,
                                         precision, inputs, last))  # fmt: skip
