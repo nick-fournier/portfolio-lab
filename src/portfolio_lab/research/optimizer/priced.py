@@ -30,7 +30,6 @@ class Pricing:
         ridge: Each month's per-stock charge per unit of w^2 (``ridge``), else ``None``.
         traded: With ``real_book``, the weights the walk actually traded, by month (else
             ``None``); never cleared.
-        speed: Append the unscaled book held going in, for the model's trade speed.
     """
 
     links: list[costs.Link | None]
@@ -39,7 +38,6 @@ class Pricing:
     borrow: bool = False
     ridge: list[torch.Tensor] | None = None
     traded: dict[int, torch.Tensor] | None = field(default=None)
-    speed: bool = False
 
     def held(self) -> "Held | None":
         """The book a month's holdings come from: traded months as traded, else the table."""
@@ -67,8 +65,8 @@ def pricing(months: list[Month], settings, device: str,
         raise ValueError("holdings_input needs per-stock costs")
     if settings.borrow_input and not settings.holdings_input:
         raise ValueError("borrow_input needs holdings_input")
-    if (settings.real_book or settings.trade_speed) and not settings.holdings_input:
-        raise ValueError("real_book and trade_speed need holdings_input")
+    if settings.real_book and not settings.holdings_input:
+        raise ValueError("real_book needs holdings_input")
     if not settings.costs:
         return None
     if stock_costs is None:
@@ -83,8 +81,7 @@ def pricing(months: list[Month], settings, device: str,
         cuts = optimism.edges(stock)[0]
         ridge = [settings.ridge * tilt[torch.bucketize(s, cuts)] for s, _ in stock]
     return Pricing(costs.links(months, device), stock, {} if settings.holdings_input else None,
-                   settings.borrow_input, ridge, {} if settings.real_book else None,
-                   settings.trade_speed)  # fmt: skip
+                   settings.borrow_input, ridge, {} if settings.real_book else None)  # fmt: skip
 
 
 def held_going_in(model, data: list[Pair], pricing: Pricing, k: int) -> torch.Tensor | None:
