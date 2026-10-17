@@ -122,3 +122,38 @@ def test_a_walk_with_every_charge_runs_and_dear_margin_shrinks_the_book():
     assert np.isfinite(dear["weight"].to_numpy()).all() and log["rollbacks"].sum() == 0
     size = lambda w: w.group_by("date").agg(pl.col("weight").abs().sum())["weight"].median()  # noqa: E731
     assert size(dear) < size(free)
+
+
+def test_margin_at_the_brokers_rate_and_idle_cash_at_its_cash_rate():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings  # noqa: PLC0415
+
+    m = realism.Market(torch.full((2,), 10.0), torch.full((2,), 0.02), torch.full((2,), 1e6), 0.004)
+    base = Settings("linear")
+    levered, partial = torch.tensor([1.5, -0.2]), torch.tensor([0.7, -0.2])
+    # 6.5% a year = 0.5417% a month, minus the 0.4% T-bill, on the $0.50 borrowed
+    got = realism.charges(levered, levered, m, replace(base, margin_rate=0.065), 1e5)
+    assert float(got) == pytest.approx((0.065 / 12 - 0.004) * 0.5)
+    assert float(realism.charges(partial, partial, m, replace(base, margin_rate=0.065), 1e5)) == 0
+    # the broker's rate wins over a fixed spread; a T-bill above the rate charges nothing extra
+    both = replace(base, margin_rate=0.065, margin_spread=0.5)
+    assert float(realism.charges(levered, levered, m, both, 1e5)) == pytest.approx(float(got))
+    high = realism.Market(m.price, m.vol, m.adv, 0.006)
+    rate = replace(base, margin_rate=0.065)
+    assert float(realism.charges(levered, levered, high, rate, 1e5)) == 0
+    # $0.30 of idle cash earns 3.56% a year instead of the 0.4% T-bill
+    cash = realism.charges(partial, partial, m, replace(base, cash_rate=0.0356), 1e5)
+    assert float(cash) == pytest.approx((0.004 - 0.0356 / 12) * 0.3)
+    assert realism.on(replace(base, cash_rate=0.0)) and not realism.on(base)
+
+
+def test_the_alpaca_profile_sets_every_realism_term():
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings  # noqa: PLC0415
+
+    s = realism.with_profile(Settings("linear"), "alpaca")
+    assert {k: getattr(s, k) for k in realism.ALPACA} == realism.ALPACA
+    with pytest.raises(ValueError, match="profile"):
+        realism.with_profile(Settings("linear"), "robinhood")

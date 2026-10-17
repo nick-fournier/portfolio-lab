@@ -17,6 +17,8 @@ import polars as pl
 import typer
 
 from portfolio_lab.core.config import get_settings
+from portfolio_lab.research.optimizer import universe
+from portfolio_lab.research.optimizer.universe import NO_FLOORS, Floors
 
 optimizer_app = typer.Typer(help="Class 3 optimizer track (research).")
 #: The volatility trait the optimism log buckets by (a year of idiosyncratic volatility).
@@ -39,21 +41,6 @@ def data_cmd(out: Annotated[Path, typer.Option(help="Parquet file to write.")]) 
                f"{len(data.inputs(table))} characteristics -> {out}")  # fmt: skip
 
 
-#: The universe floors a walk can ask for: (min price, min daily $ volume, no blank checks).
-Floors = tuple[float, float, bool]
-NO_FLOORS: Floors = (0.0, 0.0, False)
-#: Blank-check shells' SIC code in the security master.
-BLANK_CHECK = 6770
-
-
-def _blank_checks() -> frozenset[str]:
-    """Symbols the security master files as blank-check shells (SIC 6770) today."""
-    from portfolio_lab.core.paths import DataPaths  # noqa: PLC0415
-
-    ids = pl.read_parquet(DataPaths(get_settings().data_dir).ids / "securities.parquet")
-    return frozenset(ids.filter(pl.col("sic") == BLANK_CHECK)["sid"].cast(pl.String).to_list())
-
-
 def _months(table: Path, inputs: str = "all", floors: Floors = NO_FLOORS) -> list:
     """``data.months`` of a table, cached next to it (ranking every month takes a while)."""
     from portfolio_lab.research.optimizer import data  # noqa: PLC0415
@@ -63,7 +50,7 @@ def _months(table: Path, inputs: str = "all", floors: Floors = NO_FLOORS) -> lis
     if cache.exists() and cache.stat().st_mtime > table.stat().st_mtime:
         return pickle.loads(cache.read_bytes())
     frame = pl.read_parquet(table)
-    drop = _blank_checks() if floors[2] else frozenset()
+    drop = universe.blank_checks(get_settings().data_dir) if floors[2] else frozenset()
     months = data.months(frame, data.inputs(frame, inputs), min_price=floors[0],
                          min_adv=floors[1], drop=drop)  # fmt: skip
     cache.write_bytes(pickle.dumps(months))
@@ -257,6 +244,15 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     ] = 0.10,
     impact: Annotated[float, typer.Option(help="Loss: square-root impact constant K.")] = 0.0,
     equity: Annotated[float, typer.Option(help="Account size in dollars (impact).")] = 100_000.0,
+    margin_rate: Annotated[
+        float, typer.Option(help="Loss: the broker's margin rate a year (minus the T-bill).")
+    ] = 0.0,
+    cash_rate: Annotated[
+        float, typer.Option(help="Loss: idle cash's rate a year (-1: the T-bill).")
+    ] = -1.0,
+    profile: Annotated[
+        str, typer.Option(help="Account profile setting the realism terms: alpaca (or none).")
+    ] = "",
 ) -> None:
     """Walk a model forward, one run per seed, and save each seed's monthly portfolios.
 
@@ -296,8 +292,13 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 only=tuple(date.fromisoformat(d) for d in only.split(",")) if only else None,
                 dropout=dropout, stock_drop=stock_drop, real_book=real_book, inherit=inherit,
                 rebate=rebate, margin_spread=margin_spread, margin_cushion=margin_cushion,
-                cushion_rate=cushion_rate, impact=impact, equity=equity,
+                cushion_rate=cushion_rate, impact=impact, equity=equity, margin_rate=margin_rate,
+                cash_rate=None if cash_rate < 0 else cash_rate,
             )  # fmt: skip
+            if profile:
+                from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
+
+                settings = realism.with_profile(settings, profile)
             futures.append(pool_.submit(_walk_one, table, run, settings, device, threads,
                                         precision, inputs, last, floors))  # fmt: skip
         for f in futures:

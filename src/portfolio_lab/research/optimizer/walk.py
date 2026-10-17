@@ -140,12 +140,14 @@ class Settings:
         inherit: Average L1 size, as a share of the book, of the displacement each training
             step's book going in gets (module docs; 0: off). Each step draws its size from 0
             to twice this.
-        rebate / margin_spread / margin_cushion / cushion_rate / impact / equity: The
-            account's size-dependent costs in the loss (research.optimizer.realism; need
-            ``costs`` and the walk's ``market``): lost short rebate on/off; margin interest's
-            spread over the T-bill a year (0: off); maintenance requirement allowed before it
-            is charged, as a share of equity (0: off), and the charge a month per dollar above
-            it; impact constant K (0: off); account size in dollars (for impact).
+        rebate / margin_spread / margin_rate / cash_rate / margin_cushion / cushion_rate /
+            impact / equity: The account's size-dependent costs in the loss
+            (research.optimizer.realism; need ``costs`` and the walk's ``market``): lost short
+            rebate on/off; margin interest as a fixed spread over the T-bill a year (0: off) or
+            the broker's rate a year (0: off; wins over the spread); idle cash's rate a year
+            (``None``: the T-bill); maintenance requirement allowed before it is charged, as a
+            share of equity (0: off), and the charge a month per dollar above it; impact
+            constant K (0: off); account size in dollars (for impact).
     """
 
     model: str
@@ -190,6 +192,8 @@ class Settings:
     inherit: float = 0.0
     rebate: bool = False
     margin_spread: float = 0.0
+    margin_rate: float = 0.0
+    cash_rate: float | None = None
     margin_cushion: float = 0.0
     cushion_rate: float = 0.10
     impact: float = 0.0

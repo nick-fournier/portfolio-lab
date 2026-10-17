@@ -6,9 +6,12 @@ return in the loss (research.optimizer.priced), off unless its setting is on:
 
 * lost short rebate (``rebate``): a retail broker keeps the interest on short-sale proceeds,
   so each short dollar forgoes the month's T-bill: ``tbill * sum relu(-w)``.
-* margin interest (``margin_spread``, a year): longs beyond equity are borrowed at the broker's
-  rate; against the T-bill the loss already assumes, that costs the spread over it:
-  ``margin_spread / 12 * relu(sum relu(w) - 1)``.
+* margin interest: longs beyond equity are borrowed at the broker's rate; against the T-bill
+  the loss already assumes, that costs the excess over it. ``margin_rate`` (a year): the
+  broker's rate, ``relu(margin_rate / 12 - tbill) * relu(sum relu(w) - 1)``; else
+  ``margin_spread`` (a year): a fixed spread over the T-bill.
+* cash rate (``cash_rate``, a year; ``None``: the T-bill): equity not spent on longs earns the
+  broker's cash rate, so it forgoes ``relu(tbill - cash_rate / 12) * relu(1 - sum relu(w))``.
 * maintenance margin (``margin_cushion``): the collateral the broker requires, per dollar held,
   from Alpaca's price tables (longs: 100% under $2.50, 50% under $6, else 30%; shorts: under $5
   the larger of $2.50 a share and 100%, else the larger of $5 a share and 30%). Per-share
@@ -22,7 +25,7 @@ return in the loss (research.optimizer.priced), off unless its setting is on:
 and ``tbill``, the holding month's T-bill, monthly).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import polars as pl
@@ -32,6 +35,11 @@ from portfolio_lab.research.optimizer.data import Month
 
 #: Columns :func:`align` needs in the cost table.
 COLUMNS = ("prc", "rvol_21d", "adv", "tbill")
+#: The Alpaca account profile (2026-10-17; docs.alpaca.markets margin-and-short-selling, Alpaca
+#: high-yield cash): what the walk's ``--profile alpaca`` sets and the scorer charges. Easy-to-
+#: borrow shorts cost nothing (the cost table's borrow fee), hard-to-borrow ones are barred.
+ALPACA = {"rebate": True, "margin_rate": 0.065, "cash_rate": 0.0356, "margin_cushion": 0.6,
+          "cushion_rate": 0.10, "impact": 1.0, "equity": 100_000.0}  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -44,9 +52,18 @@ class Market:
     tbill: float
 
 
+def with_profile(settings, name: str):
+    """``settings`` with an account profile's realism terms (``alpaca``)."""
+    profiles = {"alpaca": ALPACA}
+    if name not in profiles:
+        raise ValueError(f"profile must be one of {sorted(profiles)}, not {name!r}")
+    return replace(settings, **profiles[name])
+
+
 def on(settings) -> bool:
     """Whether any realism term is switched on."""
-    return bool(settings.rebate or settings.margin_spread or settings.margin_cushion
+    return bool(settings.rebate or settings.margin_spread or settings.margin_rate
+                or settings.cash_rate is not None or settings.margin_cushion
                 or settings.impact)  # fmt: skip
 
 
@@ -91,8 +108,13 @@ def charges(w: torch.Tensor, held: torch.Tensor, market: Market, settings,
     total = w.new_zeros(())
     if settings.rebate:
         total = total + market.tbill * torch.relu(-w).sum()
-    if settings.margin_spread:
-        total = total + settings.margin_spread / 12 * torch.relu(torch.relu(w).sum() - 1)
+    longs = torch.relu(w).sum()
+    if settings.margin_rate:
+        total = total + max(settings.margin_rate / 12 - market.tbill, 0.0) * torch.relu(longs - 1)
+    elif settings.margin_spread:
+        total = total + settings.margin_spread / 12 * torch.relu(longs - 1)
+    if settings.cash_rate is not None:
+        total = total + max(market.tbill - settings.cash_rate / 12, 0.0) * torch.relu(1 - longs)
     if settings.margin_cushion:
         over = torch.relu(requirement(w, market.price) - settings.margin_cushion)
         total = total + settings.cushion_rate * over
