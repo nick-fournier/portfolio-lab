@@ -57,6 +57,11 @@ def test_each_charge_matches_its_formula_and_is_off_by_default():
     req = 0.9 * 1.0 + 0.6 * 0.5 + 0.3 * 0.5 + 0.2 * 0.3
     got = realism.charges(w, held, m, replace(base, margin_cushion=0.6, cushion_rate=0.1), 1e5)
     assert float(got) == pytest.approx(0.1 * (req - 0.6))
+    steep = replace(base, margin_cushion=0.6, cushion_rate=0.1, cushion_curve=1.0)
+    over = req - 0.6
+    assert float(realism.charges(w, held, m, steep, 1e5)) == pytest.approx(0.1 * over + over**2)
+    under = replace(steep, margin_cushion=5.0)  # nothing above the cushion: no charge
+    assert float(realism.charges(w, held, m, under, 1e5)) == 0.0
     t = np.array([0.4, 0.0, 0.0, 0.2])  # dollars traded per $1 of equity
     impact = (0.02 * np.sqrt(t * 1e5 / 1e6) * t).sum()
     assert float(realism.charges(w, held, m, replace(base, impact=1.0), 1e5)) == pytest.approx(

@@ -242,6 +242,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     cushion_rate: Annotated[
         float, typer.Option(help="Loss: charge a month per $ of requirement above the cushion.")
     ] = 0.10,
+    cushion_curve: Annotated[
+        float, typer.Option(help="Loss: charge a month per $^2 of requirement above the cushion.")
+    ] = 0.0,
     impact: Annotated[float, typer.Option(help="Loss: square-root impact constant K.")] = 0.0,
     equity: Annotated[float, typer.Option(help="Account size in dollars (impact).")] = 100_000.0,
     margin_rate: Annotated[
@@ -292,7 +295,8 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 only=tuple(date.fromisoformat(d) for d in only.split(",")) if only else None,
                 dropout=dropout, stock_drop=stock_drop, real_book=real_book, inherit=inherit,
                 rebate=rebate, margin_spread=margin_spread, margin_cushion=margin_cushion,
-                cushion_rate=cushion_rate, impact=impact, equity=equity, margin_rate=margin_rate,
+                cushion_rate=cushion_rate, cushion_curve=cushion_curve, impact=impact,
+                equity=equity, margin_rate=margin_rate,
                 cash_rate=None if cash_rate < 0 else cash_rate,
             )  # fmt: skip
             if profile:

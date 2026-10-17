@@ -146,7 +146,8 @@ class Settings:
             rebate on/off; margin interest as a fixed spread over the T-bill a year (0: off) or
             the broker's rate a year (0: off; wins over the spread); idle cash's rate a year
             (``None``: the T-bill); maintenance requirement allowed before it is charged, as a
-            share of equity (0: off), and the charge a month per dollar above it; impact
+            share of equity (0: off), the charge a month per dollar above it, and the charge
+            per dollar squared above it (``cushion_curve``, steepening); impact
             constant K (0: off); account size in dollars (for impact).
     """
 
@@ -196,6 +197,7 @@ class Settings:
     cash_rate: float | None = None
     margin_cushion: float = 0.0
     cushion_rate: float = 0.10
+    cushion_curve: float = 0.0
     impact: float = 0.0
     equity: float = 100_000.0
 

@@ -16,7 +16,9 @@ return in the loss (research.optimizer.priced), off unless its setting is on:
   from Alpaca's price tables (longs: 100% under $2.50, 50% under $6, else 30%; shorts: under $5
   the larger of $2.50 a share and 100%, else the larger of $5 a share and 30%). Per-share
   requirements are per dollar too (``2.5 / price``), so no account size is needed. Requirement
-  above ``margin_cushion`` x equity is charged ``cushion_rate`` a month per dollar.
+  above ``margin_cushion`` x equity, ``over``, is charged ``cushion_rate * over +
+  cushion_curve * over^2`` a month (2026-10-17: the square makes the charge steepen, so a small
+  breach stays cheap and a big confident one does not pay).
 * market impact (``impact``, the constant K): trading t dollars per $1 of equity in a stock
   with daily volatility s and daily dollar volume V costs ``K * s * sqrt(t * equity / V) * t``
   (square-root law), on the dollars traded from the book held going in.
@@ -117,7 +119,7 @@ def charges(w: torch.Tensor, held: torch.Tensor, market: Market, settings,
         total = total + max(market.tbill - settings.cash_rate / 12, 0.0) * torch.relu(1 - longs)
     if settings.margin_cushion:
         over = torch.relu(requirement(w, market.price) - settings.margin_cushion)
-        total = total + settings.cushion_rate * over
+        total = total + settings.cushion_rate * over + settings.cushion_curve * over * over
     if settings.impact:
         t = (w - held).abs()
         total = total + settings.impact * (market.vol * torch.sqrt(t * equity / market.adv + 1e-12)
