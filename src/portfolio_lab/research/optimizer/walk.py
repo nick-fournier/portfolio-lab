@@ -150,6 +150,8 @@ class Settings:
             per dollar squared above it (``cushion_curve``, steepening); impact
             constant K (0: off); account size in dollars (for impact).
         gross_limit: Gross (sum |w|) allowed before it is charged like the cushion (0: off).
+        margin_input: Feed each stock's log collateral rates, long and short (Alpaca's tables;
+            research.optimizer.holdings; needs ``holdings_input`` and the walk's ``market``).
         start_book: What a traded month starts from when nothing was traded the month before:
             ``guess`` (the model's own weights), ``cash`` or ``market`` (realism.start_book).
         trade_margin: Each training step also pays the traded month's margin and gross
@@ -209,6 +211,7 @@ class Settings:
     gross_limit: float = 0.0
     trade_margin: bool = False
     start_book: str = "guess"
+    margin_input: bool = False
     size_bound: bool = False
     gross_cap: float = 1.25
     margin_cap: float = 0.50
@@ -369,7 +372,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
 def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, torch.optim.Adam]:
     """A freshly initialized model and its Adam; the holdings inputs add their columns."""
     torch.manual_seed(settings.seed)
-    extra = 2 * settings.holdings_input + settings.borrow_input
+    extra = 2 * settings.holdings_input + settings.borrow_input + 2 * settings.margin_input
     model = Optimizer(settings.model, width + extra, settings.blocks, settings.hidden,
                       settings.fast_attention, settings.dropout, settings.size_bound)  # fmt: skip
     model.to(device)

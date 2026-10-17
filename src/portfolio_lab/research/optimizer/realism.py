@@ -103,7 +103,8 @@ def with_profile(settings, name: str):
 
 def on(settings) -> bool:
     """Whether any realism term is switched on."""
-    return bool(settings.size_bound or settings.rebate or settings.margin_spread
+    return bool(settings.size_bound or settings.margin_input or settings.rebate
+                or settings.margin_spread
                 or settings.margin_rate or settings.cash_rate is not None
                 or settings.margin_cushion or settings.gross_limit
                 or settings.impact)  # fmt: skip
@@ -141,11 +142,17 @@ def align(months: list[Month], table: pl.DataFrame, device: str = "cpu") -> list
     return out
 
 
-def requirement(w: torch.Tensor, price: torch.Tensor) -> torch.Tensor:
-    """Alpaca's maintenance requirement, per $1 of equity, of the book ``w`` (module docs)."""
+def collateral_rates(price: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Alpaca's maintenance requirement per $1 held long and per $1 short, by price (docs)."""
     long_rate = torch.where(price < 2.5, 1.0, torch.where(price < 6.0, 0.5, 0.3))
     short_rate = torch.where(price < 5.0, torch.clamp(2.5 / price, min=1.0),
                              torch.clamp(5.0 / price, min=0.3))  # fmt: skip
+    return long_rate, short_rate
+
+
+def requirement(w: torch.Tensor, price: torch.Tensor) -> torch.Tensor:
+    """Alpaca's maintenance requirement, per $1 of equity, of the book ``w`` (module docs)."""
+    long_rate, short_rate = collateral_rates(price)
     return (long_rate * torch.relu(w)).sum() + (short_rate * torch.relu(-w)).sum()
 
 

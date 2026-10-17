@@ -19,6 +19,8 @@ from portfolio_lab.research.optimizer import realism
 SPREAD_REF = 0.005
 #: Borrow fee a year the borrow input is measured from (log(fee / this)).
 FEE_REF = 0.03
+#: Collateral rate the margin inputs are measured from (log(rate / this); Alpaca's lowest).
+MARGIN_REF = 0.3
 
 
 def holding(before: torch.Tensor | None, r: torch.Tensor, link, n: int) -> torch.Tensor:
@@ -33,10 +35,12 @@ def holding(before: torch.Tensor | None, r: torch.Tensor, link, n: int) -> torch
 
 
 def with_holdings(tensors: list, links: list, stock: list, book: dict, k: int,
-                  borrow: bool = False) -> torch.Tensor:  # fmt: skip
+                  borrow: bool = False,
+                  price: torch.Tensor | None = None) -> torch.Tensor:  # fmt: skip
     """Month k's traits plus holding, log spread and (``borrow``) log borrow fee columns.
 
-    The holding is :func:`holding`; the logs are clipped to [-3, 3].
+    The holding is :func:`holding`; the logs are clipped to [-3, 3]. With a ``price`` (2026-10-17,
+    ``margin_input``) two more: the log of Alpaca's collateral rate per $1 long and per $1 short.
     """
     x = tensors[k][0]
     h = holding(book.get(k - 1), tensors[k - 1][1], links[k], len(x)) if k > 0 else \
@@ -44,6 +48,9 @@ def with_holdings(tensors: list, links: list, stock: list, book: dict, k: int,
     cols = [x, h[:, None], torch.log(stock[k][0] / SPREAD_REF).clamp(-3, 3)[:, None]]
     if borrow:
         cols.append(torch.log(stock[k][1] / FEE_REF).clamp(-3, 3)[:, None])
+    if price is not None:
+        cols += [torch.log(rate / MARGIN_REF).clamp(-3, 3)[:, None]
+                 for rate in realism.collateral_rates(price)]  # fmt: skip
     return torch.cat(cols, dim=1)
 
 
@@ -92,7 +99,8 @@ def inputs(source: list, pricing, book: dict | None, k: int) -> torch.Tensor:
     """Month k's model inputs: its traits, plus holding and spread columns with a ``book``."""
     if pricing is None or book is None:
         return source[k][0]
-    return with_holdings(source, pricing.links, pricing.stock, book, k, pricing.borrow)
+    price = pricing.market[k].price if getattr(pricing, "margin_input", False) else None
+    return with_holdings(source, pricing.links, pricing.stock, book, k, pricing.borrow, price)
 
 
 def fill(weights, source: list, pricing, span: range) -> None:

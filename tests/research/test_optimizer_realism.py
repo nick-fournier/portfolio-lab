@@ -304,3 +304,29 @@ def test_a_walk_can_start_from_cash_or_the_market_instead_of_its_own_guess():
     one = {k: w.filter(pl.col("date") == first)["weight"].to_numpy() for k, w in runs.items()}
     assert not np.allclose(one["guess"], one["cash"])
     assert not np.allclose(one["cash"], one["market"])
+
+
+def test_the_margin_inputs_are_each_stocks_log_collateral_rates():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import holdings, priced, realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    months = _months(30)
+    stock = [(np.full(4, 0.001, np.float32), np.full(4, 0.003, np.float32))] * 30
+    market = realism.align(months, _market_table(months))  # prices 1, 4, 10, 50
+    s = Settings("linear", costs="t.parquet", holdings_input=True, margin_input=True)
+    with pytest.raises(ValueError, match="margin_input"):
+        priced.pricing(months, replace(s, holdings_input=False), "cpu", stock, market)
+    p = priced.pricing(months, s, "cpu", stock, market)
+    pairs = [(torch.from_numpy(m.x), torch.from_numpy(m.r)) for m in months]
+    x = holdings.inputs(pairs, p, p.held(), 5)
+    assert x.shape[1] == 2 + 2 + 2  # traits, holding + spread, long + short rates
+    # longs: $1 -> 100%, $4 -> 50%, $10 / $50 -> 30%; shorts: 250%, 100%, 50%, 30%
+    longs, shorts = np.array([1.0, 0.5, 0.3, 0.3]), np.array([2.5, 1.0, 0.5, 0.3])
+    assert x[:, -2].tolist() == pytest.approx(np.log(longs / 0.3), rel=1e-5)
+    assert x[:, -1].tolist() == pytest.approx(np.log(shorts / 0.3), rel=1e-5)
+    base = dict(window=12, first_epochs=3, start=date(2001, 6, 1), costs="t.parquet",
+                holdings_input=True, cold=True)  # fmt: skip
+    w, log, _ = walk(months, Settings("linear", **base, margin_input=True), stock_costs=stock,
+                     market=market)  # fmt: skip
+    assert np.isfinite(w["weight"].to_numpy()).all() and log["rollbacks"].sum() == 0

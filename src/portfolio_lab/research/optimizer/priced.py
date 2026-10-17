@@ -42,6 +42,7 @@ class Pricing:
             ``None``); never cleared.
         market: Each month's :class:`.realism.Market` with any realism term on, else ``None``.
         bound: (gross cap, margin cap) with ``size_bound``, else ``None`` (realism ``book``).
+        margin_input: Feed each stock's collateral rates too (``margin_input``).
     """
 
     links: list[costs.Link | None]
@@ -52,6 +53,7 @@ class Pricing:
     traded: dict[int, torch.Tensor] | None = field(default=None)
     market: list | None = None
     bound: tuple[float, float] | None = None
+    margin_input: bool = False
 
     def held(self) -> "Held | None":
         """The book a month's holdings come from: traded months as traded, else the table."""
@@ -86,6 +88,8 @@ def pricing(months: list[Month], settings, device: str,
         raise ValueError("real_book needs holdings_input")
     if settings.inherit and not settings.holdings_input:
         raise ValueError("inherit needs holdings_input")
+    if settings.margin_input and not settings.holdings_input:
+        raise ValueError("margin_input needs holdings_input")
     if realism.on(settings) and not settings.costs:
         raise ValueError("the realism terms need costs")
     if realism.on(settings) and market is None:
@@ -111,7 +115,7 @@ def pricing(months: list[Month], settings, device: str,
     ]  # fmt: skip
     return Pricing(costs.links(months, device), stock, {} if settings.holdings_input else None,
                    settings.borrow_input, ridge, {} if settings.real_book else None,
-                   moved, bound)  # fmt: skip
+                   moved, bound, settings.margin_input)  # fmt: skip
 
 
 def displaced(book: torch.Tensor, size: float, rng: np.random.Generator) -> torch.Tensor:
