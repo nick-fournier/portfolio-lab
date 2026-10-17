@@ -69,7 +69,7 @@ import numpy as np
 import polars as pl
 import torch
 
-from portfolio_lab.research.optimizer import holdings, optimism, priced, realism, stopping
+from portfolio_lab.research.optimizer import holdings, optimism, priced, realism, stopping, walkbits
 from portfolio_lab.research.optimizer.averaging import Average
 from portfolio_lab.research.optimizer.clipping import Clipper
 from portfolio_lab.research.optimizer.data import Month
@@ -150,6 +150,8 @@ class Settings:
             per dollar squared above it (``cushion_curve``, steepening); impact
             constant K (0: off); account size in dollars (for impact).
         gross_limit: Gross (sum |w|) allowed before it is charged like the cushion (0: off).
+        start_book: What a traded month starts from when nothing was traded the month before:
+            ``guess`` (the model's own weights), ``cash`` or ``market`` (realism.start_book).
         trade_margin: Each training step also pays the traded month's margin and gross
             penalty (research.optimizer.realism; needs ``margin_cushion`` or ``gross_limit``).
         size_bound / gross_cap / margin_cap: The book is direction x a learned size bounded
@@ -206,6 +208,7 @@ class Settings:
     cushion_curve: float = 0.0
     gross_limit: float = 0.0
     trade_margin: bool = False
+    start_book: str = "guess"
     size_bound: bool = False
     gross_cap: float = 1.25
     margin_cap: float = 0.50
@@ -384,20 +387,6 @@ def _streams(settings: Settings, day: date) -> tuple[np.random.Generator, ...]:
     return rng, np.random.default_rng([settings.holdout_seed, day.toordinal()]), noise
 
 
-def _walk_streams(settings: Settings) -> tuple[np.random.Generator, ...]:
-    """The walk's (month order, held-out draw, inherited books) random streams: the seed's."""
-    rng = np.random.default_rng(settings.seed)
-    hold = rng if settings.holdout_seed is None else np.random.default_rng(settings.holdout_seed)
-    return rng, hold, np.random.default_rng([settings.seed, 1])
-
-
-def _traded(model: Optimizer, average: Average | None) -> Optimizer:
-    """The model as it traded: with an ``average``, the averaged parameters put in for good."""
-    if average is not None:
-        average.install()
-    return model
-
-
 def walk(
     months: list[Month],
     settings: Settings,
@@ -426,7 +415,7 @@ def walk(
         of steps clipped and the last step's limit, seconds); and the final model (with
         ``average``, its averaged parameters: the model that traded the last month).
     """
-    rng, hold_rng, noise = _walk_streams(settings)
+    rng, hold_rng, noise = walkbits.walk_streams(settings)
     clipper = Clipper(settings.clip)
     if settings.stop and settings.watch:
         raise ValueError("stop and watch are alternatives")
@@ -458,6 +447,7 @@ def walk(
         epochs = settings.warm_epochs if warm else settings.first_epochs
         start_lr = settings.warm_lr if warm and settings.warm_lr else settings.lr
         watched = t if known[t] and (settings.stop or settings.watch) else -1
+        last, traded = walkbits.starting(settings, pricing, months, data, t, last, traded)
         losses, passes, held_loss, curve, norms, tests, diag = _fit(
             model, adam, data, train, epochs, settings, rng, pricing, start_lr=start_lr,
             span=range(lo, t), clipper=clipper, average=average, test=watched,
@@ -493,4 +483,4 @@ def walk(
                     "clipped": float((grad > limit).float().mean()) if norms else 0.0,
                     "limit": float(limit[-1]) if norms else math.nan,
                     "seconds": time.perf_counter() - clock} | diag | extra)  # fmt: skip
-    return pl.concat(weights), pl.DataFrame(log), _traded(model, average)
+    return pl.concat(weights), pl.DataFrame(log), walkbits.traded(model, average)

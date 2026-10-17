@@ -274,3 +274,33 @@ def test_the_traded_months_penalty_is_its_books_and_trading_on_it_shrinks_the_bo
     size = lambda w: w.group_by("date").agg(pl.col("weight").abs().sum())["weight"]  # noqa: E731
     assert log["rollbacks"].sum() == 0 and np.isfinite(kept["weight"].to_numpy()).all()
     assert float(size(kept).max()) < float(size(free).max())
+
+
+def test_a_walk_can_start_from_cash_or_the_market_instead_of_its_own_guess():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    mv = torch.tensor([5.0, 1.0, 3.0, 0.0])
+    m = realism.Market(torch.ones(4), torch.ones(4), torch.ones(4), 0.0, mv)
+    assert realism.start_book("guess", m, 4) is None
+    assert realism.start_book("cash", None, 4).tolist() == [0.0, 0.0, 0.0, 0.0]
+    assert realism.start_book("market", m, 4).tolist() == pytest.approx([5 / 9, 1 / 9, 3 / 9, 0.0])
+    with pytest.raises(ValueError, match="market_value"):
+        realism.start_book("market", realism.Market(m.price, m.vol, m.adv, 0.0), 4)
+    with pytest.raises(ValueError, match="start_book"):
+        realism.start_book("index", m, 4)
+
+    months = _months(30)
+    stock = [(np.full(4, 0.001, np.float32), np.full(4, 0.003, np.float32))] * 30
+    table = _market_table(months).with_columns(pl.lit(1e9).alias("market_value"))
+    market = realism.align(months, table)
+    assert market[0].mv is not None
+    base = dict(window=12, first_epochs=3, start=date(2001, 6, 1), costs="t.parquet",
+                holdings_input=True, cold=True, impact=1.0)  # fmt: skip
+    runs = {k: walk(months, Settings("linear", **base, start_book=k), stock_costs=stock,
+                    market=market)[0] for k in ("guess", "cash", "market")}  # fmt: skip
+    first = min(runs["guess"]["date"])
+    one = {k: w.filter(pl.col("date") == first)["weight"].to_numpy() for k, w in runs.items()}
+    assert not np.allclose(one["guess"], one["cash"])
+    assert not np.allclose(one["cash"], one["market"])

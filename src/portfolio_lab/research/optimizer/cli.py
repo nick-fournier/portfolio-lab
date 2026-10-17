@@ -244,6 +244,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     gross_limit: Annotated[
         float, typer.Option(help="Loss: gross allowed before it is charged like the cushion.")
     ] = 0.0,
+    start_book: Annotated[
+        str, typer.Option(help="First traded month starts from: guess, cash or market.")
+    ] = "guess",
     trade_margin: Annotated[
         bool, typer.Option(help="Loss: also charge the traded month's margin and gross.")
     ] = False,
@@ -306,7 +309,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 rebate=rebate, margin_spread=margin_spread, margin_cushion=margin_cushion,
                 cushion_rate=cushion_rate, cushion_curve=cushion_curve, impact=impact,
                 equity=equity, margin_rate=margin_rate, size_bound=size_bound,
-                gross_limit=gross_limit, trade_margin=trade_margin,
+                gross_limit=gross_limit, trade_margin=trade_margin, start_book=start_book,
                 gross_cap=gross_cap, margin_cap=margin_cap,
                 cash_rate=None if cash_rate < 0 else cash_rate,
             )  # fmt: skip

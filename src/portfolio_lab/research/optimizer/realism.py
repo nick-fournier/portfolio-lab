@@ -65,6 +65,32 @@ class Market:
     vol: torch.Tensor
     adv: torch.Tensor
     tbill: float
+    mv: torch.Tensor | None = None  # market value, when the cost table has it (market start)
+
+
+#: Stocks in the market starting book (``start_book`` "market"): the largest by market value.
+MARKET_NAMES = 500
+
+
+def start_book(kind: str, market: Market | None, n: int) -> torch.Tensor | None:
+    """The book a walk's first traded month starts from when nothing was traded the month before.
+
+    ``guess``: ``None`` (the model's own weights for that month, as before); ``cash``: nothing
+    held; ``market``: $1 long per $1 of equity in the :data:`MARKET_NAMES` largest stocks by
+    market value, weighted by it (close to holding the S&P 500). ``n``: that month's stocks.
+    """
+    if kind == "guess":
+        return None
+    if kind == "cash":
+        return torch.zeros(n)
+    if kind != "market":
+        raise ValueError(f"start_book must be guess, cash or market, not {kind!r}")
+    if market is None or market.mv is None:
+        raise ValueError("a market start needs market_value in the cost table")
+    mv = market.mv.clone()
+    if len(mv) > MARKET_NAMES:
+        mv = torch.where(mv >= torch.topk(mv, MARKET_NAMES).values[-1], mv, 0.0)
+    return mv / mv.sum()
 
 
 def with_profile(settings, name: str):
@@ -106,7 +132,12 @@ def align(months: list[Month], table: pl.DataFrame, device: str = "cpu") -> list
             v = np.where(ok, v, np.median(v[ok]) if ok.any() else 1.0)
             cols.append(torch.tensor(v, dtype=torch.float32, device=device))
         tb = part["tbill"].drop_nulls() if part is not None else pl.Series([], dtype=pl.Float64)
-        out.append(Market(*cols, float(tb[0]) if len(tb) else 0.0))
+        mv = None
+        if part is not None and "market_value" in part.columns:
+            v = rows.join(part.select("symbol", "market_value"), on="symbol", how="left",
+                          maintain_order="left")["market_value"]  # fmt: skip
+            mv = torch.tensor(v.fill_null(0).to_numpy(), dtype=torch.float32, device=device)
+        out.append(Market(*cols, float(tb[0]) if len(tb) else 0.0, mv))
     return out
 
 

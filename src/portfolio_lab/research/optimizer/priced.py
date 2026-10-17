@@ -105,7 +105,8 @@ def pricing(months: list[Month], settings, device: str,
         ridge = [settings.ridge * tilt[torch.bucketize(s, cuts)] for s, _ in stock]
     bound = (settings.gross_cap, settings.margin_cap) if settings.size_bound else None
     moved = None if not realism.on(settings) else [
-        realism.Market(m.price.to(device), m.vol.to(device), m.adv.to(device), m.tbill)
+        realism.Market(m.price.to(device), m.vol.to(device), m.adv.to(device), m.tbill,
+                       None if m.mv is None else m.mv.to(device))
         for m in market
     ]  # fmt: skip
     return Pricing(costs.links(months, device), stock, {} if settings.holdings_input else None,
