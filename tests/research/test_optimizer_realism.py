@@ -225,3 +225,52 @@ def test_the_size_bound_trains_both_parts_and_holds_on_new_months():
         assert float(w.abs().sum()) <= 1.25 + 1e-5
         assert float(realism.requirement(w, torch.tensor(prices))) <= 0.5 + 1e-5
     assert log["rollbacks"].sum() == 0
+
+
+def test_the_gross_limit_is_charged_like_the_cushion():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings  # noqa: PLC0415
+
+    m = realism.Market(torch.full((2,), 50.0), torch.full((2,), 0.02), torch.full((2,), 1e6), 0)
+    w = torch.tensor([1.0, -0.5])  # gross 1.5; requirement 0.3 x 1.5 = 0.45
+    s = Settings("linear", gross_limit=1.25, cushion_rate=0.1, cushion_curve=1.0)
+    assert float(realism.penalty(w, m, s)) == pytest.approx(0.1 * 0.25 + 0.25**2)
+    both = replace(s, margin_cushion=0.4)  # 0.05 over the cushion too
+    want = 0.1 * 0.25 + 0.25**2 + 0.1 * 0.05 + 0.05**2
+    assert float(realism.penalty(w, m, both)) == pytest.approx(want, rel=1e-5)
+    assert float(realism.charges(w, w, m, both, 1e5)) == pytest.approx(want, rel=1e-5)
+
+
+def test_the_traded_months_penalty_is_its_books_and_trading_on_it_shrinks_the_book():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import holdings, priced, realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    months = _months(30)
+    stock = [(np.full(4, 0.001, np.float32), np.full(4, 0.003, np.float32))] * 30
+    market = realism.align(months, _market_table(months))
+    s = Settings("linear", costs="t.parquet", holdings_input=True, margin_cushion=0.5,
+                 gross_limit=1.25, cushion_rate=0.1)  # fmt: skip
+    p = priced.pricing(months, s, "cpu", stock, market)
+    pairs = [(torch.from_numpy(m.x), torch.from_numpy(m.r)) for m in months]
+    model = Optimizer("linear", 2 + 2)
+    p.book[28] = torch.tensor([2.0, -1.0, 0.5, 0.0])
+    w = realism.book(model, holdings.inputs(pairs, p, p.held(), 29), p, 29)
+    assert float(priced.trade_penalty(model, pairs, p, s, 29)) == pytest.approx(
+        float(realism.penalty(w, p.market[29], s)))  # fmt: skip
+    real = torch.tensor([0.1, 0.0, 0.0, -0.1])  # the real traded book wins over the table's
+    w_real = realism.book(model, holdings.inputs(pairs, p, {28: real}, 29), p, 29)
+    assert float(priced.trade_penalty(model, pairs, p, s, 29, real)) == pytest.approx(
+        float(realism.penalty(w_real, p.market[29], s)))  # fmt: skip
+
+    base = dict(window=12, first_epochs=20, start=date(2001, 6, 1), costs="t.parquet",
+                holdings_input=True, cold=True, lr=0.05, margin_cushion=0.5, gross_limit=1.25,
+                cushion_rate=5.0)  # fmt: skip
+    free, _, _ = walk(months, Settings("linear", **base), stock_costs=stock, market=market)
+    kept, log, _ = walk(months, Settings("linear", **base, trade_margin=True), stock_costs=stock,
+                        market=market)  # fmt: skip
+    size = lambda w: w.group_by("date").agg(pl.col("weight").abs().sum())["weight"]  # noqa: E731
+    assert log["rollbacks"].sum() == 0 and np.isfinite(kept["weight"].to_numpy()).all()
+    assert float(size(kept).max()) < float(size(free).max())

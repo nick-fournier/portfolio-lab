@@ -149,6 +149,9 @@ class Settings:
             share of equity (0: off), the charge a month per dollar above it, and the charge
             per dollar squared above it (``cushion_curve``, steepening); impact
             constant K (0: off); account size in dollars (for impact).
+        gross_limit: Gross (sum |w|) allowed before it is charged like the cushion (0: off).
+        trade_margin: Each training step also pays the traded month's margin and gross
+            penalty (research.optimizer.realism; needs ``margin_cushion`` or ``gross_limit``).
         size_bound / gross_cap / margin_cap: The book is direction x a learned size bounded
             by the smaller of ``gross_cap`` (gross per $ equity) and the size at which its
             maintenance requirement is ``margin_cap`` of equity (research.optimizer.realism).
@@ -201,6 +204,8 @@ class Settings:
     margin_cushion: float = 0.0
     cushion_rate: float = 0.10
     cushion_curve: float = 0.0
+    gross_limit: float = 0.0
+    trade_margin: bool = False
     size_bound: bool = False
     gross_cap: float = 1.25
     margin_cap: float = 0.50
@@ -243,12 +248,14 @@ def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
     model: Optimizer, adam: torch.optim.Optimizer, data: list[Pair], train: list[int],
     settings: Settings, rng: np.random.Generator, pricing: priced.Pricing | None, lr: float,
     clipper: Clipper, norms: list[torch.Tensor], average: Average | None,
-    noise: np.random.Generator | None = None,
+    noise: np.random.Generator | None = None, trade: tuple | None = None,
 ) -> list[torch.Tensor]:  # fmt: skip
     """One pass over the ``train`` months in shuffled order at rate ``lr``; its losses.
 
     Each step's (gradient size before clipping, limit) goes on ``norms``. A step whose loss
     is not finite is skipped rather than poison Adam. ``noise``: the inherited books' stream.
+    ``trade``: (traded month, its real held book or ``None``): with ``trade_margin`` each step
+    also pays that month's margin and gross penalty (research.optimizer.realism).
     """
     for group in adam.param_groups:
         group["lr"] = lr
@@ -264,6 +271,8 @@ def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
             seen = [*data[:k], (x, r), *data[k + 1 :]]
         value = (loss(model, x, r) if pricing is None
                  else priced.loss(model, seen, pricing, settings, int(k), noise))  # fmt: skip
+        if settings.trade_margin and pricing is not None and trade is not None:
+            value = value + priced.trade_penalty(model, data, pricing, settings, *trade)
         if not torch.isfinite(value):
             continue
         value.backward()
@@ -309,6 +318,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     epochs: int, settings: Settings, rng: np.random.Generator, pricing: priced.Pricing | None, *,
     start_lr: float, span: range, clipper: Clipper, average: Average | None, test: int,
     hold_rng: np.random.Generator, raw: list[Pair], noise: np.random.Generator | None = None,
+    trade: tuple | None = None,
 ) -> tuple[list, int, float, list[float], list[torch.Tensor], list[float], dict]:  # fmt: skip
     """One month's training.
 
@@ -321,6 +331,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     ``span`` months not in it get the model's weights first, in month order. The held-out months
     are drawn from ``hold_rng``; they and the test month are scored on their real returns
     (``raw``), training alone sees ``data``'s clipped ones. ``noise``: the inherited books' stream.
+    ``trade``: the traded month's penalty pieces (:func:`_pass`).
     """
     if pricing is not None:
         holdings.fill(model, data, pricing, span)
@@ -341,7 +352,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     def one_pass(p: int) -> list:
         lr = rate(settings.schedule, start_lr, settings.lr_min, p, epochs) * guard.scale
         losses = _pass(model, adam, data, fit, settings, rng, pricing, lr, clipper, norms,
-                       average, noise)  # fmt: skip
+                       average, noise, trade)  # fmt: skip
         if not block and settings.watch and test >= 0:  # nothing held out: still log the test
             tests.append(_held_loss(model, raw, pricing, settings, [test]))
         return losses
@@ -451,6 +462,7 @@ def walk(
             model, adam, data, train, epochs, settings, rng, pricing, start_lr=start_lr,
             span=range(lo, t), clipper=clipper, average=average, test=watched,
             hold_rng=hold_rng, raw=raw, noise=noise,
+            trade=(t, last if traded == t - 1 else None),
         )  # fmt: skip
         grad, limit = torch.stack(norms).T if norms else (torch.zeros(0), torch.zeros(0))
         if not trained:

@@ -17,16 +17,12 @@ import polars as pl
 import typer
 
 from portfolio_lab.core.config import get_settings
-from portfolio_lab.research.optimizer import universe
+from portfolio_lab.research.optimizer import seedavg, universe
 from portfolio_lab.research.optimizer.universe import NO_FLOORS, Floors
 
 optimizer_app = typer.Typer(help="Class 3 optimizer track (research).")
 #: The volatility trait the optimism log buckets by (a year of idiosyncratic volatility).
 VOL_TRAIT = "ivol_capm_252d"
-
-
-def _sharpe(monthly: np.ndarray) -> float:
-    return float(monthly.mean() / monthly.std() * 12**0.5) if len(monthly) > 1 else float("nan")
 
 
 @optimizer_app.command("data")
@@ -95,7 +91,7 @@ def _walk_one(  # noqa: PLR0913, PLR0917 - one walk's pieces
     (out / "settings.json").write_text(json.dumps(meta, indent=2))
     graded = log.filter(pl.col("ret").is_not_null())
     return (f"{settings.model} seed {settings.seed}: {graded.height} months, Sharpe "
-            f"{_halves(graded['date'].to_list(), graded['ret'].to_numpy())}; "
+            f"{seedavg.halves(graded['date'].to_list(), graded['ret'].to_numpy())}; "
             f"median long {graded['long'].median():.2f}, short {graded['short'].median():.2f}, "
             f"largest {graded['largest'].median() or 0:.1%} of gross; "
             f"{(log['long'] - log['short'] == 0).sum()} months all cash; "
@@ -245,6 +241,12 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     cushion_curve: Annotated[
         float, typer.Option(help="Loss: charge a month per $^2 of requirement above the cushion.")
     ] = 0.0,
+    gross_limit: Annotated[
+        float, typer.Option(help="Loss: gross allowed before it is charged like the cushion.")
+    ] = 0.0,
+    trade_margin: Annotated[
+        bool, typer.Option(help="Loss: also charge the traded month's margin and gross.")
+    ] = False,
     size_bound: Annotated[
         bool, typer.Option(help="Book = direction x a learned size under --gross-cap/--margin-cap.")
     ] = False,
@@ -304,6 +306,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 rebate=rebate, margin_spread=margin_spread, margin_cushion=margin_cushion,
                 cushion_rate=cushion_rate, cushion_curve=cushion_curve, impact=impact,
                 equity=equity, margin_rate=margin_rate, size_bound=size_bound,
+                gross_limit=gross_limit, trade_margin=trade_margin,
                 gross_cap=gross_cap, margin_cap=margin_cap,
                 cash_rate=None if cash_rate < 0 else cash_rate,
             )  # fmt: skip
@@ -316,7 +319,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         for f in futures:
             typer.echo(f.result())
     if len(runs) > 1:
-        typer.echo(_average(runs))
+        typer.echo(seedavg.average(runs))
 
 
 @optimizer_app.command("backtest")
@@ -361,58 +364,10 @@ def backtest_cmd(
                f"cost {daily['cost'].sum() / years:.2%}/yr")  # fmt: skip
 
 
-def _halves(dates: list[date], r: np.ndarray) -> str:
-    half = next((k for k, x in enumerate(dates) if x >= date(2015, 12, 31)), len(dates))
-    return f"{_sharpe(r):.2f} (to 2015 {_sharpe(r[:half]):.2f}, after {_sharpe(r[half:]):.2f})"
-
-
 @optimizer_app.command("average")
 def average_cmd(runs: Annotated[list[Path], typer.Argument(help="Walk folders (one per seed).")]):
     """Average several seeds' portfolios (the paper's 10-seed average) and report Sharpe."""
-    typer.echo(_average(runs))
-
-
-def _average(runs: list[Path]) -> str:
-    """Average the seeds' portfolios and report Sharpe; save the average next to the seeds.
-
-    Each seed's portfolio is first scaled to $1 of gross exposure (longs plus shorts) each
-    month, so a seed whose weights grew huge cannot swamp the others. A seed's month is a dud,
-    and left out of that month's average, when its training loss or return is not finite or it
-    holds nothing. The averaged portfolio (date, symbol, weight; $1 gross per seed averaged) is
-    written to ``weights.parquet`` in the seeds' parent folder; its monthly return is the
-    average of the good seeds' scaled returns.
-    """
-    good = (pl.col("loss").is_finite() & pl.col("ret").is_finite()
-            & ((pl.col("long") - pl.col("short")) > 0))  # fmt: skip
-    logs = [pl.read_parquet(r / "log.parquet")
-            .select("date", pl.when(good).then(pl.col("ret") / (pl.col("long") - pl.col("short")))
-                    .alias(r.name))
-            for r in runs]  # fmt: skip
-    joined = logs[0]
-    for log in logs[1:]:
-        joined = joined.join(log, on="date", how="full", coalesce=True)
-    names = [r.name for r in runs]
-    duds = int(joined.select(pl.sum_horizontal(pl.col(n).is_null() for n in names)).sum().item())
-    joined = joined.filter(pl.any_horizontal(pl.col(n).is_not_null() for n in names)).sort("date")
-    each = [_sharpe(joined[n].drop_nulls().to_numpy()) for n in names]
-    mean = joined.select(pl.mean_horizontal(names)).to_series().to_numpy()
-    frames = []
-    for r, log in zip(runs, logs, strict=True):
-        keep = log.filter(pl.col(r.name).is_not_null()).select("date")
-        w = pl.read_parquet(r / "weights.parquet").select("date", "symbol", "weight")
-        w = w.join(keep, on="date").with_columns(
-            pl.col("weight") / pl.col("weight").abs().sum().over("date")
-        )
-        frames.append(w.with_columns(pl.lit(r.name).alias("seed")))
-    stacked = pl.concat(frames)
-    count = stacked.group_by("date").agg(pl.col("seed").n_unique().alias("n"))
-    average = (stacked.group_by("date", "symbol").agg(pl.col("weight").sum())
-               .join(count, on="date").select("date", "symbol", pl.col("weight") / pl.col("n"))
-               .sort("date", "symbol"))  # fmt: skip
-    average.write_parquet(runs[0].parent / "weights.parquet")
-    return (f"{len(runs)} seeds, each: min {min(each):.2f} median {np.median(each):.2f} "
-            f"max {max(each):.2f}; {duds} dud seed-months left out; "
-            f"average portfolio: {_halves(joined['date'].to_list(), mean)}")  # fmt: skip
+    typer.echo(seedavg.average(runs))
 
 
 @optimizer_app.command("ridge")
@@ -430,8 +385,9 @@ def ridge_cmd(
     typer.echo("Sharpe by penalty: " + ", ".join(
         f"{z:.0e} {s:.2f}" for z, s in zip(ridge.GRID, out["sharpe"], strict=True)))  # fmt: skip
     typer.echo(f"best penalty {out['best_z']:.0e} (looks ahead, as the paper's BSV): "
-               f"{_halves(out['dates'], out['returns'][:, best])}")  # fmt: skip
-    typer.echo(f"leave-one-out each month (no look-ahead): {_halves(out['dates'], out['loo'])}; "
+               f"{seedavg.halves(out['dates'], out['returns'][:, best])}")  # fmt: skip
+    loo = seedavg.halves(out["dates"], out["loo"])
+    typer.echo(f"leave-one-out each month (no look-ahead): {loo}; "
                f"median penalty {np.median(out['loo_z']):.0e}")  # fmt: skip
 
 
@@ -462,7 +418,7 @@ def signal_cmd(
         rets.append(float(w @ m.r[keep]))
         counts.append(len(keep))
     typer.echo(f"{len(dates)} months, median {int(np.median(counts))} stocks with a forecast: "
-               f"Sharpe {_halves(dates, np.array(rets))}")  # fmt: skip
+               f"Sharpe {seedavg.halves(dates, np.array(rets))}")  # fmt: skip
 
 
 @optimizer_app.command("grid")

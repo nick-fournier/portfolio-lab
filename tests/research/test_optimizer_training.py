@@ -171,7 +171,7 @@ def test_walk_cosine_schedule_and_warm_rate():
 
 
 def test_seed_average_leaves_out_a_dud_seed_month_and_saves_the_average(tmp_path):
-    from portfolio_lab.research.optimizer.cli import _average  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.seedavg import average as _average  # noqa: PLC0415
 
     d1, d2 = date(2020, 1, 31), date(2020, 2, 29)
     for name, loss, w in (

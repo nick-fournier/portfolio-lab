@@ -18,7 +18,12 @@ return in the loss (research.optimizer.priced), off unless its setting is on:
   requirements are per dollar too (``2.5 / price``), so no account size is needed. Requirement
   above ``margin_cushion`` x equity, ``over``, is charged ``cushion_rate * over +
   cushion_curve * over^2`` a month (2026-10-17: the square makes the charge steepen, so a small
-  breach stays cheap and a big confident one does not pay).
+  breach stays cheap and a big confident one does not pay). ``gross_limit``: gross (sum |w|)
+  above it is charged the same way (2026-10-17: the user's 1.25x).
+* the traded month (``trade_margin``, walk): the penalties above only shape the training
+  months' books; the traded month's book, built after training, was never checked (curve1). Its
+  margin and gross penalty (:func:`penalty`) needs only today's prices and positions, no return,
+  so each training step adds it, and the model learns to keep the book it will trade inside.
 * market impact (``impact``, the constant K): trading t dollars per $1 of equity in a stock
   with daily volatility s and daily dollar volume V costs ``K * s * sqrt(t * equity / V) * t``
   (square-root law), on the dollars traded from the book held going in.
@@ -47,8 +52,9 @@ COLUMNS = ("prc", "rvol_21d", "adv", "tbill")
 #: The Alpaca account profile (2026-10-17; docs.alpaca.markets margin-and-short-selling, Alpaca
 #: high-yield cash): what the walk's ``--profile alpaca`` sets and the scorer charges. Easy-to-
 #: borrow shorts cost nothing (the cost table's borrow fee), hard-to-borrow ones are barred.
-ALPACA = {"rebate": True, "margin_rate": 0.065, "cash_rate": 0.0356, "margin_cushion": 0.6,
-          "cushion_rate": 0.10, "impact": 1.0, "equity": 100_000.0}  # fmt: skip
+ALPACA = {"rebate": True, "margin_rate": 0.065, "cash_rate": 0.0356, "margin_cushion": 0.5,
+          "gross_limit": 1.25, "cushion_rate": 0.10, "impact": 1.0,
+          "equity": 100_000.0}  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -73,7 +79,8 @@ def on(settings) -> bool:
     """Whether any realism term is switched on."""
     return bool(settings.size_bound or settings.rebate or settings.margin_spread
                 or settings.margin_rate or settings.cash_rate is not None
-                or settings.margin_cushion or settings.impact)  # fmt: skip
+                or settings.margin_cushion or settings.gross_limit
+                or settings.impact)  # fmt: skip
 
 
 def align(months: list[Month], table: pl.DataFrame, device: str = "cpu") -> list[Market]:
@@ -127,6 +134,18 @@ def book(model, x: torch.Tensor, pricing, k: int) -> torch.Tensor:
     return direction * cap * torch.sigmoid(model.size)
 
 
+def penalty(w: torch.Tensor, market: Market, settings) -> torch.Tensor:
+    """The margin-cushion and gross-limit charges on the book ``w`` (module docs); no return."""
+    total = w.new_zeros(())
+    for over in ((torch.relu(requirement(w, market.price) - settings.margin_cushion)
+                  if settings.margin_cushion else None),
+                 (torch.relu(w.abs().sum() - settings.gross_limit)
+                  if settings.gross_limit else None)):  # fmt: skip
+        if over is not None:
+            total = total + settings.cushion_rate * over + settings.cushion_curve * over * over
+    return total
+
+
 def charges(w: torch.Tensor, held: torch.Tensor, market: Market, settings,
             equity: float) -> torch.Tensor:  # fmt: skip
     """The month's realism charges on the book ``w`` traded from ``held`` (module docs)."""
@@ -140,9 +159,7 @@ def charges(w: torch.Tensor, held: torch.Tensor, market: Market, settings,
         total = total + settings.margin_spread / 12 * torch.relu(longs - 1)
     if settings.cash_rate is not None:
         total = total + max(market.tbill - settings.cash_rate / 12, 0.0) * torch.relu(1 - longs)
-    if settings.margin_cushion:
-        over = torch.relu(requirement(w, market.price) - settings.margin_cushion)
-        total = total + settings.cushion_rate * over + settings.cushion_curve * over * over
+    total = total + penalty(w, market, settings)
     if settings.impact:
         t = (w - held).abs()
         total = total + settings.impact * (market.vol * torch.sqrt(t * equity / market.adv + 1e-12)

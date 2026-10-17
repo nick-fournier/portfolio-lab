@@ -160,6 +160,17 @@ def net(model, data: list[Pair], pricing: Pricing, settings, k: int, w: torch.Te
     return value
 
 
+def trade_penalty(model, data: list[Pair], pricing: Pricing, settings, t: int,
+                  real: torch.Tensor | None = None) -> torch.Tensor:  # fmt: skip
+    """The traded month t's margin and gross penalty on the model's book for it (realism docs).
+
+    Its holdings input is the real book traded the month before (``real``), else the book's.
+    """
+    held = {t - 1: real} if real is not None else pricing.held()
+    w = realism.book(model, holdings.inputs(data, pricing, held, t), pricing, t)
+    return realism.penalty(w, pricing.market[t], settings)
+
+
 def loss(model, data: list[Pair], pricing: Pricing, settings, k: int,
          noise: np.random.Generator | None = None) -> torch.Tensor:  # fmt: skip
     """Month k's paper loss on its return net of costs (walk docs); stores w in the book.
