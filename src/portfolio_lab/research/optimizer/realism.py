@@ -19,7 +19,9 @@ return in the loss (research.optimizer.priced), off unless its setting is on:
   above ``margin_cushion`` x equity, ``over``, is charged ``cushion_rate * over +
   cushion_curve * over^2`` a month (2026-10-17: the square makes the charge steepen, so a small
   breach stays cheap and a big confident one does not pay). ``gross_limit``: gross (sum |w|)
-  above it is charged the same way (2026-10-17: the user's 1.25x).
+  above it is charged the same way (2026-10-17: the user's 1.25x). ``invest_floor``: longs
+  below it (idle cash; at Alpaca short proceeds cannot fund longs) are charged the same way
+  (2026-10-17: the user wants the account fully invested).
 * the traded month (``trade_margin``, walk): the penalties above only shape the training
   months' books; the traded month's book, built after training, was never checked (curve1). Its
   margin and gross penalty (:func:`penalty`) needs only today's prices and positions, no return,
@@ -106,7 +108,7 @@ def on(settings) -> bool:
     return bool(settings.size_bound or settings.margin_input or settings.rebate
                 or settings.margin_spread
                 or settings.margin_rate or settings.cash_rate is not None
-                or settings.margin_cushion or settings.gross_limit
+                or settings.margin_cushion or settings.gross_limit or settings.invest_floor
                 or settings.impact)  # fmt: skip
 
 
@@ -173,12 +175,14 @@ def book(model, x: torch.Tensor, pricing, k: int) -> torch.Tensor:
 
 
 def penalty(w: torch.Tensor, market: Market, settings) -> torch.Tensor:
-    """The margin-cushion and gross-limit charges on the book ``w`` (module docs); no return."""
+    """The margin-cushion, gross-limit and investment-floor charges on ``w`` (docs); no return."""
     total = w.new_zeros(())
     for over in ((torch.relu(requirement(w, market.price) - settings.margin_cushion)
                   if settings.margin_cushion else None),
                  (torch.relu(w.abs().sum() - settings.gross_limit)
-                  if settings.gross_limit else None)):  # fmt: skip
+                  if settings.gross_limit else None),
+                 (torch.relu(settings.invest_floor - torch.relu(w).sum())
+                  if settings.invest_floor else None)):  # fmt: skip
         if over is not None:
             total = total + settings.cushion_rate * over + settings.cushion_curve * over * over
     return total

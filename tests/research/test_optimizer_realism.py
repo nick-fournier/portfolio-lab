@@ -330,3 +330,16 @@ def test_the_margin_inputs_are_each_stocks_log_collateral_rates():
     w, log, _ = walk(months, Settings("linear", **base, margin_input=True), stock_costs=stock,
                      market=market)  # fmt: skip
     assert np.isfinite(w["weight"].to_numpy()).all() and log["rollbacks"].sum() == 0
+
+
+def test_the_investment_floor_charges_idle_cash_like_the_caps():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings  # noqa: PLC0415
+
+    m = realism.Market(torch.full((3,), 50.0), torch.full((3,), 0.02), torch.full((3,), 1e6), 0)
+    s = Settings("linear", invest_floor=1.0, cushion_rate=0.1, cushion_curve=1.0)
+    half = torch.tensor([0.3, 0.2, -0.4])  # longs 0.5: idle cash 0.5
+    assert float(realism.penalty(half, m, s)) == pytest.approx(0.1 * 0.5 + 0.5**2)
+    assert float(realism.penalty(torch.tensor([0.7, 0.4, -0.2]), m, s)) == 0.0  # longs 1.1
+    assert realism.on(s) and not realism.on(replace(s, invest_floor=0.0, cushion_curve=0.0))

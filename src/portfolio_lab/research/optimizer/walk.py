@@ -150,6 +150,7 @@ class Settings:
             per dollar squared above it (``cushion_curve``, steepening); impact
             constant K (0: off); account size in dollars (for impact).
         gross_limit: Gross (sum |w|) allowed before it is charged like the cushion (0: off).
+        invest_floor: Longs (sum of positive w) below this are charged like the cushion (0: off).
         margin_input: Feed each stock's log collateral rates, long and short (Alpaca's tables;
             research.optimizer.holdings; needs ``holdings_input`` and the walk's ``market``).
         start_book: What a traded month starts from when nothing was traded the month before:
@@ -209,6 +210,7 @@ class Settings:
     cushion_rate: float = 0.10
     cushion_curve: float = 0.0
     gross_limit: float = 0.0
+    invest_floor: float = 0.0
     trade_margin: bool = False
     start_book: str = "guess"
     margin_input: bool = False
