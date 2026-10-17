@@ -140,6 +140,12 @@ class Settings:
         inherit: Average L1 size, as a share of the book, of the displacement each training
             step's book going in gets (module docs; 0: off). Each step draws its size from 0
             to twice this.
+        rebate / margin_spread / margin_cushion / cushion_rate / impact / equity: The
+            account's size-dependent costs in the loss (research.optimizer.realism; need
+            ``costs`` and the walk's ``market``): lost short rebate on/off; margin interest's
+            spread over the T-bill a year (0: off); maintenance requirement allowed before it
+            is charged, as a share of equity (0: off), and the charge a month per dollar above
+            it; impact constant K (0: off); account size in dollars (for impact).
     """
 
     model: str
@@ -182,6 +188,12 @@ class Settings:
     dropout: float = 0.0
     stock_drop: float = 0.0
     inherit: float = 0.0
+    rebate: bool = False
+    margin_spread: float = 0.0
+    margin_cushion: float = 0.0
+    cushion_rate: float = 0.10
+    impact: float = 0.0
+    equity: float = 100_000.0
 
 
 Pair = tuple[torch.Tensor, torch.Tensor]
@@ -366,6 +378,7 @@ def walk(
     settings: Settings,
     device: str = "cpu",
     stock_costs: list[tuple[np.ndarray, ...]] | None = None,
+    market: list | None = None,
 ) -> tuple[pl.DataFrame, pl.DataFrame, Optimizer]:
     """Train and pick portfolios month by month (module docs).
 
@@ -375,6 +388,8 @@ def walk(
         device: ``cuda`` or ``cpu``.
         stock_costs: Each month's ``(trade_cost, borrow_fee, ...)`` per candidate
             (``costs.align``), needed when ``settings.costs`` is set.
+        market: Each month's ``realism.Market`` (``realism.align``), needed with any realism
+            term.
 
     Returns:
         ``weights`` (date, symbol, weight) for every test month; ``log`` (date, ret = the
@@ -395,7 +410,7 @@ def walk(
     average = Average(model, settings.average) if settings.average else None
     data, raw = _data(months, settings, device)
     known = [bool(np.isfinite(m.r).all()) for m in months]
-    pricing = priced.pricing(months, settings, device, stock_costs)
+    pricing = priced.pricing(months, settings, device, stock_costs, market)
     if settings.measure_optimism and pricing is None:
         raise ValueError("measure_optimism needs per-stock costs")
     cuts = optimism.edges(pricing.stock) if settings.measure_optimism else None

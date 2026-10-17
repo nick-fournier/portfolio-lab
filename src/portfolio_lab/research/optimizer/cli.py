@@ -87,12 +87,14 @@ def _walk_one(  # noqa: PLR0913, PLR0917 - one walk's pieces
 
         names = data.inputs(pl.read_parquet(table, n_rows=1000), inputs)
         settings = replace(settings, vol_column=names.index(VOL_TRAIT))
-    stock = None
+    stock, market = None, None
     if settings.costs:
-        from portfolio_lab.research.optimizer import costs  # noqa: PLC0415
+        from portfolio_lab.research.optimizer import costs, realism  # noqa: PLC0415
 
-        stock = costs.align(months, pl.read_parquet(settings.costs))
-    weights, log, fitted = walk.walk(months, settings, device, stock)
+        table = pl.read_parquet(settings.costs)
+        stock = costs.align(months, table)
+        market = realism.align(months, table) if realism.on(settings) else None
+    weights, log, fitted = walk.walk(months, settings, device, stock, market)
     out.mkdir(parents=True, exist_ok=True)
     weights.write_parquet(out / "weights.parquet")
     log.write_parquet(out / "log.parquet")
@@ -241,6 +243,20 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     no_blank_checks: Annotated[
         bool, typer.Option(help="Leave blank-check shells (SIC 6770) out of the universe.")
     ] = False,
+    rebate: Annotated[
+        bool, typer.Option(help="Loss: short dollars forgo the T-bill (retail; --costs).")
+    ] = False,
+    margin_spread: Annotated[
+        float, typer.Option(help="Loss: margin rate over the T-bill a year on longs > equity.")
+    ] = 0.0,
+    margin_cushion: Annotated[
+        float, typer.Option(help="Loss: maintenance requirement allowed, share of equity.")
+    ] = 0.0,
+    cushion_rate: Annotated[
+        float, typer.Option(help="Loss: charge a month per $ of requirement above the cushion.")
+    ] = 0.10,
+    impact: Annotated[float, typer.Option(help="Loss: square-root impact constant K.")] = 0.0,
+    equity: Annotated[float, typer.Option(help="Account size in dollars (impact).")] = 100_000.0,
 ) -> None:
     """Walk a model forward, one run per seed, and save each seed's monthly portfolios.
 
@@ -279,6 +295,8 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 holdout_seed=None if holdout_seed < 0 else holdout_seed,
                 only=tuple(date.fromisoformat(d) for d in only.split(",")) if only else None,
                 dropout=dropout, stock_drop=stock_drop, real_book=real_book, inherit=inherit,
+                rebate=rebate, margin_spread=margin_spread, margin_cushion=margin_cushion,
+                cushion_rate=cushion_rate, impact=impact, equity=equity,
             )  # fmt: skip
             futures.append(pool_.submit(_walk_one, table, run, settings, device, threads,
                                         precision, inputs, last, floors))  # fmt: skip

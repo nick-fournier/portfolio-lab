@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 
-from portfolio_lab.research.optimizer import costs, holdings, optimism
+from portfolio_lab.research.optimizer import costs, holdings, optimism, realism
 from portfolio_lab.research.optimizer.data import Month
 
 Pair = tuple[torch.Tensor, torch.Tensor]
@@ -40,6 +40,7 @@ class Pricing:
         ridge: Each month's per-stock charge per unit of w^2 (``ridge``), else ``None``.
         traded: With ``real_book``, the weights the walk actually traded, by month (else
             ``None``); never cleared.
+        market: Each month's :class:`.realism.Market` with any realism term on, else ``None``.
     """
 
     links: list[costs.Link | None]
@@ -48,6 +49,7 @@ class Pricing:
     borrow: bool = False
     ridge: list[torch.Tensor] | None = None
     traded: dict[int, torch.Tensor] | None = field(default=None)
+    market: list | None = None
 
     def held(self) -> "Held | None":
         """The book a month's holdings come from: traded months as traded, else the table."""
@@ -66,10 +68,13 @@ class Held:
 
 
 def pricing(months: list[Month], settings, device: str,
-            stock_costs: list[tuple[np.ndarray, ...]] | None) -> Pricing | None:  # fmt: skip
+            stock_costs: list[tuple[np.ndarray, ...]] | None,
+            market: list | None = None) -> Pricing | None:  # fmt: skip
     """The cost-aware loss's inputs (``None`` without costs); checks the settings agree.
 
-    ``stock_costs``: each month's per-stock (trade cost, borrow fee, ...) from ``costs.align``.
+    ``stock_costs``: each month's per-stock (trade cost, borrow fee, ...) from ``costs.align``;
+    ``market``: each month's :class:`.realism.Market` (``realism.align``), needed when any
+    realism term is on.
     """
     if settings.holdings_input and not settings.costs:
         raise ValueError("holdings_input needs per-stock costs")
@@ -79,6 +84,10 @@ def pricing(months: list[Month], settings, device: str,
         raise ValueError("real_book needs holdings_input")
     if settings.inherit and not settings.holdings_input:
         raise ValueError("inherit needs holdings_input")
+    if realism.on(settings) and not settings.costs:
+        raise ValueError("the realism terms need costs")
+    if realism.on(settings) and market is None:
+        raise ValueError("the realism terms need market data (realism.align)")
     if not settings.costs:
         return None
     if stock_costs is None:
@@ -92,8 +101,13 @@ def pricing(months: list[Month], settings, device: str,
             raise ValueError(f"ridge_tilt needs {optimism.BUCKETS} values")
         cuts = optimism.edges(stock)[0]
         ridge = [settings.ridge * tilt[torch.bucketize(s, cuts)] for s, _ in stock]
+    moved = None if not realism.on(settings) else [
+        realism.Market(m.price.to(device), m.vol.to(device), m.adv.to(device), m.tbill)
+        for m in market
+    ]  # fmt: skip
     return Pricing(costs.links(months, device), stock, {} if settings.holdings_input else None,
-                   settings.borrow_input, ridge, {} if settings.real_book else None)  # fmt: skip
+                   settings.borrow_input, ridge, {} if settings.real_book else None,
+                   moved)  # fmt: skip
 
 
 def displaced(book: torch.Tensor, size: float, rng: np.random.Generator) -> torch.Tensor:
@@ -133,8 +147,13 @@ def net(model, data: list[Pair], pricing: Pricing, settings, k: int, w: torch.Te
     before = held_going_in(model, data, pricing, k, held)
     spread_before = None if k == 0 else pricing.stock[k - 1][0] * scale
     spread, fee = pricing.stock[k]
-    return costs.net_return(w, data[k][1], before, pricing.links[k], spread * scale,
-                            (fee + settings.short_hurdle) * scale, spread_before)  # fmt: skip
+    value = costs.net_return(w, data[k][1], before, pricing.links[k], spread * scale,
+                             (fee + settings.short_hurdle) * scale, spread_before)  # fmt: skip
+    if pricing.market is not None:
+        kept = torch.zeros_like(w) if before is None else costs.carry(before, pricing.links[k])
+        value = value - scale * realism.charges(w, kept, pricing.market[k], settings,
+                                                settings.equity)  # fmt: skip
+    return value
 
 
 def loss(model, data: list[Pair], pricing: Pricing, settings, k: int,
