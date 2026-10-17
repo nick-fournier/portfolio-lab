@@ -13,6 +13,7 @@ import numpy as np
 import torch
 
 from portfolio_lab.research.optimizer import costs as cost_model
+from portfolio_lab.research.optimizer import realism
 
 #: Spread level the spread input is measured from (log(half-spread / this)).
 SPREAD_REF = 0.005
@@ -101,7 +102,8 @@ def fill(weights, source: list, pricing, span: range) -> None:
     with torch.no_grad():
         for k in span:
             if k not in pricing.book:
-                pricing.book[k] = weights(inputs(source, pricing, pricing.held(), k))
+                x = inputs(source, pricing, pricing.held(), k)
+                pricing.book[k] = realism.book(weights, x, pricing, k)
 
 
 def pick(weights, data: list, pricing, last: torch.Tensor | None, t: int) -> np.ndarray:
@@ -109,7 +111,8 @@ def pick(weights, data: list, pricing, last: torch.Tensor | None, t: int) -> np.
     with torch.no_grad():
         real = None if pricing is None or pricing.book is None else \
             ({} if last is None else {t - 1: last})  # fmt: skip
-        return weights(inputs(data, pricing, real, t)).cpu().numpy().astype(np.float64)
+        w = realism.book(weights, inputs(data, pricing, real, t), pricing, t)
+        return w.cpu().numpy().astype(np.float64)
 
 
 def remember(pricing, w: np.ndarray, data: list, t: int) -> torch.Tensor | None:

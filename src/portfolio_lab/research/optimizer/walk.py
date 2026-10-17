@@ -69,7 +69,7 @@ import numpy as np
 import polars as pl
 import torch
 
-from portfolio_lab.research.optimizer import holdings, optimism, priced, stopping
+from portfolio_lab.research.optimizer import holdings, optimism, priced, realism, stopping
 from portfolio_lab.research.optimizer.averaging import Average
 from portfolio_lab.research.optimizer.clipping import Clipper
 from portfolio_lab.research.optimizer.data import Month
@@ -149,6 +149,9 @@ class Settings:
             share of equity (0: off), the charge a month per dollar above it, and the charge
             per dollar squared above it (``cushion_curve``, steepening); impact
             constant K (0: off); account size in dollars (for impact).
+        size_bound / gross_cap / margin_cap: The book is direction x a learned size bounded
+            by the smaller of ``gross_cap`` (gross per $ equity) and the size at which its
+            maintenance requirement is ``margin_cap`` of equity (research.optimizer.realism).
     """
 
     model: str
@@ -198,6 +201,9 @@ class Settings:
     margin_cushion: float = 0.0
     cushion_rate: float = 0.10
     cushion_curve: float = 0.0
+    size_bound: bool = False
+    gross_cap: float = 1.25
+    margin_cap: float = 0.50
     impact: float = 0.0
     equity: float = 100_000.0
 
@@ -277,7 +283,8 @@ def _held_loss(model: Optimizer, data: list[Pair], pricing: priced.Pricing | Non
     with torch.no_grad():
         r = []
         for k in months:
-            w = model(holdings.inputs(data, pricing, pricing.held() if pricing else None, k))
+            x = holdings.inputs(data, pricing, pricing.held() if pricing else None, k)
+            w = realism.book(model, x, pricing, k)
             r.append(w @ data[k][1] if pricing is None
                      else priced.net(model, data, pricing, settings, k, w))  # fmt: skip
         r = torch.stack(r)
@@ -293,7 +300,8 @@ def _roll(model: Optimizer, data: list[Pair], pricing: priced.Pricing | None,
         return
     with torch.no_grad():
         for k in sorted(months):
-            pricing.book[k] = model(holdings.inputs(data, pricing, pricing.held(), k))
+            x = holdings.inputs(data, pricing, pricing.held(), k)
+            pricing.book[k] = realism.book(model, x, pricing, k)
 
 
 def _fit(  # noqa: PLR0913 - one month's training pieces
@@ -349,7 +357,7 @@ def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, 
     torch.manual_seed(settings.seed)
     extra = 2 * settings.holdings_input + settings.borrow_input
     model = Optimizer(settings.model, width + extra, settings.blocks, settings.hidden,
-                      settings.fast_attention, settings.dropout)  # fmt: skip
+                      settings.fast_attention, settings.dropout, settings.size_bound)  # fmt: skip
     model.to(device)
     if settings.compile:
         model.compile(dynamic=True)

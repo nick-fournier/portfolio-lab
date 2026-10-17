@@ -162,3 +162,66 @@ def test_the_alpaca_profile_sets_every_realism_term():
     assert {k: getattr(s, k) for k in realism.ALPACA} == realism.ALPACA
     with pytest.raises(ValueError, match="profile"):
         realism.with_profile(Settings("linear"), "robinhood")
+
+
+def test_the_size_bound_holds_both_caps_and_cheap_shorts_lower_the_cap():
+    torch = pytest.importorskip("torch")
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+
+    torch.manual_seed(0)
+    model = Optimizer("mlp", 3, blocks=1, hidden=8, sized=True)
+    for trial in range(20):
+        price = torch.rand(50) * 60 + 0.5
+        x = torch.randn(50, 3) * (1 + trial)
+        m = realism.Market(price, torch.full((50,), 0.02), torch.full((50,), 1e6), 0.004)
+        p = SimpleNamespace(bound=(1.25, 0.5), market=[m])
+        with torch.no_grad():
+            model.size[...] = 8.0  # sigmoid ~1: at the cap
+            w = realism.book(model, x, p, 0)
+        assert float(w.abs().sum()) <= 1.25 + 1e-5
+        assert float(realism.requirement(w, price)) <= 0.5 + 1e-5
+        assert float(w.abs().sum()) == pytest.approx(1.25, rel=1e-3) or \
+            float(realism.requirement(w, price)) == pytest.approx(0.5, rel=1e-3)  # fmt: skip
+    # all short in $1 stocks: $2.50 a share = 250% per dollar -> cap 0.5 / 2.5 = $0.20 of gross
+    cheap = SimpleNamespace(bound=(1.25, 0.5), market=[realism.Market(
+        torch.ones(4), torch.full((4,), 0.02), torch.full((4,), 1e6), 0.0)])  # fmt: skip
+    short = Optimizer("linear", 1, sized=True)
+    with torch.no_grad():
+        short.lam[...] = -1.0
+        short.size[...] = 20.0
+        assert float(realism.book(short, torch.ones(4, 1), cheap, 0).abs().sum()) == pytest.approx(
+            0.2, rel=1e-4)  # fmt: skip
+    plain = SimpleNamespace(bound=None, market=None)  # no bound: the model's output as it is
+    assert torch.equal(realism.book(short, torch.ones(4, 1), plain, 0),
+                       short(torch.ones(4, 1)))  # fmt: skip
+
+
+def test_the_size_bound_trains_both_parts_and_holds_on_new_months():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    model = Optimizer("linear", 2, sized=True)
+    m = realism.Market(torch.tensor([3.0, 40.0]), torch.full((2,), 0.02), torch.full((2,), 1e6), 0)
+    p = type("P", (), {"bound": (1.25, 0.5), "market": [m]})()
+    w = realism.book(model, torch.tensor([[1.0, 0.5], [-0.3, 2.0]]), p, 0)
+    (w @ torch.tensor([0.1, -0.05])).backward()
+    assert model.size.grad is not None and model.lam.grad is not None
+    assert float(model.size.grad.abs()) > 0 and float(model.lam.grad.abs().sum()) > 0
+
+    months = _months(30)
+    prices = (1.0, 4.0, 10.0, 50.0)
+    stock = [(np.full(4, 0.001, np.float32), np.full(4, 0.003, np.float32))] * 30
+    market = realism.align(months, _market_table(months, prices))
+    s = Settings("linear", window=12, first_epochs=10, start=date(2001, 6, 1), costs="t.parquet",
+                 holdings_input=True, cold=True, lr=0.05, size_bound=True)  # fmt: skip
+    weights, log, _ = walk(months, s, stock_costs=stock, market=market)
+    for (_,), g in weights.group_by("date"):
+        w = torch.tensor(g["weight"].to_numpy(), dtype=torch.float32)
+        assert float(w.abs().sum()) <= 1.25 + 1e-5
+        assert float(realism.requirement(w, torch.tensor(prices))) <= 0.5 + 1e-5
+    assert log["rollbacks"].sum() == 0

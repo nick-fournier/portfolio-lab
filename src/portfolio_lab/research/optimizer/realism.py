@@ -23,6 +23,13 @@ return in the loss (research.optimizer.priced), off unless its setting is on:
   with daily volatility s and daily dollar volume V costs ``K * s * sqrt(t * equity / V) * t``
   (square-root law), on the dollars traded from the book held going in.
 
+Size bound (``size_bound``, 2026-10-17): the penalties only shape the books of the months the
+model trains on, so a new month's book could take any size (curve1: 0.9x to 13.8x at identical
+settings). With the bound the book is ``direction x size``: the model's weights scaled to $1 of
+gross, times ``sigmoid(model.size)`` times the cap, the smaller of ``gross_cap`` and the size
+at which the direction's maintenance requirement is ``margin_cap`` of equity. No book, on any
+month, can pass either; below the cap the loss still sets the size (:func:`book`).
+
 :func:`align` reads what they need from the cost table (columns ``prc``, ``rvol_21d``, ``adv``
 and ``tbill``, the holding month's T-bill, monthly).
 """
@@ -64,9 +71,9 @@ def with_profile(settings, name: str):
 
 def on(settings) -> bool:
     """Whether any realism term is switched on."""
-    return bool(settings.rebate or settings.margin_spread or settings.margin_rate
-                or settings.cash_rate is not None or settings.margin_cushion
-                or settings.impact)  # fmt: skip
+    return bool(settings.size_bound or settings.rebate or settings.margin_spread
+                or settings.margin_rate or settings.cash_rate is not None
+                or settings.margin_cushion or settings.impact)  # fmt: skip
 
 
 def align(months: list[Month], table: pl.DataFrame, device: str = "cpu") -> list[Market]:
@@ -102,6 +109,22 @@ def requirement(w: torch.Tensor, price: torch.Tensor) -> torch.Tensor:
     short_rate = torch.where(price < 5.0, torch.clamp(2.5 / price, min=1.0),
                              torch.clamp(5.0 / price, min=0.3))  # fmt: skip
     return (long_rate * torch.relu(w)).sum() + (short_rate * torch.relu(-w)).sum()
+
+
+def book(model, x: torch.Tensor, pricing, k: int) -> torch.Tensor:
+    """Month k's book from the model's output on inputs ``x``: bounded with ``pricing.bound``.
+
+    Without a bound (``pricing`` ``None`` or its ``bound`` ``None``): the model's output as it is.
+    """
+    raw = model(x)
+    bound = getattr(pricing, "bound", None)
+    if bound is None:
+        return raw
+    gross_cap, margin_cap = bound
+    direction = raw / raw.abs().sum().clamp(min=1e-12)
+    need = requirement(direction, pricing.market[k].price).clamp(min=1e-12)
+    cap = torch.clamp(margin_cap / need, max=gross_cap)
+    return direction * cap * torch.sigmoid(model.size)
 
 
 def charges(w: torch.Tensor, held: torch.Tensor, market: Market, settings,

@@ -245,6 +245,13 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     cushion_curve: Annotated[
         float, typer.Option(help="Loss: charge a month per $^2 of requirement above the cushion.")
     ] = 0.0,
+    size_bound: Annotated[
+        bool, typer.Option(help="Book = direction x a learned size under --gross-cap/--margin-cap.")
+    ] = False,
+    gross_cap: Annotated[float, typer.Option(help="Size bound: gross per $ equity.")] = 1.25,
+    margin_cap: Annotated[
+        float, typer.Option(help="Size bound: maintenance requirement, share of equity.")
+    ] = 0.50,
     impact: Annotated[float, typer.Option(help="Loss: square-root impact constant K.")] = 0.0,
     equity: Annotated[float, typer.Option(help="Account size in dollars (impact).")] = 100_000.0,
     margin_rate: Annotated[
@@ -296,7 +303,8 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
                 dropout=dropout, stock_drop=stock_drop, real_book=real_book, inherit=inherit,
                 rebate=rebate, margin_spread=margin_spread, margin_cushion=margin_cushion,
                 cushion_rate=cushion_rate, cushion_curve=cushion_curve, impact=impact,
-                equity=equity, margin_rate=margin_rate,
+                equity=equity, margin_rate=margin_rate, size_bound=size_bound,
+                gross_cap=gross_cap, margin_cap=margin_cap,
                 cash_rate=None if cash_rate < 0 else cash_rate,
             )  # fmt: skip
             if profile:

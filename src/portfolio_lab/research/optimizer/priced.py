@@ -41,6 +41,7 @@ class Pricing:
         traded: With ``real_book``, the weights the walk actually traded, by month (else
             ``None``); never cleared.
         market: Each month's :class:`.realism.Market` with any realism term on, else ``None``.
+        bound: (gross cap, margin cap) with ``size_bound``, else ``None`` (realism ``book``).
     """
 
     links: list[costs.Link | None]
@@ -50,6 +51,7 @@ class Pricing:
     ridge: list[torch.Tensor] | None = None
     traded: dict[int, torch.Tensor] | None = field(default=None)
     market: list | None = None
+    bound: tuple[float, float] | None = None
 
     def held(self) -> "Held | None":
         """The book a month's holdings come from: traded months as traded, else the table."""
@@ -101,13 +103,14 @@ def pricing(months: list[Month], settings, device: str,
             raise ValueError(f"ridge_tilt needs {optimism.BUCKETS} values")
         cuts = optimism.edges(stock)[0]
         ridge = [settings.ridge * tilt[torch.bucketize(s, cuts)] for s, _ in stock]
+    bound = (settings.gross_cap, settings.margin_cap) if settings.size_bound else None
     moved = None if not realism.on(settings) else [
         realism.Market(m.price.to(device), m.vol.to(device), m.adv.to(device), m.tbill)
         for m in market
     ]  # fmt: skip
     return Pricing(costs.links(months, device), stock, {} if settings.holdings_input else None,
                    settings.borrow_input, ridge, {} if settings.real_book else None,
-                   moved)  # fmt: skip
+                   moved, bound)  # fmt: skip
 
 
 def displaced(book: torch.Tensor, size: float, rng: np.random.Generator) -> torch.Tensor:
@@ -134,7 +137,8 @@ def held_going_in(model, data: list[Pair], pricing: Pricing, k: int,
         held = pricing.held() if held is None else held
         before = held.get(k - 1) if held is not None else None
         if before is None:
-            before = model(holdings.inputs(data, pricing, held, k - 1))
+            before = realism.book(model, holdings.inputs(data, pricing, held, k - 1),
+                                  pricing, k - 1)  # fmt: skip
         return before * (1 + data[k - 1][1])
 
 
@@ -168,7 +172,7 @@ def loss(model, data: list[Pair], pricing: Pricing, settings, k: int,
     if settings.inherit and noise is not None and before is not None:
         size = noise.uniform(0, 2 * settings.inherit)
         held = {k - 1: displaced(before, size, noise)}
-    w = model(holdings.inputs(data, pricing, held, k))
+    w = realism.book(model, holdings.inputs(data, pricing, held, k), pricing, k)
     if pricing.book is not None:
         pricing.book[k] = w.detach()
     value = net(model, data, pricing, settings, k, w, settings.cost_scale, held)

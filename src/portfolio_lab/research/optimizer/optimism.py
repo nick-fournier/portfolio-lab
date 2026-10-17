@@ -22,7 +22,7 @@ out-of-sample, sums taken over the months before dividing.
 import numpy as np
 import torch
 
-from portfolio_lab.research.optimizer import holdings
+from portfolio_lab.research.optimizer import holdings, realism
 
 BUCKETS = 5
 GROUPS = ("spread", "short_fee", "size", "vol")
@@ -73,7 +73,7 @@ def measure(model, data: list, pricing, months: list[int], cuts,
     with torch.no_grad():
         total = data[0][1].new_zeros(ROWS * len(GROUPS), BUCKETS)
         for k in months:
-            w = model(holdings.inputs(data, pricing, pricing.held(), k))
+            w = realism.book(model, holdings.inputs(data, pricing, pricing.held(), k), pricing, k)
             v = None if vol is None else data[k][0][:, vol]
             total += _sums(w, data[k][1], *pricing.stock[k], cuts, v)
     return (total / max(len(months), 1)).flatten().tolist()

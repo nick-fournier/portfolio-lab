@@ -94,13 +94,14 @@ class Optimizer(nn.Module):
         hidden: Feed-forward hidden width.
         fast_attention: bfloat16 fused attention (:class:`Block`).
         dropout: Dropout share in every block while training (:class:`Block`).
+        sized: Hold a learned size (``size``, a logit; research.optimizer.realism ``book``).
 
     Built in ``eval`` mode: training switches dropout on with ``train()``.
     """
 
     def __init__(
         self, kind: str, width: int, blocks: int = 1, hidden: int = 256,
-        fast_attention: bool = False, dropout: float = 0.0,
+        fast_attention: bool = False, dropout: float = 0.0, sized: bool = False,
     ):  # fmt: skip
         super().__init__()
         if kind not in MODELS:
@@ -110,6 +111,7 @@ class Optimizer(nn.Module):
             Block(width, hidden, kind == "transformer", fast_attention, dropout) for _ in range(n)
         )
         self.lam = _normal(width, sd=1 / width)
+        self.size = nn.Parameter(torch.zeros(())) if sized else None
         self.eval()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
