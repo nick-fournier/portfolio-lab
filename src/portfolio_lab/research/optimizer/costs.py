@@ -6,11 +6,12 @@ return in the loss is net of two flat costs:
 
     net = w.r - spread * turnover - short_fee / 12 * (sum of the short weights' sizes)
 
-``turnover`` is the dollars traded to get from the model's own weights the month before (same
-stocks matched by symbol; stocks that left are sold, new ones bought from nothing) to this
-month's: sum |w - w_before| plus the size of what was sold. Both costs scale with the weights,
-so the paper's free size still sets the leverage. They are proportional to |w|, not w^2, so
-marginal positions go to exactly zero rather than shrinking a little.
+``turnover`` is the dollars traded to get from the book held going in (the month before's
+weights after its returns, research.optimizer.priced; same stocks matched by symbol; stocks that
+left are sold, new ones bought from nothing) to this month's: sum |w - w_before| plus the size
+of what was sold. Both costs scale with the weights, so the paper's free size still sets the
+leverage. They are proportional to |w|, not w^2, so marginal positions go to exactly zero
+rather than shrinking a little.
 
 Per-stock costs (:func:`align`, from a table of ``trade_cost`` per dollar traded and
 ``borrow_fee`` per dollar shorted a year for each stock-month) replace the flat rates: each
@@ -25,6 +26,9 @@ import polars as pl
 import torch
 
 from portfolio_lab.research.optimizer.data import Month
+
+#: The cost table's borrow fee for a hard-to-borrow stock: 1,200% a year, a bar on shorting it.
+HARD_TO_BORROW = 12.0
 
 
 @dataclass(frozen=True)
@@ -61,9 +65,13 @@ def align(
 ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
     """Each month's ``(trade_cost, borrow_fee, easy_chance)`` in its candidates' row order.
 
-    A stock missing from ``table`` pays the month's median trade cost and a borrow fee of 1
-    (100% a year: treated as not lendable), with an easy-to-borrow chance of 0. A table without
-    ``easy_chance`` gives every stock 1.
+    A stock missing from ``table``, or without a trade cost in it, pays the month's median trade
+    cost (0.005 when the month has none, as for a month the table lacks). A stock missing from
+    ``table``, or without a borrow fee in it (every stock, for a table with no ``borrow_fee``
+    column), pays the table's hard-to-borrow fee (:data:`HARD_TO_BORROW`: treated as not
+    lendable). A stock missing from ``table`` or without an easy-to-borrow chance in it gets 0,
+    except that a table with no ``easy_chance`` column gives every stock of a month it has 1.
+    The walk reads only the trade cost and the borrow fee.
     """
     by_date = table.partition_by("date", as_dict=True)
     out = []
@@ -82,11 +90,12 @@ def align(
         fee = rows["borrow_fee"].to_numpy() if "borrow_fee" in rows.columns else blank
         known = np.isfinite(trade)
         trade = np.where(known, trade, np.median(trade[known]) if known.any() else 0.005)
-        fee = np.where(np.isfinite(fee), fee, 1.0)
-        easy = (
-            rows["easy_chance"].to_numpy() if "easy_chance" in rows.columns else np.ones(len(rows))
-        )
-        easy = np.where(np.isfinite(easy), easy, 0.0)
+        fee = np.where(np.isfinite(fee), fee, HARD_TO_BORROW)
+        if "easy_chance" in rows.columns:
+            easy = rows["easy_chance"].to_numpy()
+            easy = np.where(np.isfinite(easy), easy, 0.0)
+        else:  # no such column: every stock of a month the table has is easy, of one it lacks not
+            easy = np.full(len(rows), 0.0 if part is None else 1.0)
         out.append((trade.astype(np.float32), fee.astype(np.float32), easy.astype(np.float32)))
     return out
 

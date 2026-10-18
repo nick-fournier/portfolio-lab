@@ -1,4 +1,4 @@
-"""Class 3 optimizer: carried holdings, holdings and spread inputs."""
+"""Class 3 optimizer: holdings, spread and borrow fee inputs."""
 
 from datetime import date
 
@@ -20,48 +20,6 @@ def test_holding_drifts_last_months_book_onto_this_months_stocks():
     # C: 0.3 x 0.5, D: new, A: 0.2 x 1.1; B was sold; scaled to N h / sum |h|
     assert held.tolist() == pytest.approx([0.15 * 3 / 0.37, 0.0, 0.22 * 3 / 0.37])
     assert holdings.holding(None, torch.zeros(3), link, 3).tolist() == [0.0, 0.0, 0.0]
-
-
-def test_grid_carry_and_holdings_input_score_held_out_months_from_the_carried_book():
-    pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer import grid  # noqa: PLC0415
-
-    rng = np.random.default_rng(17)
-    pool = list("ABCDEFGHIJ")
-    months, stock = [], []
-    for k in range(20):
-        names = [pool[(k + i) % 10] for i in range(8)]  # one stock leaves, one joins each month
-        x = rng.uniform(-0.5, 0.5, (8, 3)).astype(np.float32)
-        r = (0.1 * x[:, 0] + rng.normal(0, 0.03, 8)).astype(np.float32)
-        months.append(data.Month(date(2000 + k // 12, k % 12 + 1, 1), names, x, r))
-        stock.append((rng.uniform(0.001, 0.02, 8).astype(np.float32),
-                      np.full(8, 0.05, np.float32), np.ones(8, np.float32)))  # fmt: skip
-    base = dict(blocks=1, lr=1e-2, epochs=3, costs=True)
-    setups = [grid.Config("costs", **base), grid.Config("carry", carry=True, **base),
-              grid.Config("inputs", holdings_input=True, **base),
-              grid.Config("both", carry=True, holdings_input=True, **base)]  # fmt: skip
-    curves = grid.grid(months, [16, 18], setups, window=12, validation=3, device="cpu",
-                       stock_costs=stock)  # fmt: skip
-    measures = ["val_net_sharpe", "val_carry_sharpe", "val_net_ret", "val_gross_ret",
-                "val_spread", "val_borrow", "val_turnover"]  # fmt: skip
-    assert set(measures) <= set(curves.columns)
-    assert curves["config"].unique().len() == 4
-    assert all(np.isfinite(curves[c].to_numpy()).all() for c in measures)
-    assert (curves["val_turnover"] > 0).all()
-    assert (curves["val_net_ret"] <= curves["val_gross_ret"]).all()
-    with pytest.raises(ValueError, match="carry"):
-        grid.fit(months, 16, grid.Config("x", carry=True), window=12, validation=3, device="cpu")
-    inner = grid.fit(months, 16, grid.Config("inner", holdings_input=True, borrow_input=True,
-                                             inner=3, weight_decay=0.5, **base),
-                     window=12, validation=3, device="cpu", stock_costs=stock)  # fmt: skip
-    for row in inner:
-        assert np.isfinite(row["inner_net_loss"]) and np.isfinite(row["val_net_loss"])
-        assert np.isfinite(row["inner_net_sharpe"])
-    with pytest.raises(ValueError, match="inner"):
-        grid.fit(months, 16, grid.Config("x", inner=3), window=12, validation=3, device="cpu")
-    with pytest.raises(ValueError, match="borrow_input"):
-        grid.fit(months, 16, grid.Config("x", costs=True, borrow_input=True), window=12,
-                 validation=3, device="cpu", stock_costs=stock)  # fmt: skip
 
 
 def test_walk_holdings_input_feeds_the_real_book_to_the_test_month_and_needs_costs():

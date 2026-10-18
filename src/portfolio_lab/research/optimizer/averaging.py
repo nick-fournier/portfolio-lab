@@ -5,9 +5,10 @@ loss curves swing from pass to pass, grid9). An exponential moving average of th
 (Polyak averaging; Izmailov et al. 2018 for the deep-learning case) smooths that out: after
 every step the average moves a share ``1 - decay`` of the way toward the latest parameters,
 so it spans roughly the last 1 / (1 - decay) steps (``decay`` 0.998: ~500 steps, about one
-month's training). Training itself is unchanged; the average is what the walk holds, and
-early stopping rolls it back with the model. The average starts at zero and is divided by
-1 - decay^n (Adam's bias correction), so the first month's random start is not in it.
+month's training). Training itself is unchanged; the average is what the walk holds, and a
+pass rolled back (research.optimizer.stopping ``Guard``) rolls it back with the model. The
+average starts at zero and is divided by 1 - decay^n (Adam's bias correction), so the first
+month's random start is not in it.
 """
 
 from contextlib import contextmanager

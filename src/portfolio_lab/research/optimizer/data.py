@@ -118,7 +118,7 @@ def inputs(table: pl.DataFrame, which: str = "all") -> list[str]:
         return jkp_cols
     if which == "ours":
         return [c for c in every if c not in JKP_COLUMNS]
-    raise ValueError(f"unknown input set {which!r}: all, ours or jkp")
+    raise ValueError(f"unknown input set {which!r}: all, ours, jkp or paper")
 
 
 def characteristics(root: Path, panel: Panel) -> pl.DataFrame:

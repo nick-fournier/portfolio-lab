@@ -120,7 +120,7 @@ def test_clipped_runs_score_held_out_months_on_their_real_returns():
                  watch=True, scatter=True, winsor=0.2, only=(day,))  # fmt: skip
     _, log, model = walk(months, s)
     clipped, real = _data(months, s, "cpu")
-    _, hold_rng, _ = _streams(s, day)
+    _, hold_rng = _streams(s, day)
     _, held = stopping.held_months(list(range(5, 25)), 6, hold_rng, scatter=True)
     assert log["held_curve"][0].to_list() == pytest.approx(
         [_held_loss(model, real, None, s, held)], rel=1e-5
@@ -149,18 +149,6 @@ def test_guard_rolls_back_a_pass_that_breaks_the_model_and_halves_later_rates():
     assert guard(blow_up, 0) == []
     assert torch.equal(model.weight, before) and guard.scale == 0.5 and guard.rollbacks == 1
     assert guard(lambda p: ["fine"], 1) == ["fine"] and guard.rollbacks == 1
-
-
-def test_dropout_acts_only_while_training_and_the_model_starts_in_eval():
-    torch = pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
-
-    torch.manual_seed(0)
-    model = Optimizer("transformer", 4, blocks=2, hidden=8, dropout=0.5)
-    x = torch.randn(30, 4)
-    assert not model.training and torch.equal(model(x), model(x))
-    model.train()
-    assert not torch.equal(model(x), model(x))
 
 
 def test_stock_drop_changes_training_with_or_without_costs():

@@ -15,11 +15,11 @@ def starting(settings, pricing, months: list, data: list, t: int, last,
     return first.to(data[t][0]), t - 1
 
 
-def walk_streams(settings) -> tuple[np.random.Generator, ...]:
-    """The walk's (month order, held-out draw, inherited books) random streams: the seed's."""
+def walk_streams(settings) -> tuple[np.random.Generator, np.random.Generator]:
+    """The walk's (month order, held-out draw) random streams: the seed's."""
     rng = np.random.default_rng(settings.seed)
     hold = rng if settings.holdout_seed is None else np.random.default_rng(settings.holdout_seed)
-    return rng, hold, np.random.default_rng([settings.seed, 1])
+    return rng, hold
 
 
 def traded(model, average):

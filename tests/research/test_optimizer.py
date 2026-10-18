@@ -64,10 +64,12 @@ def test_fast_attention_matches_the_written_out_formula_to_bfloat16_precision():
     from portfolio_lab.research.optimizer.model import Block  # noqa: PLC0415
 
     block = Block(width=4, hidden=8, attention=True)
+    with torch.no_grad():
+        block.b2.uniform_(-0.1, 0.1)  # trained biases are not 0, so the sum's order shows
     y = torch.rand(9, 4) - 0.5
     written = y + block.peers(y) @ (y @ block.v)
-    written = written + torch.relu(written @ block.w1 + block.b1) @ block.w2 + block.b2
-    assert torch.allclose(block(y), written, atol=1e-6)
+    written = written + (torch.relu(written @ block.w1 + block.b1) @ block.w2 + block.b2)
+    assert torch.equal(block(y), written)  # bit for bit: the update is summed, then added
     block.fast = True
     assert torch.allclose(block(y), written, atol=2e-2)
 

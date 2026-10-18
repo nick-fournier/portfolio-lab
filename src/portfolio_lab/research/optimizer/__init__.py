@@ -11,10 +11,12 @@ loss.
   return) and the per-month arrays the models train on.
 - :mod:`.model`: the three models compared (linear, the network without attention, the
   transformer).
-- :mod:`.walk`: walk-forward training (first fit, then a warm start each month).
-- :mod:`.costs`, :mod:`.holdings`: costs in the loss; holdings and spreads as inputs.
-- :mod:`.grid`: quick training checks on a few windows, epoch by epoch.
-- :mod:`.replay`: a strategy that holds the walk's weights, for the backtest engine.
+- :mod:`.walk`: walk-forward training (a fresh fit each month, or a warm start from the last).
+- :mod:`.costs`, :mod:`.priced`, :mod:`.realism`, :mod:`.holdings`: costs and the account's
+  limits in the loss; holdings and spreads as inputs.
+- :mod:`.stopping`, :mod:`.averaging`, :mod:`.clipping`: held-out months, the parameter
+  average, gradient clipping.
+- :mod:`.ridge`: the paper's linear benchmark.
 
 Research code: torch is needed (``uv sync --extra nets``), and runs go on the GPU host.
 """

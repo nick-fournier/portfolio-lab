@@ -52,15 +52,10 @@ def test_each_charge_matches_its_formula_and_is_off_by_default():
     assert float(realism.charges(w, held, m, base, 1e5)) == 0.0
     assert float(realism.charges(w, held, m, replace(base, rebate=True), 1e5)) == pytest.approx(
         0.004 * 0.5)  # fmt: skip
-    assert float(realism.charges(w, held, m, replace(base, margin_spread=0.06), 1e5)) == \
-        pytest.approx(0.06 / 12 * 0.5)  # fmt: skip
     req = 0.9 * 1.0 + 0.6 * 0.5 + 0.3 * 0.5 + 0.2 * 0.3
-    got = realism.charges(w, held, m, replace(base, margin_cushion=0.6, cushion_rate=0.1), 1e5)
-    assert float(got) == pytest.approx(0.1 * (req - 0.6))
-    steep = replace(base, margin_cushion=0.6, cushion_rate=0.1, cushion_curve=1.0)
-    over = req - 0.6
-    assert float(realism.charges(w, held, m, steep, 1e5)) == pytest.approx(0.1 * over + over**2)
-    under = replace(steep, margin_cushion=5.0)  # nothing above the cushion: no charge
+    cushion = replace(base, margin_cushion=0.6, cushion_rate=0.1)
+    assert float(realism.charges(w, held, m, cushion, 1e5)) == pytest.approx(0.1 * (req - 0.6))
+    under = replace(cushion, margin_cushion=5.0)  # nothing above the cushion: no charge
     assert float(realism.charges(w, held, m, under, 1e5)) == 0.0
     t = np.array([0.4, 0.0, 0.0, 0.2])  # dollars traded per $1 of equity
     impact = (0.02 * np.sqrt(t * 1e5 / 1e6) * t).sum()
@@ -93,19 +88,20 @@ def test_the_loss_subtracts_the_charges_and_needs_costs_and_market_data():
     stock = [(np.full(4, 0.01, np.float32), np.full(4, 0.05, np.float32))] * len(months)
     market = realism.align(months, _market_table(months))
     s = Settings("linear", costs="t.parquet", holdings_input=True, rebate=True,
-                 margin_spread=0.06, margin_cushion=0.6, impact=1.0)  # fmt: skip
+                 margin_rate=0.065, margin_cushion=0.6, impact=1.0)  # fmt: skip
     with pytest.raises(ValueError, match="market"):
         priced.pricing(months, s, "cpu", stock)
     with pytest.raises(ValueError, match="need costs"):
         priced.pricing(months, replace(s, costs=None, holdings_input=False), "cpu", None, market)
     p = priced.pricing(months, s, "cpu", stock, market)
-    plain = priced.pricing(months, replace(s, rebate=False, margin_spread=0.0, margin_cushion=0.0,
+    plain = priced.pricing(months, replace(s, rebate=False, margin_rate=0.0, margin_cushion=0.0,
                                            impact=0.0), "cpu", stock)  # fmt: skip
     pairs = [(torch.from_numpy(m.x), torch.from_numpy(m.r)) for m in months]
     model = Optimizer("linear", 2 + 2)
     p.book[1] = plain.book[1] = torch.tensor([1.0, -1.0, 0.5, 0.0])
-    w = torch.tensor([2.5, 0.0, 0.3, -1.0])
+    w = torch.tensor([2.5, 0.0, 0.3, -1.0])  # longs 2.8: margin interest on 1.8
     held = costs.carry(p.book[1] * (1 + pairs[1][1]), p.links[2])
+    assert float(realism.charges(w, held, p.market[2], s, 1e5)) > 0
     want = priced.net(model, pairs, plain, s, 2, w) - realism.charges(w, held, p.market[2], s, 1e5)
     assert float(priced.net(model, pairs, p, s, 2, w)) == pytest.approx(float(want), rel=1e-5)
 
@@ -121,7 +117,7 @@ def test_a_walk_with_every_charge_runs_and_dear_margin_shrinks_the_book():
     base = dict(window=12, first_epochs=20, start=date(2001, 6, 1), costs="t.parquet",
                 holdings_input=True, cold=True, lr=0.05)  # fmt: skip
     free, _, _ = walk(months, Settings("linear", **base), stock_costs=stock)
-    dear, log, _ = walk(months, Settings("linear", **base, rebate=True, margin_spread=200.0,
+    dear, log, _ = walk(months, Settings("linear", **base, rebate=True, margin_rate=200.0,
                                          margin_cushion=0.3, impact=1.0),
                         stock_costs=stock, market=market)  # fmt: skip
     assert np.isfinite(dear["weight"].to_numpy()).all() and log["rollbacks"].sum() == 0
@@ -141,9 +137,7 @@ def test_margin_at_the_brokers_rate_and_idle_cash_at_its_cash_rate():
     got = realism.charges(levered, levered, m, replace(base, margin_rate=0.065), 1e5)
     assert float(got) == pytest.approx((0.065 / 12 - 0.004) * 0.5)
     assert float(realism.charges(partial, partial, m, replace(base, margin_rate=0.065), 1e5)) == 0
-    # the broker's rate wins over a fixed spread; a T-bill above the rate charges nothing extra
-    both = replace(base, margin_rate=0.065, margin_spread=0.5)
-    assert float(realism.charges(levered, levered, m, both, 1e5)) == pytest.approx(float(got))
+    # a T-bill above the broker's rate charges nothing extra
     high = realism.Market(m.price, m.vol, m.adv, 0.006)
     rate = replace(base, margin_rate=0.065)
     assert float(realism.charges(levered, levered, high, rate, 1e5)) == 0
@@ -164,69 +158,6 @@ def test_the_alpaca_profile_sets_every_realism_term():
         realism.with_profile(Settings("linear"), "robinhood")
 
 
-def test_the_size_bound_holds_both_caps_and_cheap_shorts_lower_the_cap():
-    torch = pytest.importorskip("torch")
-    from types import SimpleNamespace  # noqa: PLC0415
-
-    from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
-    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
-
-    torch.manual_seed(0)
-    model = Optimizer("mlp", 3, blocks=1, hidden=8, sized=True)
-    for trial in range(20):
-        price = torch.rand(50) * 60 + 0.5
-        x = torch.randn(50, 3) * (1 + trial)
-        m = realism.Market(price, torch.full((50,), 0.02), torch.full((50,), 1e6), 0.004)
-        p = SimpleNamespace(bound=(1.25, 0.5), market=[m])
-        with torch.no_grad():
-            model.size[...] = 8.0  # sigmoid ~1: at the cap
-            w = realism.book(model, x, p, 0)
-        assert float(w.abs().sum()) <= 1.25 + 1e-5
-        assert float(realism.requirement(w, price)) <= 0.5 + 1e-5
-        assert float(w.abs().sum()) == pytest.approx(1.25, rel=1e-3) or \
-            float(realism.requirement(w, price)) == pytest.approx(0.5, rel=1e-3)  # fmt: skip
-    # all short in $1 stocks: $2.50 a share = 250% per dollar -> cap 0.5 / 2.5 = $0.20 of gross
-    cheap = SimpleNamespace(bound=(1.25, 0.5), market=[realism.Market(
-        torch.ones(4), torch.full((4,), 0.02), torch.full((4,), 1e6), 0.0)])  # fmt: skip
-    short = Optimizer("linear", 1, sized=True)
-    with torch.no_grad():
-        short.lam[...] = -1.0
-        short.size[...] = 20.0
-        assert float(realism.book(short, torch.ones(4, 1), cheap, 0).abs().sum()) == pytest.approx(
-            0.2, rel=1e-4)  # fmt: skip
-    plain = SimpleNamespace(bound=None, market=None)  # no bound: the model's output as it is
-    assert torch.equal(realism.book(short, torch.ones(4, 1), plain, 0),
-                       short(torch.ones(4, 1)))  # fmt: skip
-
-
-def test_the_size_bound_trains_both_parts_and_holds_on_new_months():
-    torch = pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
-    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
-    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
-
-    model = Optimizer("linear", 2, sized=True)
-    m = realism.Market(torch.tensor([3.0, 40.0]), torch.full((2,), 0.02), torch.full((2,), 1e6), 0)
-    p = type("P", (), {"bound": (1.25, 0.5), "market": [m]})()
-    w = realism.book(model, torch.tensor([[1.0, 0.5], [-0.3, 2.0]]), p, 0)
-    (w @ torch.tensor([0.1, -0.05])).backward()
-    assert model.size.grad is not None and model.lam.grad is not None
-    assert float(model.size.grad.abs()) > 0 and float(model.lam.grad.abs().sum()) > 0
-
-    months = _months(30)
-    prices = (1.0, 4.0, 10.0, 50.0)
-    stock = [(np.full(4, 0.001, np.float32), np.full(4, 0.003, np.float32))] * 30
-    market = realism.align(months, _market_table(months, prices))
-    s = Settings("linear", window=12, first_epochs=10, start=date(2001, 6, 1), costs="t.parquet",
-                 holdings_input=True, cold=True, lr=0.05, size_bound=True)  # fmt: skip
-    weights, log, _ = walk(months, s, stock_costs=stock, market=market)
-    for (_,), g in weights.group_by("date"):
-        w = torch.tensor(g["weight"].to_numpy(), dtype=torch.float32)
-        assert float(w.abs().sum()) <= 1.25 + 1e-5
-        assert float(realism.requirement(w, torch.tensor(prices))) <= 0.5 + 1e-5
-    assert log["rollbacks"].sum() == 0
-
-
 def test_the_gross_limit_is_charged_like_the_cushion():
     torch = pytest.importorskip("torch")
     from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
@@ -234,10 +165,10 @@ def test_the_gross_limit_is_charged_like_the_cushion():
 
     m = realism.Market(torch.full((2,), 50.0), torch.full((2,), 0.02), torch.full((2,), 1e6), 0)
     w = torch.tensor([1.0, -0.5])  # gross 1.5; requirement 0.3 x 1.5 = 0.45
-    s = Settings("linear", gross_limit=1.25, cushion_rate=0.1, cushion_curve=1.0)
-    assert float(realism.penalty(w, m, s)) == pytest.approx(0.1 * 0.25 + 0.25**2)
+    s = Settings("linear", gross_limit=1.25, cushion_rate=0.1)
+    assert float(realism.penalty(w, m, s)) == pytest.approx(0.1 * 0.25)
     both = replace(s, margin_cushion=0.4)  # 0.05 over the cushion too
-    want = 0.1 * 0.25 + 0.25**2 + 0.1 * 0.05 + 0.05**2
+    want = 0.1 * 0.25 + 0.1 * 0.05
     assert float(realism.penalty(w, m, both)) == pytest.approx(want, rel=1e-5)
     assert float(realism.charges(w, w, m, both, 1e5)) == pytest.approx(want, rel=1e-5)
 
@@ -252,14 +183,19 @@ def test_the_traded_months_penalty_is_its_books_and_trading_on_it_shrinks_the_bo
     stock = [(np.full(4, 0.001, np.float32), np.full(4, 0.003, np.float32))] * 30
     market = realism.align(months, _market_table(months))
     s = Settings("linear", costs="t.parquet", holdings_input=True, margin_cushion=0.5,
-                 gross_limit=1.25, cushion_rate=0.1)  # fmt: skip
+                 gross_limit=1.25, invest_floor=1.0, cushion_rate=0.1)  # fmt: skip
     p = priced.pricing(months, s, "cpu", stock, market)
     pairs = [(torch.from_numpy(m.x), torch.from_numpy(m.r)) for m in months]
     model = Optimizer("linear", 2 + 2)
     p.book[28] = torch.tensor([2.0, -1.0, 0.5, 0.0])
     w = realism.book(model, holdings.inputs(pairs, p, p.held(), 29), p, 29)
+    assert torch.equal(w, model(holdings.inputs(pairs, p, p.held(), 29)))  # the model's output
     assert float(priced.trade_penalty(model, pairs, p, s, 29)) == pytest.approx(
         float(realism.penalty(w, p.market[29], s)))  # fmt: skip
+    floor = replace(s, margin_cushion=0.0, gross_limit=0.0)  # the investment floor alone
+    short = torch.relu(1.0 - torch.relu(w).sum())  # longs below $1 of equity
+    assert float(priced.trade_penalty(model, pairs, p, floor, 29)) == pytest.approx(
+        float(0.1 * short))  # fmt: skip
     real = torch.tensor([0.1, 0.0, 0.0, -0.1])  # the real traded book wins over the table's
     w_real = realism.book(model, holdings.inputs(pairs, p, {28: real}, 29), p, 29)
     assert float(priced.trade_penalty(model, pairs, p, s, 29, real)) == pytest.approx(
@@ -306,40 +242,14 @@ def test_a_walk_can_start_from_cash_or_the_market_instead_of_its_own_guess():
     assert not np.allclose(one["cash"], one["market"])
 
 
-def test_the_margin_inputs_are_each_stocks_log_collateral_rates():
-    torch = pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer import holdings, priced, realism  # noqa: PLC0415
-    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
-
-    months = _months(30)
-    stock = [(np.full(4, 0.001, np.float32), np.full(4, 0.003, np.float32))] * 30
-    market = realism.align(months, _market_table(months))  # prices 1, 4, 10, 50
-    s = Settings("linear", costs="t.parquet", holdings_input=True, margin_input=True)
-    with pytest.raises(ValueError, match="margin_input"):
-        priced.pricing(months, replace(s, holdings_input=False), "cpu", stock, market)
-    p = priced.pricing(months, s, "cpu", stock, market)
-    pairs = [(torch.from_numpy(m.x), torch.from_numpy(m.r)) for m in months]
-    x = holdings.inputs(pairs, p, p.held(), 5)
-    assert x.shape[1] == 2 + 2 + 2  # traits, holding + spread, long + short rates
-    # longs: $1 -> 100%, $4 -> 50%, $10 / $50 -> 30%; shorts: 250%, 100%, 50%, 30%
-    longs, shorts = np.array([1.0, 0.5, 0.3, 0.3]), np.array([2.5, 1.0, 0.5, 0.3])
-    assert x[:, -2].tolist() == pytest.approx(np.log(longs / 0.3), rel=1e-5)
-    assert x[:, -1].tolist() == pytest.approx(np.log(shorts / 0.3), rel=1e-5)
-    base = dict(window=12, first_epochs=3, start=date(2001, 6, 1), costs="t.parquet",
-                holdings_input=True, cold=True)  # fmt: skip
-    w, log, _ = walk(months, Settings("linear", **base, margin_input=True), stock_costs=stock,
-                     market=market)  # fmt: skip
-    assert np.isfinite(w["weight"].to_numpy()).all() and log["rollbacks"].sum() == 0
-
-
 def test_the_investment_floor_charges_idle_cash_like_the_caps():
     torch = pytest.importorskip("torch")
     from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
     from portfolio_lab.research.optimizer.walk import Settings  # noqa: PLC0415
 
     m = realism.Market(torch.full((3,), 50.0), torch.full((3,), 0.02), torch.full((3,), 1e6), 0)
-    s = Settings("linear", invest_floor=1.0, cushion_rate=0.1, cushion_curve=1.0)
+    s = Settings("linear", invest_floor=1.0, cushion_rate=0.1)
     half = torch.tensor([0.3, 0.2, -0.4])  # longs 0.5: idle cash 0.5
-    assert float(realism.penalty(half, m, s)) == pytest.approx(0.1 * 0.5 + 0.5**2)
+    assert float(realism.penalty(half, m, s)) == pytest.approx(0.1 * 0.5)
     assert float(realism.penalty(torch.tensor([0.7, 0.4, -0.2]), m, s)) == 0.0  # longs 1.1
-    assert realism.on(s) and not realism.on(replace(s, invest_floor=0.0, cushion_curve=0.0))
+    assert realism.on(s) and not realism.on(replace(s, invest_floor=0.0))

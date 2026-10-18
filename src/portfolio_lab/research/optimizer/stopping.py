@@ -1,21 +1,22 @@
-"""Early stopping for each month's training (2026-10-15).
+"""Held-out months in each month's training, scored after every pass (2026-10-15).
 
-A fixed number of passes is wrong both ways: a calm month needs few passes from last month's
-model, a shock month more, and too many overfit (grid9: from a cold start the held-out loss
-bottoms near pass 15-20 and then rises while the book's size balloons). Instead, each month
-holds out a random block of ``holdout`` consecutive training months, trains on the rest one
-pass at a time and scores the block's loss after each pass. The score jumps around from pass
-to pass far more than its trend moves (grid9: +-2 in held-out Sharpe against a trend of ~0.1 a
-pass; run32 stopped on the first dip), so the rule reads a smoothed score, the mean over the
-last ``smooth`` passes: training stops once that has not improved for ``patience`` passes (at
-most ``most``), and the model and Adam go back to the last pass of the best smoothed window.
-The block moves every month, so over time every month is trained on.
+With ``watch`` (research.optimizer.walk) each month holds out ``holdout`` of its training
+months, a random block of consecutive months or (``scatter``) single months drawn anywhere,
+trains on the rest one pass at a time and scores the held-out months' loss after each pass.
+Every pass runs and the last is kept: the score curve is a reading of how training went, not a
+rule that acts on it (the walk logs it as ``held_curve``, and as ``held_loss`` its best mean
+over :data:`SMOOTH` consecutive passes). The held-out months move every month, so over time
+every month is trained on. :class:`Guard` undoes a pass that leaves the model broken.
 """
 
 import copy
 import math
 
 import numpy as np
+
+#: Consecutive passes the logged best held-out loss is averaged over (one pass's score jumps
+#: around far more than its trend moves; grid9).
+SMOOTH = 3
 
 
 def held_block(train: list[int], holdout: int, rng: np.random.Generator) -> tuple[list, list]:
@@ -45,45 +46,31 @@ def held_months(train: list[int], holdout: int, rng: np.random.Generator,
             [k for i, k in enumerate(train) if i in pick])  # fmt: skip
 
 
-def fit_stopped(  # noqa: PLR0913, PLR0917 - the rule's pieces
-    model, adam, one_pass, score, held: bool, most: int, patience: int, smooth: int = 3,
-    average=None, keep_last: bool = False,
-) -> tuple[list, int, float, list[float]]:  # fmt: skip
-    """Train by ``one_pass(p)`` until the smoothed ``score()`` stops falling (module docs).
+def best_smoothed(curve: list[float]) -> float:
+    """The lowest mean of :data:`SMOOTH` consecutive finite scores (``inf``: no such window)."""
+    best = math.inf
+    for p in range(len(curve)):
+        recent = [v for v in curve[max(p + 1 - SMOOTH, 0) : p + 1] if math.isfinite(v)]
+        value = sum(recent) / SMOOTH if len(recent) == SMOOTH else math.nan
+        if math.isfinite(value) and value < best:
+            best = value
+    return best
 
-    ``one_pass(p)`` runs pass ``p`` (0-based) and returns its losses; ``score()`` grades the
-    held-out block (lower is better); ``average`` (research.optimizer.averaging) is rolled back
-    with the model. Returns the kept pass's training losses, the passes kept, the best
-    smoothed score and every pass's raw score (without a block, ``held`` False: ``most``
-    passes, ``nan``, empty). ``keep_last``: score every pass but run all ``most`` and keep
-    the last (watching the curve without acting on it).
+
+def fit_watched(one_pass, score, held: bool, passes: int) -> tuple[list, int, float, list[float]]:
+    """Run ``one_pass(p)`` for every pass ``p`` (0-based); with ``held``, ``score()`` after each.
+
+    ``score()`` grades the held-out months (lower is better). Returns the last pass's training
+    losses, the passes run, :func:`best_smoothed` of the scores and every pass's score (without
+    held-out months, ``held`` False: ``nan`` and an empty curve).
     """
     losses: list = []
-    if not held:
-        for p in range(most):
-            losses = one_pass(p)
-        return losses, most, math.nan, []
-    best, best_at, kept, curve = math.inf, 0, None, []
-    for p in range(most):
+    curve: list[float] = []
+    for p in range(passes):
         losses = one_pass(p)
-        curve.append(score())
-        recent = [v for v in curve[-smooth:] if math.isfinite(v)]
-        value = sum(recent) / smooth if len(recent) == smooth else math.nan
-        if math.isfinite(value) and value < best:
-            best, best_at = value, p + 1
-            kept = (copy.deepcopy(model.state_dict()), copy.deepcopy(adam.state_dict()), losses,
-                    average.state() if average is not None else None)  # fmt: skip
-        elif not keep_last and p + 1 - max(best_at, smooth) >= patience:
-            break
-    if keep_last:
-        return losses, most, best, curve
-    if kept is None:  # never a finite smoothed score: keep the last pass
-        return losses, p + 1, math.nan, curve
-    model.load_state_dict(kept[0])
-    adam.load_state_dict(kept[1])
-    if average is not None:
-        average.load(kept[3])
-    return kept[2], best_at, best, curve
+        if held:
+            curve.append(score())
+    return losses, passes, best_smoothed(curve) if held else math.nan, curve
 
 
 class Guard:

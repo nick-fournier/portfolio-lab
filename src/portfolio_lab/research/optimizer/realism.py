@@ -8,34 +8,28 @@ return in the loss (research.optimizer.priced), off unless its setting is on:
   so each short dollar forgoes the month's T-bill: ``tbill * sum relu(-w)``.
 * margin interest: longs beyond equity are borrowed at the broker's rate; against the T-bill
   the loss already assumes, that costs the excess over it. ``margin_rate`` (a year): the
-  broker's rate, ``relu(margin_rate / 12 - tbill) * relu(sum relu(w) - 1)``; else
-  ``margin_spread`` (a year): a fixed spread over the T-bill.
+  broker's rate, ``relu(margin_rate / 12 - tbill) * relu(sum relu(w) - 1)``.
 * cash rate (``cash_rate``, a year; ``None``: the T-bill): equity not spent on longs earns the
   broker's cash rate, so it forgoes ``relu(tbill - cash_rate / 12) * relu(1 - sum relu(w))``.
 * maintenance margin (``margin_cushion``): the collateral the broker requires, per dollar held,
   from Alpaca's price tables (longs: 100% under $2.50, 50% under $6, else 30%; shorts: under $5
   the larger of $2.50 a share and 100%, else the larger of $5 a share and 30%). Per-share
   requirements are per dollar too (``2.5 / price``), so no account size is needed. Requirement
-  above ``margin_cushion`` x equity, ``over``, is charged ``cushion_rate * over +
-  cushion_curve * over^2`` a month (2026-10-17: the square makes the charge steepen, so a small
-  breach stays cheap and a big confident one does not pay). ``gross_limit``: gross (sum |w|)
-  above it is charged the same way (2026-10-17: the user's 1.25x). ``invest_floor``: longs
-  below it (idle cash; at Alpaca short proceeds cannot fund longs) are charged the same way
-  (2026-10-17: the user wants the account fully invested).
+  above ``margin_cushion`` x equity, ``over``, is charged ``cushion_rate * over`` a month.
+  ``gross_limit``: gross (sum |w|) above it is charged the same way (2026-10-17: the user's
+  1.25x). ``invest_floor`` (the long-priority toggle): longs below it (idle cash; at Alpaca short
+  proceeds cannot fund longs) are charged the same way (2026-10-17: the user wants the account
+  fully invested).
 * the traded month (``trade_margin``, walk): the penalties above only shape the training
   months' books; the traded month's book, built after training, was never checked (curve1). Its
-  margin and gross penalty (:func:`penalty`) needs only today's prices and positions, no return,
-  so each training step adds it, and the model learns to keep the book it will trade inside.
+  penalty (:func:`penalty`: margin cushion, gross limit and, when set, the investment floor)
+  needs only today's prices and positions, no return, so each training step adds it, and the
+  model learns to keep the book it will trade inside.
 * market impact (``impact``, the constant K): trading t dollars per $1 of equity in a stock
   with daily volatility s and daily dollar volume V costs ``K * s * sqrt(t * equity / V) * t``
   (square-root law), on the dollars traded from the book held going in.
 
-Size bound (``size_bound``, 2026-10-17): the penalties only shape the books of the months the
-model trains on, so a new month's book could take any size (curve1: 0.9x to 13.8x at identical
-settings). With the bound the book is ``direction x size``: the model's weights scaled to $1 of
-gross, times ``sigmoid(model.size)`` times the cap, the smaller of ``gross_cap`` and the size
-at which the direction's maintenance requirement is ``margin_cap`` of equity. No book, on any
-month, can pass either; below the cap the loss still sets the size (:func:`book`).
+The book is the model's output as it is (:func:`book`): any size, limited only by these charges.
 
 :func:`align` reads what they need from the cost table (columns ``prc``, ``rvol_21d``, ``adv``
 and ``tbill``, the holding month's T-bill, monthly).
@@ -105,9 +99,7 @@ def with_profile(settings, name: str):
 
 def on(settings) -> bool:
     """Whether any realism term is switched on."""
-    return bool(settings.size_bound or settings.margin_input or settings.rebate
-                or settings.margin_spread
-                or settings.margin_rate or settings.cash_rate is not None
+    return bool(settings.rebate or settings.margin_rate or settings.cash_rate is not None
                 or settings.margin_cushion or settings.gross_limit or settings.invest_floor
                 or settings.impact)  # fmt: skip
 
@@ -158,20 +150,13 @@ def requirement(w: torch.Tensor, price: torch.Tensor) -> torch.Tensor:
     return (long_rate * torch.relu(w)).sum() + (short_rate * torch.relu(-w)).sum()
 
 
-def book(model, x: torch.Tensor, pricing, k: int) -> torch.Tensor:
-    """Month k's book from the model's output on inputs ``x``: bounded with ``pricing.bound``.
+def book(model, x: torch.Tensor, pricing=None, k: int | None = None) -> torch.Tensor:
+    """Month k's book: the model's output on inputs ``x``, as it is (module docs).
 
-    Without a bound (``pricing`` ``None`` or its ``bound`` ``None``): the model's output as it is.
+    Every book the walk forms, in training, scoring and trading, is formed here, so a rule on
+    its size has one place to go; ``pricing`` and ``k`` (the month) are not used today.
     """
-    raw = model(x)
-    bound = getattr(pricing, "bound", None)
-    if bound is None:
-        return raw
-    gross_cap, margin_cap = bound
-    direction = raw / raw.abs().sum().clamp(min=1e-12)
-    need = requirement(direction, pricing.market[k].price).clamp(min=1e-12)
-    cap = torch.clamp(margin_cap / need, max=gross_cap)
-    return direction * cap * torch.sigmoid(model.size)
+    return model(x)
 
 
 def penalty(w: torch.Tensor, market: Market, settings) -> torch.Tensor:
@@ -184,7 +169,7 @@ def penalty(w: torch.Tensor, market: Market, settings) -> torch.Tensor:
                  (torch.relu(settings.invest_floor - torch.relu(w).sum())
                   if settings.invest_floor else None)):  # fmt: skip
         if over is not None:
-            total = total + settings.cushion_rate * over + settings.cushion_curve * over * over
+            total = total + settings.cushion_rate * over
     return total
 
 
@@ -197,8 +182,6 @@ def charges(w: torch.Tensor, held: torch.Tensor, market: Market, settings,
     longs = torch.relu(w).sum()
     if settings.margin_rate:
         total = total + max(settings.margin_rate / 12 - market.tbill, 0.0) * torch.relu(longs - 1)
-    elif settings.margin_spread:
-        total = total + settings.margin_spread / 12 * torch.relu(longs - 1)
     if settings.cash_rate is not None:
         total = total + max(market.tbill - settings.cash_rate / 12, 0.0) * torch.relu(1 - longs)
     total = total + penalty(w, market, settings)
