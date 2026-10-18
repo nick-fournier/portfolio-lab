@@ -53,15 +53,24 @@ def inputs(source: list, pricing, book, k: int) -> torch.Tensor:
     return with_holdings(source, pricing.links, pricing.stock, book, k, pricing.borrow)
 
 
-def fill(weights, source: list, pricing, span: range) -> None:
-    """Months in ``span`` not yet in the pricing's book get ``weights``' output, in month order."""
+def fill(source: list, pricing, span: range) -> None:
+    """Months in ``span`` not yet in the pricing's book get cash: an all-zero book.
+
+    Each training step then writes the model's book for its month over the entry
+    (priced.loss), so a month's holding input and the book it trades from stay cash until the
+    month before it has been visited in training (or rolled, walk._roll). Only months not in the
+    table are filled, months never visited: in a cold month every month of the window (its table
+    starts empty); in a warm walk the first month's window and months skipped with ``only``
+    (2026-10-18: there too a never-visited month gets cash); a month in the table keeps its
+    entry. Until 2026-10-18 each got the model's output as it stood, in a cold month the
+    untrained model's: books 210-287x the account and ~97% short, the holding inputs and cost
+    bases of pass 1.
+    """
     if pricing.book is None:
         return
-    with torch.no_grad():
-        for k in span:
-            if k not in pricing.book:
-                x = inputs(source, pricing, pricing.held(), k)
-                pricing.book[k] = realism.book(weights, x, pricing, k)
+    for k in span:
+        if k not in pricing.book:
+            pricing.book[k] = source[k][0].new_zeros(len(source[k][0]))
 
 
 def pick(weights, data: list, pricing, last: torch.Tensor | None, t: int) -> np.ndarray:

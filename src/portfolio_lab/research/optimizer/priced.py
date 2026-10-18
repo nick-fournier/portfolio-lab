@@ -7,7 +7,9 @@ the book table keeps each month's weights as last written (a training step, a he
 the walk's real trade), and the month after trades from them. A month whose month before is not
 in the table holds cash going in, as its holding input (research.optimizer.holdings) says, and
 its trades are priced from cash: the window's first month after a cold start, whose table is
-cleared and filled from that month on (:func:`held_going_in`).
+cleared and filled from that month on (:func:`held_going_in`). The fill is cash too (an all-zero
+book, holdings.fill; 2026-10-18), so a month whose month before has not yet been visited in
+training also holds, and trades from, cash.
 """
 
 from dataclasses import dataclass
@@ -103,10 +105,11 @@ def held_going_in(model, data: list[Pair], pricing: Pricing, k: int,
     input makes (``holdings.with_holdings``: zeros), so a month trades from the book it is shown.
     Only the window's first month, ``lo``, can lack it: the walk fills the table from ``lo`` on,
     and a cold month (or a warm walk's first) starts from an empty table, so ``lo - 1`` is not in
-    it; a later warm month keeps ``lo - 1`` from the months before and trades from it. Until
-    2026-10-18 a month the table lacked was priced from the model's own weights for k-1, against
-    its cash holding input. Without a table: the model's own weights for month k-1. The first
-    month (k 0) starts in cash.
+    it; a later warm month keeps ``lo - 1`` from the months before and trades from it. The fill
+    is cash (all zeros, holdings.fill), so until training visits k-1 the book is cash here too.
+    Until 2026-10-18 a month the table lacked was priced from the model's own weights for k-1,
+    against its cash holding input. Without a table: the model's own weights for month k-1. The
+    first month (k 0) starts in cash.
     """
     if k == 0:
         return None

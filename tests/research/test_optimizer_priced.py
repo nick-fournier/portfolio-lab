@@ -62,7 +62,7 @@ def test_the_windows_first_month_trades_from_cash_as_its_holding_input_says():
     torch.manual_seed(0)
     model = Optimizer("linear", 2 + 2)
     lo, t = 3, 7  # a cold month: its table is filled from the window's first month on
-    holdings.fill(model, pairs, p, range(lo, t))
+    holdings.fill(pairs, p, range(lo, t))
     assert lo - 1 not in p.book
     assert holdings.inputs(pairs, p, p.held(), lo)[:, 2].abs().sum() == 0  # a cash holding input
     assert priced.held_going_in(model, pairs, p, lo) is None  # and trades from cash
@@ -83,6 +83,81 @@ def test_the_windows_first_month_trades_from_cash_as_its_holding_input_says():
     want = float((1 - from_cash(own)) ** 2)
     assert _held_loss(model, pairs, p, s, [lo]) == pytest.approx(want, rel=1e-5)  # held out
     assert float(priced.loss(model, pairs, p, s, lo).detach()) == pytest.approx(want, rel=1e-5)
+
+
+def test_a_cold_months_pass_one_trades_from_cash_until_the_month_before_is_visited(
+    monkeypatch,
+):
+    torch = pytest.importorskip("torch")
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from portfolio_lab.research.optimizer import holdings, priced  # noqa: PLC0415
+    from portfolio_lab.research.optimizer import walk as walking  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.clipping import Clipper  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+
+    months = _months(8)
+    stock = [(np.full(4, 0.01, np.float32), np.full(4, 0.05, np.float32))] * len(months)
+    s = walking.Settings("linear", costs="t.parquet", holdings_input=True)
+    p = priced.pricing(months, s, "cpu", stock)  # a cold month: its table starts empty
+    pairs = [(torch.from_numpy(m.x), torch.from_numpy(m.r)) for m in months]
+    torch.manual_seed(0)
+    model = Optimizer("linear", 2 + 2)
+    lo, t, order = 2, 7, [4, 2, 3, 5, 6]  # 4 before 3: its month before is not yet visited
+    steps, real = [], priced.loss
+
+    def watched(net, data, pricing, settings, k):  # each step: what it was shown and priced from
+        x = holdings.inputs(data, pricing, pricing.held(), k)
+        own = net(x).detach()  # the model's book for k as it stands
+        cash = (1 - priced.net(net, data, pricing, settings, k, own, {})) ** 2  # from cash
+        table = {j: w.clone() for j, w in pricing.book.items()}
+        held = priced.held_going_in(net, data, pricing, k)
+        value = real(net, data, pricing, settings, k)
+        assert torch.equal(pricing.book[k], own)  # the step writes the model's book over it
+        steps.append((k, table, x[:, 2].clone(), held, float(cash), float(value.detach()), own))
+        return value
+
+    monkeypatch.setattr(priced, "loss", watched)
+    walking._fit(
+        model, torch.optim.Adam(model.parameters()), pairs, list(range(lo, t)), 1, s,
+        SimpleNamespace(permutation=lambda months: list(order)), p, start_lr=0.01,
+        span=range(lo, t), clipper=Clipper(None), average=None, test=-1, hold_rng=None, raw=pairs,
+    )  # fmt: skip
+    assert [k for k, *_ in steps] == order
+    filled = steps[0][1]  # the table as the fill left it, before any step
+    assert sorted(filled) == list(range(lo, t))
+    assert all(torch.equal(w, torch.zeros(4)) for w in filled.values())  # cash, not the model's
+    written, visited = {}, []
+    for k, table, holding, held, cash, value, own in steps:
+        if k - 1 in written:  # the month before was visited: its book as that step wrote it
+            visited.append(k)
+            assert torch.equal(table[k - 1], written[k - 1])
+            want = holdings.holding(written[k - 1], pairs[k - 1][1], p.links[k], 4)
+            assert torch.allclose(holding, want) and float(holding.abs().sum()) > 0
+            assert torch.allclose(held, written[k - 1] * (1 + pairs[k - 1][1]))
+        else:  # not yet visited (2: before the window): a zero holding, priced from cash
+            assert float(holding.abs().sum()) == 0
+            assert held is None or float(held.abs().sum()) == 0
+            assert value == pytest.approx(cash, rel=1e-6)
+        written[k] = own
+    assert visited == [3, 5, 6]
+
+
+def test_fill_gives_cash_only_to_months_not_in_the_table():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import holdings, priced  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings  # noqa: PLC0415
+
+    months = _months(8)
+    stock = [(np.full(4, 0.01, np.float32), np.full(4, 0.05, np.float32))] * len(months)
+    p = priced.pricing(months, Settings("linear", costs="t.parquet", holdings_input=True),
+                       "cpu", stock)  # fmt: skip
+    pairs = [(torch.from_numpy(m.x), torch.from_numpy(m.r)) for m in months]
+    kept = torch.tensor([1.0, -1.0, 0.5, 0.0])
+    p.book[3] = kept  # a warm walk: a month already visited keeps its book
+    holdings.fill(pairs, p, range(2, 7))
+    assert p.book[3] is kept and sorted(p.book) == [2, 3, 4, 5, 6]
+    assert all(torch.equal(p.book[k], torch.zeros(4)) for k in (2, 4, 5, 6))
 
 
 def test_the_loss_stores_each_months_book_and_trades_from_the_month_before():

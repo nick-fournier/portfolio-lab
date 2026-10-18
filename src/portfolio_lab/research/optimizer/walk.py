@@ -9,12 +9,13 @@ the model's weights for month t's candidates are the portfolio held over the nex
 The recipe in use is ``cold`` with ``watch``. With ``cold`` (2026-10-15) every month trains a
 fresh model: the seed's same starting weights, a fresh Adam and average, ``first_epochs``
 passes from ``lr``. A cold month also starts from an empty book table, so the holdings inputs
-of its training months come from its own model, and its month order and held-out draw come
-from random streams of its own (the seed and the month), so a month's result does not depend
-on which months ran before it. Without ``cold`` (warm continuation, an option): the first test
-month trains a fresh model for ``first_epochs`` passes, and every later month continues from
-the previous month's model (and Adam's state) for ``warm_epochs`` passes from ``warm_lr``
-(``None``: ``lr``) over its own training months.
+of its training months come from its own model (cash until training reaches the month before),
+and its month order and held-out draw come from random streams of its own (the seed and the
+month), so a month's result does not depend on which months ran before it. Without ``cold``
+(warm continuation, an option): the first test month trains a fresh model for
+``first_epochs`` passes, and every later month continues from the previous month's model (and
+Adam's state) for ``warm_epochs`` passes from ``warm_lr`` (``None``: ``lr``) over its own
+training months.
 
 With ``watch`` (research.optimizer.stopping) ``holdout`` training months are held out each
 month and scored after every pass (``held_curve``; ``held_returns``: their returns at the last
@@ -36,10 +37,11 @@ size-dependent charges when any realism term is on (research.optimizer.realism; 
 
 With ``holdings_input`` (2026-10-15; needs ``costs``) each stock's row also gets its holding
 and spread (research.optimizer.holdings): in training, from a book table of each month's
-weights (filled in month order the first time a month enters the window, refreshed at every
-step); for the test month, from the walk's real holdings of the month before after its
-returns. A training month whose month before is not in the table (a cold month's first, the
-table filled from there) holds cash going in: a zero holding, and its trades priced from cash
+weights (cash, an all-zero book, the first time a month enters the window; the model's weights
+from its first training step on, refreshed at every step; holdings.fill); for the test month,
+from the walk's real holdings of the month before after its returns. A training month whose
+month before is not in the table (a cold month's first, the table filled from there) or not
+yet visited (still cash) holds cash going in: a zero holding, and its trades priced from cash
 (priced.held_going_in). ``borrow_input`` adds the stock's borrow fee as well. When the month
 before was not traded (the walk's first month, or with ``only`` a month after one not listed)
 the test month starts from ``start_book``: nothing (``cash``) or the market
@@ -330,13 +332,14 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     test month ``test``'s loss after each pass (``test`` < 0: none) and for the log the passes
     rolled back (:class:`.stopping.Guard`) and the held-out months' returns at the last score
     (month order). ``epochs`` passes, the rate following ``settings.schedule`` from
-    ``start_lr``. With a book (``holdings_input``) the ``span`` months not in it get the model's
-    weights first, in month order. The held-out months (``watch``) are drawn from ``hold_rng``;
-    they and the test month are scored on their real returns (``raw``), training alone sees
-    ``data``'s clipped ones. ``trade``: the traded month's penalty pieces (:func:`_pass`).
+    ``start_lr``. With a book (``holdings_input``) the ``span`` months not in it get cash first
+    (an all-zero book, holdings.fill), until a step or roll writes the model's. The held-out
+    months (``watch``) are drawn from ``hold_rng``; they and the test month are scored on their
+    real returns (``raw``), training alone sees ``data``'s clipped ones. ``trade``: the traded
+    month's penalty pieces (:func:`_pass`).
     """
     if pricing is not None:
-        holdings.fill(model, data, pricing, span)
+        holdings.fill(data, pricing, span)
     fit, block = (stopping.held_months(train, settings.holdout, hold_rng, settings.scatter)
                   if settings.watch else (train, []))  # fmt: skip
     tests: list[float] = []
@@ -431,7 +434,7 @@ def walk(
             model.load_state_dict(start_state)
             adam = torch.optim.Adam(model.parameters(), lr=settings.lr)
             average = Average(model, settings.average) if settings.average else None
-        if settings.cold:  # the month's own random streams; its model fills the book
+        if settings.cold:  # the month's own random streams; an empty book, filled with cash
             rng, hold_rng = _streams(settings, month.date)
             _ = pricing is not None and pricing.book is not None and pricing.book.clear()
         warm = trained and not settings.cold
