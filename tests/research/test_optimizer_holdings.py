@@ -95,6 +95,14 @@ def test_the_extra_columns_can_drop_the_holding_rank_the_spread_and_flag_hard_bo
     assert ranked[:, 3].tolist() == pytest.approx(
         [-0.125, -0.375, 0.375, 0.125]
     )  # 2nd, 1st, 4th, 3rd
+    held = holdings.with_holdings(*args, holdings.Columns(holding_rank=True))
+    # holding after returns: A long, B short, C and D not held (tied in the middle)
+    assert held[:, 2].tolist() == pytest.approx([0.375, -0.375, 0.0, 0.0])
+    assert torch.equal(held[:, [0, 1, 3, 4]], logs[:, [0, 1, 3, 4]])
+    ties = holdings.with_holdings(tensors, costs.links(months),
+                                  [(torch.tensor([0.004, 0.001, 0.004, 0.004]), fee)] * 3,
+                                  book, 2, True, holdings.Columns(spread_rank=True))  # fmt: skip
+    assert ties[:, 3].tolist() == pytest.approx([0.125, -0.375, 0.125, 0.125])  # ties share
     flagged = holdings.with_holdings(*args, holdings.Columns(borrow_flag=True))
     assert flagged[:, 4].tolist() == pytest.approx([-0.25, 0.75, -0.25, -0.25])  # centred flag
     assert torch.equal(flagged[:, :4], logs[:, :4])

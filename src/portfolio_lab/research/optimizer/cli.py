@@ -224,6 +224,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     spread_rank: Annotated[
         bool, typer.Option(help="--holdings-input: the spread as its rank in [-0.5, 0.5].")
     ] = False,
+    holding_rank: Annotated[
+        bool, typer.Option(help="--holdings-input: the holding as its rank in [-0.5, 0.5].")
+    ] = False,
     holdout: Annotated[int, typer.Option(help="Months held out each month (--watch).")] = 12,
     average: Annotated[
         float, typer.Option(help="Hold a moving average of the model (decay per step; 0: off).")
@@ -353,6 +356,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         warm_lr=warm_lr or None, compile=compile_model, winsor=winsor,
         holdings_input=holdings_input, borrow_input=borrow_input, holdout=holdout,
         holding_column=holding_column, borrow_flag=borrow_flag, spread_rank=spread_rank,
+        holding_rank=holding_rank,
         average=average, cold=cold, watch=watch, scatter=scatter,
         holdout_seed=None if holdout_seed < 0 else holdout_seed,
         only=tuple(date.fromisoformat(d) for d in only.split(",")) if only else None,

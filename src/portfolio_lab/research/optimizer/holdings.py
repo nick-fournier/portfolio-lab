@@ -33,9 +33,18 @@ def holding(before: torch.Tensor | None, r: torch.Tensor, link, n: int) -> torch
 
 
 def _ranked(v: torch.Tensor) -> torch.Tensor:
-    """``v``'s ranks across the month's stocks, spread evenly over [-0.5, 0.5] like the traits."""
-    order = torch.argsort(torch.argsort(v, stable=True), stable=True)
-    return (order.to(v.dtype) + 0.5) / len(v) - 0.5
+    """``v``'s ranks across the month's stocks, spread evenly over [-0.5, 0.5] like the traits.
+
+    Tied values share their average rank (2026-10-18: ~3% of a month's spreads tie, and every
+    stock not held ties at 0 in the holding column); until then ties were broken by row order.
+    """
+    ordered, order = torch.sort(v, stable=True)
+    _, group, counts = torch.unique_consecutive(ordered, return_inverse=True, return_counts=True)
+    ends = torch.cumsum(counts, 0)
+    middle = ((ends - counts) + (ends - 1)).to(v.dtype) / 2  # each tie group's average position
+    ranks = torch.empty_like(v)
+    ranks[order] = middle[group]
+    return (ranks + 0.5) / len(v) - 0.5
 
 
 class Columns(NamedTuple):
@@ -45,12 +54,15 @@ class Columns(NamedTuple):
     holds); ``spread_rank`` gives the spread as its rank across the month's stocks in
     [-0.5, 0.5], the traits' footing, instead of its log; ``borrow_flag`` gives the borrow column
     as a centred hard-to-borrow flag (fee above 100% a year: 1, else 0, minus the month's share
-    of 1s) instead of the log fee, whose large common level moved every stock's weight alike.
+    of 1s) instead of the log fee, whose large common level moved every stock's weight alike;
+    ``holding_rank`` gives the holding column as its rank in [-0.5, 0.5] (stocks not held share
+    the middle) instead of N h / sum |h|, unbounded for a concentrated book.
     """
 
     holding: bool = True
     borrow_flag: bool = False
     spread_rank: bool = False
+    holding_rank: bool = False
 
 
 #: The encoding used until 2026-10-18 (and the default): holding, log spread, log borrow fee.
@@ -64,13 +76,13 @@ def with_holdings(tensors: list, links: list, stock: list, book, k: int,
     ``book``: anything with ``get(month)``. The holding is :func:`holding`; the logs are
     clipped to [-3, 3]. ``columns``: other encodings (:class:`Columns`; default as above).
     """
-    holding_column, borrow_flag, spread_rank = columns
+    holding_column, borrow_flag, spread_rank, holding_rank = columns
     x = tensors[k][0]
     cols = [x]
     if holding_column:
         h = holding(book.get(k - 1), tensors[k - 1][1], links[k], len(x)) if k > 0 else \
             x.new_zeros(len(x))  # fmt: skip
-        cols.append(h[:, None])
+        cols.append((_ranked(h) if holding_rank else h)[:, None])
     spread = stock[k][0]
     cols.append((_ranked(spread) if spread_rank else
                  torch.log(spread / SPREAD_REF).clamp(-3, 3))[:, None])  # fmt: skip
@@ -92,6 +104,7 @@ def inputs(source: list, pricing, book, k: int) -> torch.Tensor:
         getattr(pricing, "holding_column", True),
         getattr(pricing, "borrow_flag", False),
         getattr(pricing, "spread_rank", False),
+        getattr(pricing, "holding_rank", False),
     )
     return with_holdings(source, pricing.links, pricing.stock, book, k, pricing.borrow, columns)
 

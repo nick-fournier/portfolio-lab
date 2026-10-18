@@ -138,9 +138,10 @@ class Settings:
         price_gross: Margin interest, idle cash and impact in the loss are priced on the book
             scaled to this gross and charged per dollar of the book's gross (0: at the book's
             own size); realism.charges. Usually ``trade_gross``.
-        holding_column / borrow_flag / spread_rank: The extra columns' encodings (2026-10-18;
-            holdings.with_holdings): leave the holding column out; the borrow fee as a centred
-            hard-to-borrow flag; the spread as its rank in [-0.5, 0.5].
+        holding_column / borrow_flag / spread_rank / holding_rank: The extra columns'
+            encodings (2026-10-18; holdings.with_holdings): leave the holding column out; the
+            borrow fee as a centred hard-to-borrow flag; the spread, or the holding, as its rank
+            in [-0.5, 0.5].
     """
 
     model: str
@@ -187,6 +188,7 @@ class Settings:
     holding_column: bool = True
     borrow_flag: bool = False
     spread_rank: bool = False
+    holding_rank: bool = False
 
 
 #: Settings removed in the cleanup of 2026-10-18, each with the value that left it off: an

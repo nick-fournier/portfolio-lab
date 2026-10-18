@@ -33,7 +33,8 @@ class Pricing:
         book: The training book table with ``holdings_input`` (walk docs), else ``None``.
         borrow: Feed the borrow fee too (``borrow_input``).
         market: Each month's :class:`.realism.Market` with any realism term on, else ``None``.
-        holding_column / borrow_flag / spread_rank: How the extra columns are encoded
+        holding_column / borrow_flag / spread_rank / holding_rank: How the extra columns are
+            encoded
             (holdings.with_holdings).
     """
 
@@ -45,6 +46,7 @@ class Pricing:
     holding_column: bool = True
     borrow_flag: bool = False
     spread_rank: bool = False
+    holding_rank: bool = False
 
     def held(self) -> "Held | None":
         """The book a month's holdings come from: the book table, read-only."""
@@ -68,8 +70,12 @@ def _check_sizes(settings, market: list | None) -> None:
     The trade-time size and the size the loss prices at need costs and market data; the
     encodings need the columns they shape.
     """
-    if (not settings.holding_column or settings.spread_rank) and not settings.holdings_input:
-        raise ValueError("holding_column and spread_rank shape the holdings_input columns")
+    shaped = not settings.holding_column or settings.spread_rank or settings.holding_rank
+    if shaped and not settings.holdings_input:
+        raise ValueError("holding_column, holding_rank and spread_rank shape the holdings_input"
+                         " columns")  # fmt: skip
+    if settings.holding_rank and not settings.holding_column:
+        raise ValueError("holding_rank needs the holding column")
     if settings.borrow_flag and not settings.borrow_input:
         raise ValueError("borrow_flag shapes the borrow_input column")
     if settings.trade_gross < 0 or settings.trade_collateral < 0 or settings.price_gross < 0:
@@ -120,7 +126,7 @@ def pricing(months: list[Month], settings, device: str,
     ]  # fmt: skip
     return Pricing(costs.links(months, device), stock, {} if settings.holdings_input else None,
                    settings.borrow_input, moved, settings.holding_column, settings.borrow_flag,
-                   settings.spread_rank)  # fmt: skip
+                   settings.spread_rank, settings.holding_rank)  # fmt: skip
 
 
 def held_going_in(model, data: list[Pair], pricing: Pricing, k: int,
