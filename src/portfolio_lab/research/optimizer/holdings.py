@@ -7,6 +7,8 @@ walk uses :func:`inputs`, :func:`fill`, :func:`pick` and :func:`remember` with i
 (``links``, ``stock`` and ``book``; research.optimizer.priced).
 """
 
+from typing import NamedTuple
+
 import numpy as np
 import torch
 
@@ -30,19 +32,55 @@ def holding(before: torch.Tensor | None, r: torch.Tensor, link, n: int) -> torch
     return h * n / h.abs().sum().clamp(min=1e-12)
 
 
+def _ranked(v: torch.Tensor) -> torch.Tensor:
+    """``v``'s ranks across the month's stocks, spread evenly over [-0.5, 0.5] like the traits."""
+    order = torch.argsort(torch.argsort(v, stable=True), stable=True)
+    return (order.to(v.dtype) + 0.5) / len(v) - 0.5
+
+
+class Columns(NamedTuple):
+    """How the extra columns are encoded (2026-10-18; :func:`with_holdings`).
+
+    ``holding`` False leaves the holding column out (the month is still priced from the book it
+    holds); ``spread_rank`` gives the spread as its rank across the month's stocks in
+    [-0.5, 0.5], the traits' footing, instead of its log; ``borrow_flag`` gives the borrow column
+    as a centred hard-to-borrow flag (fee above 100% a year: 1, else 0, minus the month's share
+    of 1s) instead of the log fee, whose large common level moved every stock's weight alike.
+    """
+
+    holding: bool = True
+    borrow_flag: bool = False
+    spread_rank: bool = False
+
+
+#: The encoding used until 2026-10-18 (and the default): holding, log spread, log borrow fee.
+LOGS = Columns()
+
+
 def with_holdings(tensors: list, links: list, stock: list, book, k: int,
-                  borrow: bool = False) -> torch.Tensor:  # fmt: skip
+                  borrow: bool = False, columns: Columns = LOGS) -> torch.Tensor:  # fmt: skip
     """Month k's traits plus holding, log spread and (``borrow``) log borrow fee columns.
 
     ``book``: anything with ``get(month)``. The holding is :func:`holding`; the logs are
-    clipped to [-3, 3].
+    clipped to [-3, 3]. ``columns``: other encodings (:class:`Columns`; default as above).
     """
+    holding_column, borrow_flag, spread_rank = columns
     x = tensors[k][0]
-    h = holding(book.get(k - 1), tensors[k - 1][1], links[k], len(x)) if k > 0 else \
-        x.new_zeros(len(x))  # fmt: skip
-    cols = [x, h[:, None], torch.log(stock[k][0] / SPREAD_REF).clamp(-3, 3)[:, None]]
+    cols = [x]
+    if holding_column:
+        h = holding(book.get(k - 1), tensors[k - 1][1], links[k], len(x)) if k > 0 else \
+            x.new_zeros(len(x))  # fmt: skip
+        cols.append(h[:, None])
+    spread = stock[k][0]
+    cols.append((_ranked(spread) if spread_rank else
+                 torch.log(spread / SPREAD_REF).clamp(-3, 3))[:, None])  # fmt: skip
     if borrow:
-        cols.append(torch.log(stock[k][1] / FEE_REF).clamp(-3, 3)[:, None])
+        fee = stock[k][1]
+        if borrow_flag:
+            hard = (fee > 1.0).to(x.dtype)
+            cols.append((hard - hard.mean())[:, None])
+        else:
+            cols.append(torch.log(fee / FEE_REF).clamp(-3, 3)[:, None])
     return torch.cat(cols, dim=1)
 
 
@@ -50,7 +88,12 @@ def inputs(source: list, pricing, book, k: int) -> torch.Tensor:
     """Month k's model inputs: its traits, plus holding and spread columns with a ``book``."""
     if pricing is None or book is None:
         return source[k][0]
-    return with_holdings(source, pricing.links, pricing.stock, book, k, pricing.borrow)
+    columns = Columns(
+        getattr(pricing, "holding_column", True),
+        getattr(pricing, "borrow_flag", False),
+        getattr(pricing, "spread_rank", False),
+    )
+    return with_holdings(source, pricing.links, pricing.stock, book, k, pricing.borrow, columns)
 
 
 def fill(source: list, pricing, span: range) -> None:

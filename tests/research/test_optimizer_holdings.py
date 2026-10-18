@@ -70,3 +70,52 @@ def test_walk_holdings_input_feeds_the_real_book_to_the_test_month_and_needs_cos
     got = holdings.pick(lambda x: x[:, 2], tensors, pricing, last, 13)
     want = holdings.holding(last, tensors[12][1], pricing.links[13], 4)
     assert got.tolist() == pytest.approx(want.tolist())
+
+
+def test_the_extra_columns_can_drop_the_holding_rank_the_spread_and_flag_hard_borrows():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import costs, holdings  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    x = np.zeros((4, 2), np.float32)
+    months = [data.Month(date(2000, k + 1, 1), list("ABCD"), x, np.full(4, 0.01, np.float32))
+              for k in range(3)]  # fmt: skip
+    tensors = [(torch.from_numpy(m.x), torch.from_numpy(m.r)) for m in months]
+    spread = torch.tensor([0.004, 0.001, 0.02, 0.008])
+    fee = torch.tensor([0.0, 12.0, 0.0, 0.0])  # B is hard to borrow
+    stock = [(spread, fee)] * 3
+    book = {1: torch.tensor([0.5, -0.5, 0.0, 0.0])}
+    args = (tensors, costs.links(months), stock, book, 2, True)
+    logs = holdings.with_holdings(*args)
+    assert logs.shape == (4, 5)  # 2 traits + holding + log spread + log fee
+    assert torch.equal(holdings.with_holdings(*args, holdings.LOGS), logs)  # the default
+    same = holdings.with_holdings(*args, holdings.Columns(holding=False))
+    assert same.shape == (4, 4) and torch.equal(same, logs[:, [0, 1, 3, 4]])  # holding left out
+    ranked = holdings.with_holdings(*args, holdings.Columns(spread_rank=True))
+    assert ranked[:, 3].tolist() == pytest.approx(
+        [-0.125, -0.375, 0.375, 0.125]
+    )  # 2nd, 1st, 4th, 3rd
+    flagged = holdings.with_holdings(*args, holdings.Columns(borrow_flag=True))
+    assert flagged[:, 4].tolist() == pytest.approx([-0.25, 0.75, -0.25, -0.25])  # centred flag
+    assert torch.equal(flagged[:, :4], logs[:, :4])
+    # the walk builds the model one column narrower without the holding column, and checks
+    rng = np.random.default_rng(3)
+    walk_months = [
+        data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCD"),
+                   rng.uniform(-0.5, 0.5, (4, 2)).astype(np.float32),
+                   rng.normal(0.01, 0.05, 4).astype(np.float32))
+        for k in range(14)
+    ]  # fmt: skip
+    costs_ = [(rng.uniform(0.001, 0.02, 4).astype(np.float32), np.full(4, 0.05, np.float32))] * 14
+    base = Settings("linear", window=12, first_epochs=2, start=date(2000, 1, 1),
+                    costs="t.parquet", holdings_input=True, holding_column=False)  # fmt: skip
+    _, _, model = walk(walk_months, base, stock_costs=costs_)
+    assert model(torch.zeros(4, 3)).shape == (4,)  # 2 traits + spread
+    with pytest.raises(ValueError, match="borrow_flag"):
+        walk(walk_months, Settings("linear", window=12, start=date(2000, 1, 1),
+                                   costs="t.parquet", holdings_input=True, borrow_flag=True),
+             stock_costs=costs_)  # fmt: skip
+    with pytest.raises(ValueError, match="spread_rank"):
+        walk(walk_months, Settings("linear", window=12, start=date(2000, 1, 1),
+                                   costs="t.parquet", spread_rank=True),
+             stock_costs=costs_)  # fmt: skip

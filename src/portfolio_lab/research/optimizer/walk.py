@@ -138,6 +138,9 @@ class Settings:
         price_gross: Margin interest, idle cash and impact in the loss are priced on the book
             scaled to this gross and charged per dollar of the book's gross (0: at the book's
             own size); realism.charges. Usually ``trade_gross``.
+        holding_column / borrow_flag / spread_rank: The extra columns' encodings (2026-10-18;
+            holdings.with_holdings): leave the holding column out; the borrow fee as a centred
+            hard-to-borrow flag; the spread as its rank in [-0.5, 0.5].
     """
 
     model: str
@@ -181,6 +184,9 @@ class Settings:
     trade_gross: float = 0.0
     trade_collateral: float = 0.5
     price_gross: float = 0.0
+    holding_column: bool = True
+    borrow_flag: bool = False
+    spread_rank: bool = False
 
 
 #: Settings removed in the cleanup of 2026-10-18, each with the value that left it off: an
@@ -381,7 +387,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
 def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, torch.optim.Adam]:
     """A freshly initialized model and its Adam; the holdings inputs add their columns."""
     torch.manual_seed(settings.seed)
-    extra = 2 * settings.holdings_input + settings.borrow_input
+    extra = settings.holdings_input * (1 + settings.holding_column) + settings.borrow_input
     model = Optimizer(settings.model, width + extra, settings.blocks, settings.hidden,
                       settings.fast_attention)  # fmt: skip
     model.to(device)
