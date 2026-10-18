@@ -220,7 +220,7 @@ def test_pricing_refuses_a_traded_month_charge_or_start_book_that_cannot_work():
 
 def test_loss_gross_takes_the_loss_on_the_sized_book_with_a_chosen_risk_aversion():
     torch = pytest.importorskip("torch")
-    from portfolio_lab.research.optimizer import priced, realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer import holdings, priced, realism  # noqa: PLC0415
     from portfolio_lab.research.optimizer.walk import Settings  # noqa: PLC0415
 
     rng = np.random.default_rng(5)
@@ -270,11 +270,16 @@ def test_loss_gross_takes_the_loss_on_the_sized_book_with_a_chosen_risk_aversion
     pricing2.book[0] = torch.zeros(4)
     model.zero_grad()
     total = priced.loss(net, tensors, pricing2, anchored, 1)
-    own = float(net(torch.cat([tensors[1][0], torch.zeros(4, 2)], dim=1)).abs().sum())
+
+    def own_gross():  # the model's own book on month 1's real inputs (traits + holdings columns)
+        with torch.no_grad():
+            return float(net(holdings.inputs(tensors, pricing2, pricing2.held(), 1)).abs().sum())
+
+    own = own_gross()
     plain_loss = float(priced.loss(net, tensors, pricing, sized, 1))
     assert float(total) == pytest.approx(plain_loss + 0.5 * np.log(own) ** 2, rel=1e-4)
     total.backward()
     model.weight.data -= 1e-3 * model.weight.grad  # one small step down the gradient
-    assert float(net(torch.cat([tensors[1][0], torch.zeros(4, 2)], dim=1)).abs().sum()) < own
+    assert own_gross() < own
     with pytest.raises(ValueError, match="size_anchor"):
         priced.pricing(months, replace(base, size_anchor=0.5), "cpu", stock, market)
