@@ -1,7 +1,11 @@
 """Class 3 optimizer: the commands' checks and months, the months cache's key, old settings."""
 
+import json
 import re
+import shlex
+from dataclasses import fields
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 
 import polars as pl
@@ -10,6 +14,55 @@ from typer.testing import CliRunner
 
 from portfolio_lab.research.optimizer import cli
 from portfolio_lab.research.optimizer.universe import NO_FLOORS
+
+#: The head run's settings.json, as the walk wrote it (cubevm: class3-runs/ret/run/seed-0).
+HEAD_SETTINGS = Path(__file__).resolve().parents[1] / "fixtures" / "class3_head_settings.json"
+#: The head run's command line (its start and end aside).
+HEAD = shlex.split(
+    "--model transformer --blocks 10 --schedule cosine --lr 3e-4 --lr-min 1e-5 "
+    "--fast-attention --compile --precision high --clip 40 --average 0.998 --inputs paper "
+    "--first-epochs 40 --window 120 --cold --watch --winsor 0.01 --holdout 12 --scatter "
+    "--stock-drop 0.2 --no-blank-checks --costs class3-runs/costs6.parquet --holdings-input "
+    "--borrow-input --profile alpaca --trade-margin --start-book market"
+)
+
+
+def _text(result) -> str:
+    """A command's output with rich's colors, box and line breaks out."""
+    plain = re.sub(r"[│╭╮╰╯─]", " ", re.sub(r"\x1b\[[0-9;]*m", "", result.output))
+    return " ".join(plain.split())
+
+
+def _walked(tmp_path, monkeypatch, *flags: str) -> tuple:
+    """What ``plab optimizer walk`` hands its one seed's worker, with no months built or run.
+
+    (table, run, settings, device, threads, precision, inputs, last, floors), as ``_walk_one``
+    takes them.
+    """
+    calls = []
+
+    class Pool:  # the seed workers' process pool, taking the work without doing it
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def submit(self, fn, *args):
+            calls.append(args)
+            return SimpleNamespace(result=lambda: "walked")
+
+    monkeypatch.setattr(cli, "_months", lambda *args: [])
+    monkeypatch.setattr("concurrent.futures.ProcessPoolExecutor", Pool)
+    result = CliRunner().invoke(cli.optimizer_app, [
+        "walk", "--table", str(tmp_path / "t.parquet"), "--out", str(tmp_path / "w"), *flags,
+    ])  # fmt: skip
+    assert result.exit_code == 0, result.output
+    (args,) = calls
+    return args
 
 
 def test_months_cache_key_changes_with_the_inputs_floors_and_drop_list(tmp_path):
@@ -45,10 +98,56 @@ def test_walk_refuses_loss_options_without_costs(tmp_path):
     ):
         result = CliRunner().invoke(cli.optimizer_app, base + extra)
         assert result.exit_code == 2, result.output
-        plain = re.sub(r"[│╭╮╰╯─]", " ", re.sub(r"\x1b\[[0-9;]*m", "", result.output))
-        text = " ".join(plain.split())  # rich's colors, box and line breaks out
+        text = _text(result)
         assert f"--costs (the per-stock cost table) is needed for {extra[0]}" in text, text
     assert not (tmp_path / "w").exists()  # refused before any work
+
+
+def test_a_realism_flag_given_beats_the_profile_which_fills_the_rest(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
+
+    alpaca = ["--model", "linear", "--costs", "c.parquet", "--profile", "alpaca"]
+    for flags, want in (
+        (["--gross-limit", "0"], {"gross_limit": 0.0}),  # an explicit 0 is not "not given"
+        (["--margin-rate", "0.08"], {"margin_rate": 0.08}),
+        (["--cash-rate", "-1"], {"cash_rate": None}),  # the T-bill, given
+        (["--no-rebate"], {"rebate": False}),
+    ):
+        s = _walked(tmp_path, monkeypatch, *alpaca, *flags)[2]
+        assert {k: getattr(s, k) for k in realism.ALPACA} == realism.ALPACA | want, flags
+
+
+def test_no_profile_leaves_the_settings_defaults(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import walk  # noqa: PLC0415
+
+    for extra in ([], ["--profile", "none"]):
+        settings = _walked(tmp_path, monkeypatch, "--model", "linear", *extra)[2]
+        assert settings == walk.Settings("linear"), extra
+
+
+def test_an_unknown_profile_is_refused(tmp_path):
+    pytest.importorskip("torch")
+    result = CliRunner().invoke(cli.optimizer_app, [
+        "walk", "--table", str(tmp_path / "t.parquet"), "--out", str(tmp_path / "w"),
+        "--model", "linear", "--costs", "c.parquet", "--profile", "robinhood",
+    ])  # fmt: skip
+    assert result.exit_code == 2, result.output
+    assert "profile must be none or one of ['alpaca'], not 'robinhood'" in _text(result)
+
+
+def test_the_head_command_line_rebuilds_the_head_runs_settings(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import walk  # noqa: PLC0415
+
+    meta = json.loads(HEAD_SETTINGS.read_text())
+    args = _walked(tmp_path, monkeypatch, *HEAD)
+    got, want = args[2], walk.settings_from(meta)
+    differ = {f.name for f in fields(want) if getattr(got, f.name) != getattr(want, f.name)}
+    assert differ == {"start", "costs"}  # both from the command, not the recipe
+    assert (got.start, got.costs) == (date(2003, 12, 31), "class3-runs/costs6.parquet")
+    assert (args[5], args[6], args[8]) == ("high", meta["inputs"], tuple(meta["floors"]))
 
 
 def test_ridge_and_signal_build_their_months_like_a_walk(tmp_path, monkeypatch):

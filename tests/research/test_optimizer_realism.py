@@ -156,6 +156,12 @@ def test_the_alpaca_profile_sets_every_realism_term():
     assert {k: getattr(s, k) for k in realism.ALPACA} == realism.ALPACA
     with pytest.raises(ValueError, match="profile"):
         realism.with_profile(Settings("linear"), "robinhood")
+    # the terms given explicitly stay, 0 too; the profile fills the rest; none: no profile
+    given = Settings("linear", gross_limit=0.0, margin_rate=0.08)
+    kept = realism.with_profile(given, "alpaca", keep={"gross_limit", "margin_rate"})
+    assert {k: getattr(kept, k) for k in realism.ALPACA} == realism.ALPACA | {
+        "gross_limit": 0.0, "margin_rate": 0.08}  # fmt: skip
+    assert realism.with_profile(given, "none") == realism.with_profile(given, "") == given
 
 
 def test_the_gross_limit_is_charged_like_the_cushion():

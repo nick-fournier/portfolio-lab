@@ -241,17 +241,19 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         bool, typer.Option(help="Leave blank-check shells (SIC 6770) out of the universe.")
     ] = False,
     rebate: Annotated[
-        bool, typer.Option(help="Loss: short dollars forgo the T-bill (retail; --costs).")
-    ] = False,
+        bool | None, typer.Option(help="Loss: short dollars forgo the T-bill (retail; --costs).")
+    ] = None,
     margin_cushion: Annotated[
-        float, typer.Option(help="Loss: maintenance requirement allowed, share of equity.")
-    ] = 0.0,
+        float | None, typer.Option(help="Loss: maintenance requirement allowed, share of equity.")
+    ] = None,
     cushion_rate: Annotated[
-        float, typer.Option(help="Loss: charge a month per $ above the cushion, limit or floor.")
-    ] = 0.10,
+        float | None,
+        typer.Option(help="Loss: charge a month per $ above the cushion, limit or floor (0.10)."),
+    ] = None,
     gross_limit: Annotated[
-        float, typer.Option(help="Loss: gross allowed before it is charged like the cushion.")
-    ] = 0.0,
+        float | None,
+        typer.Option(help="Loss: gross allowed before it is charged like the cushion."),
+    ] = None,
     start_book: Annotated[
         str, typer.Option(help="First traded month starts from: guess, cash or market.")
     ] = "guess",
@@ -261,40 +263,71 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     trade_margin: Annotated[
         bool, typer.Option(help="Loss: also charge the traded month's margin, gross and floor.")
     ] = False,
-    impact: Annotated[float, typer.Option(help="Loss: square-root impact constant K.")] = 0.0,
-    equity: Annotated[float, typer.Option(help="Account size in dollars (impact).")] = 100_000.0,
+    impact: Annotated[
+        float | None, typer.Option(help="Loss: square-root impact constant K.")
+    ] = None,
+    equity: Annotated[
+        float | None, typer.Option(help="Account size in dollars (impact; 100,000).")
+    ] = None,
     margin_rate: Annotated[
-        float, typer.Option(help="Loss: the broker's margin rate a year (minus the T-bill).")
-    ] = 0.0,
+        float | None, typer.Option(help="Loss: the broker's margin rate a year (minus the T-bill).")
+    ] = None,
     cash_rate: Annotated[
-        float, typer.Option(help="Loss: idle cash's rate a year (-1: the T-bill).")
-    ] = -1.0,
+        float | None,
+        typer.Option(help="Loss: idle cash's rate a year (-1: the T-bill, the default)."),
+    ] = None,
     profile: Annotated[
-        str, typer.Option(help="Account profile setting the realism terms: alpaca (or none).")
-    ] = "",
+        str,
+        typer.Option(help="Account profile filling the realism flags not given: alpaca or none."),
+    ] = "none",
 ) -> None:
     """Walk a model forward, one run per seed, and save each seed's monthly portfolios.
 
     Seeds run ``jobs`` at a time in separate processes: one walk takes small steps (one month
     each) and leaves the GPU mostly idle, so several share it. With more than one seed the
     seeds' portfolios are also averaged (the paper's 10-seed average). The loss options that
-    need the per-stock cost table are refused without ``--costs``.
+    need the per-stock cost table are refused without ``--costs``. A realism flag given wins (0
+    too); one left out takes the profile's value (``--profile``), else the setting's default
+    (``walk.Settings``: off, the T-bill for cash, a 0.10 charge, $100,000).
     """
     _need_costs(costs, {
         "--holdings-input": holdings_input, "--borrow-input": borrow_input,
-        "--profile": bool(profile), "--rebate": rebate, "--margin-rate": bool(margin_rate),
-        "--cash-rate": cash_rate >= 0, "--margin-cushion": bool(margin_cushion),
-        "--gross-limit": bool(gross_limit), "--invest-floor": bool(invest_floor),
-        "--impact": bool(impact), "--trade-margin": trade_margin,
-        "--start-book": start_book != "guess",
+        "--profile": profile not in ("", "none"), "--rebate": bool(rebate),
+        "--margin-rate": bool(margin_rate), "--cash-rate": cash_rate is not None and cash_rate >= 0,
+        "--margin-cushion": bool(margin_cushion), "--gross-limit": bool(gross_limit),
+        "--invest-floor": bool(invest_floor), "--impact": bool(impact),
+        "--trade-margin": trade_margin, "--start-book": start_book != "guess",
     })  # fmt: skip
     import multiprocessing  # noqa: PLC0415
     import os  # noqa: PLC0415
     from concurrent.futures import ProcessPoolExecutor  # noqa: PLC0415
 
-    from portfolio_lab.research.optimizer import walk  # noqa: PLC0415
+    from portfolio_lab.research.optimizer import realism, walk  # noqa: PLC0415
 
+    given = {k: v for k, v in {
+        "rebate": rebate, "margin_rate": margin_rate, "margin_cushion": margin_cushion,
+        "cushion_rate": cushion_rate, "gross_limit": gross_limit, "impact": impact,
+        "equity": equity,
+    }.items() if v is not None}  # fmt: skip
+    if cash_rate is not None:
+        given["cash_rate"] = None if cash_rate < 0 else cash_rate
     picked = _seeds(seeds)
+    settings = walk.Settings(
+        model, blocks, hidden, window or None, first_epochs, warm_epochs, lr, picked[0],
+        date.fromisoformat(start), fast_attention=fast_attention, clip=_clip(clip),
+        costs=costs or None, schedule=schedule, lr_min=lr_min,
+        warm_lr=warm_lr or None, compile=compile_model, winsor=winsor,
+        holdings_input=holdings_input, borrow_input=borrow_input, holdout=holdout,
+        average=average, cold=cold, watch=watch, scatter=scatter,
+        holdout_seed=None if holdout_seed < 0 else holdout_seed,
+        only=tuple(date.fromisoformat(d) for d in only.split(",")) if only else None,
+        stock_drop=stock_drop, invest_floor=invest_floor, trade_margin=trade_margin,
+        start_book=start_book, **given,
+    )  # fmt: skip
+    try:
+        settings = realism.with_profile(settings, profile, keep=given)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="'--profile'") from e
     last = date.fromisoformat(end) if end else None
     floors = (min_price, min_adv, no_blank_checks)
     _months(table, inputs, floors)  # build the cache once first
@@ -302,28 +335,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     threads = max(1, (os.cpu_count() or 1) // min(jobs, len(picked)))
     with ProcessPoolExecutor(min(jobs, len(picked)), initializer=_die_with_parent,
                              mp_context=multiprocessing.get_context("spawn")) as pool_:  # fmt: skip
-        futures = []
-        for s, run in zip(picked, runs, strict=True):
-            settings = walk.Settings(
-                model, blocks, hidden, window or None, first_epochs, warm_epochs, lr, s,
-                date.fromisoformat(start), fast_attention=fast_attention, clip=_clip(clip),
-                costs=costs or None, schedule=schedule, lr_min=lr_min,
-                warm_lr=warm_lr or None, compile=compile_model, winsor=winsor,
-                holdings_input=holdings_input, borrow_input=borrow_input, holdout=holdout,
-                average=average, cold=cold, watch=watch, scatter=scatter,
-                holdout_seed=None if holdout_seed < 0 else holdout_seed,
-                only=tuple(date.fromisoformat(d) for d in only.split(",")) if only else None,
-                stock_drop=stock_drop, rebate=rebate, margin_rate=margin_rate,
-                cash_rate=None if cash_rate < 0 else cash_rate, margin_cushion=margin_cushion,
-                cushion_rate=cushion_rate, gross_limit=gross_limit, invest_floor=invest_floor,
-                trade_margin=trade_margin, start_book=start_book, impact=impact, equity=equity,
-            )  # fmt: skip
-            if profile:
-                from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
-
-                settings = realism.with_profile(settings, profile)
-            futures.append(pool_.submit(_walk_one, table, run, settings, device, threads,
-                                        precision, inputs, last, floors))  # fmt: skip
+        futures = [pool_.submit(_walk_one, table, run, replace(settings, seed=s), device, threads,
+                                precision, inputs, last, floors)
+                   for s, run in zip(picked, runs, strict=True)]  # fmt: skip
         for f in futures:
             typer.echo(f.result())
     if len(runs) > 1:

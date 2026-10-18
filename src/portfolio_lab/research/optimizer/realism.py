@@ -35,6 +35,7 @@ The book is the model's output as it is (:func:`book`): any size, limited only b
 and ``tbill``, the holding month's T-bill, monthly).
 """
 
+from collections.abc import Collection
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -46,11 +47,14 @@ from portfolio_lab.research.optimizer.data import Month
 #: Columns :func:`align` needs in the cost table.
 COLUMNS = ("prc", "rvol_21d", "adv", "tbill")
 #: The Alpaca account profile (2026-10-17; docs.alpaca.markets margin-and-short-selling, Alpaca
-#: high-yield cash): what the walk's ``--profile alpaca`` sets and the scorer charges. Easy-to-
-#: borrow shorts cost nothing (the cost table's borrow fee), hard-to-borrow ones are barred.
+#: high-yield cash): what the walk's ``--profile alpaca`` sets (the flags not given) and the
+#: scorer charges. Easy-to-borrow shorts cost nothing (the cost table's borrow fee), hard-to-
+#: borrow ones are barred.
 ALPACA = {"rebate": True, "margin_rate": 0.065, "cash_rate": 0.0356, "margin_cushion": 0.5,
           "gross_limit": 1.25, "cushion_rate": 0.10, "impact": 1.0,
           "equity": 100_000.0}  # fmt: skip
+#: Account profiles by name (the walk's ``--profile``; ``none``: no profile).
+PROFILES = {"alpaca": ALPACA}
 
 
 @dataclass(frozen=True)
@@ -89,12 +93,24 @@ def start_book(kind: str, market: Market | None, n: int) -> torch.Tensor | None:
     return mv / mv.sum()
 
 
-def with_profile(settings, name: str):
-    """``settings`` with an account profile's realism terms (``alpaca``)."""
-    profiles = {"alpaca": ALPACA}
-    if name not in profiles:
-        raise ValueError(f"profile must be one of {sorted(profiles)}, not {name!r}")
-    return replace(settings, **profiles[name])
+def with_profile(settings, name: str, keep: Collection[str] = ()):
+    """``settings`` with an account profile's realism terms, except the ones in ``keep``.
+
+    Args:
+        settings: A walk's settings.
+        name: A profile in :data:`PROFILES`, or ``none`` (or ``""``): no profile, ``settings``
+            as it is.
+        keep: Terms given explicitly (the walk's flags; 0 too): they stay as ``settings`` has
+            them, and the profile fills only the others.
+
+    Raises:
+        ValueError: ``name`` is not a profile.
+    """
+    if name in ("", "none"):
+        return settings
+    if name not in PROFILES:
+        raise ValueError(f"profile must be none or one of {sorted(PROFILES)}, not {name!r}")
+    return replace(settings, **{k: v for k, v in PROFILES[name].items() if k not in keep})
 
 
 def on(settings) -> bool:
