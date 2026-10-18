@@ -41,7 +41,8 @@ CLASS_1_KELLY: tuple[str, dict[str, Any]] = (
     {**CLASS_1[1], "objective": "kelly", "title": "Momentum + health filter, Kelly"},
 )
 #: Class 2 betting 16 times as hard as full Kelly (risk aversion 1/16), the best of 1 .. 1/64
-#: and 0 on the scratch hive 2005-2026 and a monthly walk-forward pick (#74).
+#: and 0 on the scratch hive 2005-2026 and a monthly walk-forward pick (#74). From its first
+#: trade in January 2000 its worst drop is 63%, against max-Sharpe's 38%.
 CLASS_2_KELLY: tuple[str, dict[str, Any]] = (
     "meanvar",
     {**CLASS_2[1], "objective": "kelly", "risk_aversion": 1 / 16, "title": "Linear model, Kelly"},

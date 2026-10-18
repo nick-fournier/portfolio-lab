@@ -10,6 +10,7 @@ expected returns; how hard to bet on them is the optimizer's risk aversion
 (``risk_aversion``), not a scale on the forecasts. Candidates without a forecast are left out.
 """
 
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -43,9 +44,14 @@ class LinearInputs:
         # month m's IC is known once its outcome is, at the next month's forecast
         self._ic = grade.grade_months(f.select("date", "symbol", "forecast", "actual"))
 
-    def first(self) -> date:
-        """The first month with forecasts."""
-        return self._dates[0]
+    def first(self) -> date | None:
+        """The first month whose forecasts are used: once :data:`MIN_IC_MONTHS` are graded.
+
+        Expected returns need the IC of months graded before the forecast's own (as in
+        :meth:`expected`), so earlier forecasts would leave the portfolio in cash.
+        """
+        graded = self._ic["date"].to_list()  # sorted
+        return next((d for d in self._dates if bisect_left(graded, d) >= MIN_IC_MONTHS), None)
 
     def _made(self, asof: date) -> date | None:
         made = [d for d in self._dates if d <= asof and asof - d <= MAX_AGE]

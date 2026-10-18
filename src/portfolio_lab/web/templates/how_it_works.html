@@ -46,7 +46,9 @@
     market impact that grows with trade size against the stock's volume. Uninvested cash
     earns the 3-month Treasury bill rate.</li>
   <li><b>From the start of the data.</b> Every backtest starts once there is a year of history
-    (January 1999) and is compared with funds anyone can buy over the same years.</li>
+    (January 1999; class 2 at the end of 1999, once its forecaster has had six months to fit
+    and six more to be graded) and is compared with funds anyone can buy over the same
+    years.</li>
 </ul>
 
 <h2>4. The two strategies</h2>
@@ -74,10 +76,13 @@
   the volatility and much deeper drops. Production used Kelly for twelve days in October
   2026.</p>
 <table>
-  <thead><tr><th>January 2004 to September 2026</th><th class="num">Per year</th><th class="num">Sharpe</th><th class="num">Worst drop</th></tr></thead>
+  <thead><tr><th>January 2000 to September 2026</th><th class="num">Per year</th><th class="num">Sharpe</th><th class="num">Worst drop</th></tr></thead>
   <tbody>
-    <tr><td>Momentum + health filter, Kelly</td><td class="num">26.2%</td><td class="num">0.84</td><td class="num">−41%</td></tr>
-    <tr><td>Linear model, Kelly</td><td class="num">27.6%</td><td class="num">0.88</td><td class="num">−39%</td></tr>
+    <tr><td>Momentum + health filter (class 1)</td><td class="num">17.9%</td><td class="num">0.86</td><td class="num">−34%</td></tr>
+    <tr><td>Linear model (class 2)</td><td class="num">19.3%</td><td class="num">0.86</td><td class="num">−38%</td></tr>
+    <tr><td>Momentum + health filter, Kelly</td><td class="num">20.9%</td><td class="num">0.74</td><td class="num">−66%</td></tr>
+    <tr><td>Linear model, Kelly</td><td class="num">22.6%</td><td class="num">0.78</td><td class="num">−63%</td></tr>
+    <tr><td>SPY</td><td class="num">8.2%</td><td class="num">0.51</td><td class="num">−55%</td></tr>
   </tbody>
 </table>
 <p>Before tax, after modeled trading costs. The <a href="/">overview</a> and

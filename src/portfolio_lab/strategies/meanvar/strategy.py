@@ -298,7 +298,7 @@ class MeanVar:
         return optimize(mu, prices, rf, objective, self.max_weight, self.risk_aversion, caps=caps)
 
     def first_decision(self) -> date | None:
-        """The first rebalance with inputs: the first forecast for ``expected="linear"``.
+        """The first rebalance with inputs: the first usable forecast for ``expected="linear"``.
 
         Earlier months would sit in cash, so backtests start here.
         """
