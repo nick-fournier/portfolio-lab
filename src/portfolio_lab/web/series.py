@@ -18,7 +18,7 @@ import polars as pl
 from portfolio_lab.backtest.engine import label as strategy_label
 from portfolio_lab.backtest.results import list_runs, load_run, runs_dir
 from portfolio_lab.core.paths import DataPaths
-from portfolio_lab.jobs.tasks import MODELS, run_label
+from portfolio_lab.jobs.models import KELLY_MODELS, MODELS, run_label
 from portfolio_lab.research.funds import CATEGORIES
 from portfolio_lab.strategies.base import create
 
@@ -85,8 +85,9 @@ def _live_runs(data_dir: Path) -> dict[str, Series]:
 
 
 def model_keys() -> set[str]:
-    """Series keys of the class 1 and 2 models (``jobs.tasks.MODELS``)."""
-    return {f"ours: {strategy_label(create(name, **params))}" for name, params in MODELS}
+    """Series keys drawn by default: the class 1 and 2 models and their Kelly versions."""
+    drawn = (*MODELS, *KELLY_MODELS)  # jobs.models
+    return {f"ours: {strategy_label(create(name, **params))}" for name, params in drawn}
 
 
 def load(data_dir: Path) -> dict[str, Series]:

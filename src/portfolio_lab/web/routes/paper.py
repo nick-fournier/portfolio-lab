@@ -11,7 +11,8 @@ from portfolio_lab.backtest.engine import label as strategy_label
 from portfolio_lab.backtest.results import list_runs, load_run
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.data import ids, reader
-from portfolio_lab.jobs.tasks import PAPER_STRATEGY, run_label
+from portfolio_lab.jobs.models import run_label
+from portfolio_lab.jobs.tasks import PAPER_STRATEGY
 from portfolio_lab.strategies.base import create
 from portfolio_lab.web.charts import growth_figure
 

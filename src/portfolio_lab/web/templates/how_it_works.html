@@ -55,10 +55,10 @@
   improving returns, cash-backed earnings, falling debt, rising liquidity, no dilution,
   improving margins and turnover) as percentiles, averaged. There are no hard cutoffs: a
   stock's weight limit shrinks as it nears the edge of either list. Both weigh their
-  candidates for the highest expected long-run growth (Kelly: expected return minus half
-  the variance), at most 10% in any stock, and hold the lowest-risk mix instead in a bear
-  market (the S&amp;P 500 15% below its two-year high and below its 200-day average three
-  month ends in a row).</p>
+  candidates for the best expected return per unit of risk (the maximum Sharpe ratio), at
+  most 10% in any stock, and hold the lowest-risk mix instead in a bear market (the S&amp;P
+  500 15% below its two-year high and below its 200-day average three month ends in a
+  row).</p>
 <ul>
   <li><b>Momentum + health filter</b> (class 1; the paper account follows it): each stock's expected
     return is its trailing one-year return, and its risk the shrunk covariance of a year of
@@ -67,16 +67,22 @@
     <a href="/forecasts">forecaster</a>, nine terms fitted on all earlier months, rescaled
     by Grinold's rule; its risk is the same shrunk covariance of a year of daily prices.</li>
 </ul>
+<p>Beside each, the charts draw a higher-risk version weighted for the highest expected
+  long-run growth instead (Kelly: expected return minus half the variance; class 2's bets 16
+  times as hard as that). Kelly fills the 10% limits with the stocks expected to grow fastest,
+  which for class 1 means the past year's biggest winners: more return, but about half again
+  the volatility and much deeper drops. Production used Kelly for twelve days in October
+  2026.</p>
 <table>
   <thead><tr><th>January 2004 to September 2026</th><th class="num">Per year</th><th class="num">Sharpe</th><th class="num">Worst drop</th></tr></thead>
   <tbody>
-    <tr><td>Momentum + health filter (class 1)</td><td class="num">26.2%</td><td class="num">0.84</td><td class="num">−41%</td></tr>
-    <tr><td>Linear model (class 2)</td><td class="num">27.6%</td><td class="num">0.88</td><td class="num">−39%</td></tr>
+    <tr><td>Momentum + health filter, Kelly</td><td class="num">26.2%</td><td class="num">0.84</td><td class="num">−41%</td></tr>
+    <tr><td>Linear model, Kelly</td><td class="num">27.6%</td><td class="num">0.88</td><td class="num">−39%</td></tr>
   </tbody>
 </table>
 <p>Before tax, after modeled trading costs. The <a href="/">overview</a> and
-  <a href="/compare">compare</a> pages show both since 1999 against SPY and the best funds;
-  the <a href="/runs">runs</a> page every other strategy tried.</p>
+  <a href="/compare">compare</a> pages show all four over their whole history against SPY and
+  the best funds; the <a href="/runs">runs</a> page every other strategy tried.</p>
 
 <h2>5. Paper account</h2>
 <p>Production trades an Alpaca paper account (simulated money) every month end, from the

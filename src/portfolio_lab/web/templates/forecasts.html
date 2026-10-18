@@ -42,9 +42,11 @@
   use its size directly. Among the candidates it standardizes the forecasts (z) and sizes them
   by the forecast's own track record: the T-bill plus √12 · IC · volatility · z, where IC is
   the average monthly rank correlation between forecasts and outcomes in every earlier month.
-  These are honest expected returns. How hard to bet on them is set separately: the optimizer
-  (Kelly) bets 16 times as hard as full Kelly, a choice measured on past returns (risk aversion
-  1/16 did best, and so did a month-by-month pick on earlier data only).</p>
+  These are honest expected returns. How to bet on them is the optimizer's job: class 2 takes
+  the maximum-Sharpe mix, which depends on how the forecasts compare with each other, not on
+  IC's overall size. Its higher-risk version bets for long-run growth (Kelly) 16 times as hard
+  as full Kelly, a choice measured on past returns (risk aversion 1/16 did best, and so did a
+  month-by-month pick on earlier data only).</p>
 </div>
 
 <h2>Results</h2>
@@ -79,8 +81,9 @@
   ranking holds up.</p>
 <p class="muted">Sized by their measured accuracy, the forecasts' differences are close to the
   ones that show up (forecast-vs-outcome slope {{ "%.2f" | format(s.grinold_slope) }}; 1 would be
-  exact; hover a bar for what each group was told). The aggressiveness lives in the
-  optimizer's risk aversion, not in the forecasts.</p>
+  exact; hover a bar for what each group was told). How aggressive the portfolio is lives in
+  the optimizer (maximum Sharpe, or Kelly for the higher-risk version), not in the
+  forecasts.</p>
 
 <h3>What its picks actually returned</h3>
 <div id="tenths" class="chart"></div>
