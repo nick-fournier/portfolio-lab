@@ -95,6 +95,7 @@ def test_walk_refuses_loss_options_without_costs(tmp_path):
         ["--holdings-input"],
         ["--gross-limit", "1.25"],
         ["--cash-rate", "0.03"],
+        ["--trade-gross", "1"],
     ):
         result = CliRunner().invoke(cli.optimizer_app, base + extra)
         assert result.exit_code == 2, result.output
@@ -125,6 +126,18 @@ def test_no_profile_leaves_the_settings_defaults(tmp_path, monkeypatch):
     for extra in ([], ["--profile", "none"]):
         settings = _walked(tmp_path, monkeypatch, "--model", "linear", *extra)[2]
         assert settings == walk.Settings("linear"), extra
+
+
+def test_the_trade_size_flags_reach_the_settings(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import walk  # noqa: PLC0415
+
+    s = _walked(tmp_path, monkeypatch, "--model", "linear", "--costs", "c.parquet",
+                "--trade-gross", "1", "--trade-collateral", "0.4")[2]  # fmt: skip
+    assert (s.trade_gross, s.trade_collateral) == (1.0, 0.4)
+    plain = walk.Settings("linear", costs="c.parquet")
+    assert _walked(tmp_path, monkeypatch, "--model", "linear", "--costs", "c.parquet")[2] == plain
+    assert (plain.trade_gross, plain.trade_collateral) == (0.0, 0.5)  # off by default
 
 
 def test_an_unknown_profile_is_refused(tmp_path):

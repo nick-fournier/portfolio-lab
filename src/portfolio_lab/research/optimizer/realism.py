@@ -30,6 +30,10 @@ return in the loss (research.optimizer.priced), off unless its setting is on:
   (square-root law), on the dollars traded from the book held going in.
 
 The book is the model's output as it is (:func:`book`): any size, limited only by these charges.
+Only the traded book can be sized at trade time (``trade_gross``, 2026-10-18; :func:`trade_size`):
+scaled to that gross, or less if its maintenance requirement would pass ``trade_collateral`` x
+equity. It is a clamp on the final holdings alone: training, the loss and held-out scores never
+see it.
 
 :func:`align` reads what they need from the cost table (columns ``prc``, ``rvol_21d``, ``adv``
 and ``tbill``, the holding month's T-bill, monthly).
@@ -170,9 +174,38 @@ def book(model, x: torch.Tensor, pricing=None, k: int | None = None) -> torch.Te
     """Month k's book: the model's output on inputs ``x``, as it is (module docs).
 
     Every book the walk forms, in training, scoring and trading, is formed here, so a rule on
-    its size has one place to go; ``pricing`` and ``k`` (the month) are not used today.
+    its size has one place to go; ``pricing`` and ``k`` (the month) are not used today. The
+    traded book's clamp at trade time (:func:`trade_size`) comes after it, outside the loss.
     """
     return model(x)
+
+
+def trade_size(w: np.ndarray, market: Market | None, settings) -> tuple[np.ndarray, dict]:
+    """The traded book ``w`` scaled by ``settings.trade_gross`` (module docs) and its log entry.
+
+    The factor is ``min(trade_gross / sum |w|, trade_collateral / requirement(w))``, the
+    requirement per $1 of equity at the month's prices (``market``); ``trade_collateral`` 0: no
+    collateral cap. Both move with the book's size, so the scaled book's gross is
+    ``trade_gross`` or its requirement ``trade_collateral``, whichever comes first, and its
+    direction is the model's. ``trade_gross`` 0 (off) or an all-cash book (which stays cash): ``w``
+    as it is, factor 1.
+
+    Returns:
+        The book traded and ``{"model_gross": sum |w| before scaling, "scale": the factor}``.
+
+    Raises:
+        ValueError: ``trade_gross`` is on without ``market``.
+    """
+    gross = float(np.abs(w).sum())
+    if not settings.trade_gross or not gross:
+        return w, {"model_gross": gross, "scale": 1.0}
+    if market is None:
+        raise ValueError("trade_gross needs market data (realism.align) for the collateral")
+    scale = settings.trade_gross / gross
+    if settings.trade_collateral:
+        need = float(requirement(torch.from_numpy(w), market.price.cpu().double()))
+        scale = min(scale, settings.trade_collateral / need)
+    return w * scale, {"model_gross": gross, "scale": scale}
 
 
 def penalty(w: torch.Tensor, market: Market, settings) -> torch.Tensor:

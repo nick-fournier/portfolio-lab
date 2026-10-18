@@ -52,7 +52,9 @@ training left it.
 of each step's stocks from the loss; held-out and test months are scored on real returns.
 ``average``: the walk holds a moving average of the model's parameters, not its latest step.
 ``only`` trains and trades just the listed test months (with ``cold`` each is independent of
-the others): a cheap sample of the walk.
+the others): a cheap sample of the walk. With ``trade_gross`` (2026-10-18) the test month's book
+is scaled when it is picked, to that gross or to the collateral cap ``trade_collateral``
+(realism.trade_size); the weights, the log and the next month's holdings are the scaled book.
 """
 
 import contextlib
@@ -129,6 +131,10 @@ class Settings:
             both need ``holdings_input``, ``market`` a realism term too).
         trade_margin: Each training step also pays the traded month's penalty (margin cushion,
             gross limit, investment floor; research.optimizer.realism; needs one of them).
+        trade_gross / trade_collateral: The traded book's size at trade time: gross (sum |w|)
+            ``trade_gross`` (0: off, the model's own size), or less if its maintenance
+            requirement would pass ``trade_collateral`` x equity (0: no cap); realism.trade_size.
+            Training, the loss and held-out scores do not see it (needs ``costs`` and ``market``).
     """
 
     model: str
@@ -169,6 +175,8 @@ class Settings:
     start_book: str = "guess"
     impact: float = 0.0
     equity: float = 100_000.0
+    trade_gross: float = 0.0
+    trade_collateral: float = 0.5
 
 
 #: Settings removed in the cleanup of 2026-10-18, each with the value that left it off: an
@@ -411,8 +419,9 @@ def walk(
         weight's share of the sum of absolute weights, mean training loss over the last pass,
         passes run, best smoothed held-out loss and its per-pass curve with ``watch``, the
         median and largest gradient size over the month's steps before clipping, the share
-        of steps clipped and the last step's limit, seconds); and the final model (with
-        ``average``, its averaged parameters: the model that traded the last month).
+        of steps clipped and the last step's limit, seconds, the model's own gross and the
+        trade-time scale on it, ``model_gross`` and ``scale``: realism.trade_size); and the final
+        model (with ``average``, its averaged parameters: the model that traded the last month).
     """
     rng, hold_rng = walkbits.walk_streams(settings)
     clipper = Clipper(settings.clip)
@@ -455,6 +464,7 @@ def walk(
             if traded != t - 1 and pricing is not None and pricing.book is not None:
                 last = pricing.book.get(t - 1)  # last month not traded: the model's own weights
             w = holdings.pick(model, raw, pricing, last, t)
+        w, size = realism.trade_size(w, market[t] if settings.trade_gross else None, settings)
         last, traded = holdings.remember(pricing, w, raw, t), t
         gross = float(np.abs(w).sum())  # 0 only if no stock is held: all cash
         weights.append(pl.DataFrame({"date": [month.date] * len(w), "symbol": month.symbols,
@@ -469,5 +479,5 @@ def walk(
                     "grad_max": float(grad.max()) if norms else math.nan,
                     "clipped": float((grad > limit).float().mean()) if norms else 0.0,
                     "limit": float(limit[-1]) if norms else math.nan,
-                    "seconds": time.perf_counter() - clock} | diag)  # fmt: skip
+                    "seconds": time.perf_counter() - clock} | diag | size)  # fmt: skip
     return pl.concat(weights), pl.DataFrame(log), walkbits.traded(model, average)

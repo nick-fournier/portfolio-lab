@@ -259,3 +259,95 @@ def test_the_investment_floor_charges_idle_cash_like_the_caps():
     assert float(realism.penalty(half, m, s)) == pytest.approx(0.1 * 0.5)
     assert float(realism.penalty(torch.tensor([0.7, 0.4, -0.2]), m, s)) == 0.0  # longs 1.1
     assert realism.on(s) and not realism.on(replace(s, invest_floor=0.0))
+
+
+def test_trade_size_scales_the_book_to_the_gross_or_the_collateral_keeping_its_direction():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings  # noqa: PLC0415
+
+    m = realism.Market(torch.tensor([1.0, 4.0, 10.0, 50.0]), torch.full((4,), 0.02),
+                       torch.full((4,), 1e6), 0.004)  # fmt: skip
+    w = np.array([0.9, 0.6, -0.3, -0.2])  # gross 2.0
+    req = 0.9 * 1.0 + 0.6 * 0.5 + 0.3 * 0.5 + 0.2 * 0.3  # 1.41 per $1 of equity
+    need = lambda v: float(realism.requirement(torch.from_numpy(v), m.price.double()))  # noqa: E731
+    s = Settings("linear", trade_gross=1.0, trade_collateral=1.0)  # gross binds: 0.5 < 1 / 1.41
+    got, log = realism.trade_size(w, m, s)
+    assert np.abs(got).sum() == pytest.approx(1.0) and log == {"model_gross": 2.0, "scale": 0.5}
+    assert np.corrcoef(got, w)[0, 1] == pytest.approx(1.0) and (got / w == 0.5).all()
+    got, log = realism.trade_size(w, m, replace(s, trade_collateral=0.5))  # collateral binds
+    assert need(got) == pytest.approx(0.5) and log["scale"] == pytest.approx(0.5 / req)
+    assert np.abs(got).sum() < 1.0 and np.corrcoef(got, w)[0, 1] == pytest.approx(1.0)
+    got, log = realism.trade_size(w / 4, m, replace(s, trade_collateral=0.0))  # no cap: scaled up
+    assert np.abs(got).sum() == pytest.approx(1.0) and log["scale"] == pytest.approx(2.0)
+    cash = np.zeros(4)  # all cash stays cash
+    assert realism.trade_size(cash, m, s) == (cash, {"model_gross": 0.0, "scale": 1.0})
+    off, log = realism.trade_size(w, None, Settings("linear"))  # off: the model's own book
+    assert off is w and log == {"model_gross": 2.0, "scale": 1.0}
+    with pytest.raises(ValueError, match="market data"):
+        realism.trade_size(w, None, s)
+
+
+def test_a_walk_trades_holds_and_logs_the_scaled_book(monkeypatch):
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import holdings, priced, realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer import walk as walk_module  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    months = _months(30)
+    stock = [(np.full(4, 0.001, np.float32), np.full(4, 0.003, np.float32))] * 30
+    market = realism.align(months, _market_table(months))
+    base = Settings("linear", window=12, first_epochs=3, start=date(2001, 6, 1), cold=True,
+                    costs="t.parquet", holdings_input=True, margin_cushion=0.5,
+                    trade_margin=True, lr=0.05)  # fmt: skip
+    seen, pick, fit = {}, holdings.pick, walk_module._fit
+
+    def picked(model, data, pricing, last, t):  # the real book each month's inputs carry
+        seen[t] = None if last is None else last.clone()
+        return pick(model, data, pricing, last, t)
+
+    def fitted(*args, **kwargs):  # the real book each month's traded-month penalty starts from
+        seen[("trade", kwargs["trade"][0])] = kwargs["trade"][1]
+        return fit(*args, **kwargs)
+
+    monkeypatch.setattr(holdings, "pick", picked)
+    monkeypatch.setattr(walk_module, "_fit", fitted)
+    off, off_log, _ = walk(months, base, stock_costs=stock, market=market)
+    sized, log, _ = walk(months, replace(base, trade_gross=1.0, trade_collateral=0.0),
+                         stock_costs=stock, market=market)  # fmt: skip
+    gross = sized.group_by("date", maintain_order=True).agg(pl.col("weight").abs().sum())
+    assert gross["weight"].to_numpy() == pytest.approx(np.ones(13))
+    assert (log["scale"] * log["model_gross"]).to_numpy() == pytest.approx(np.ones(13))
+    assert (log["long"] - log["short"]).to_numpy() == pytest.approx(np.ones(13))
+    assert (off_log["scale"] == 1.0).all() and (off_log["scale"] != log["scale"]).all()
+    assert off_log["model_gross"].to_numpy() == pytest.approx(
+        (off_log["long"] - off_log["short"]).to_numpy()
+    )
+    first = min(off["date"])  # same model, same inputs: the model's direction, rescaled
+    a, b = (w.filter(pl.col("date") == first)["weight"].to_numpy() for w in (off, sized))
+    assert np.corrcoef(a, b)[0, 1] == pytest.approx(1.0)
+    assert b == pytest.approx(a * log["scale"][0])
+    by_month = {d: w["weight"].to_numpy() for (d,), w in sized.group_by("date")}
+    for k in range(18, 30):  # each month holds, and trades from, the scaled book before it
+        before = by_month[months[k - 1].date]
+        assert seen[k].numpy() == pytest.approx(before)
+        assert seen[("trade", k)].numpy() == pytest.approx(before)
+
+    capped, log, _ = walk(months, replace(base, trade_gross=1.0, trade_collateral=0.2),
+                          stock_costs=stock, market=market)  # fmt: skip
+    for (d,), w in capped.group_by("date"):  # 30%+ per $1: the collateral binds first
+        k = next(i for i, m in enumerate(months) if m.date == d)
+        need = realism.requirement(torch.tensor(w["weight"].to_numpy()), market[k].price)
+        assert float(need) == pytest.approx(0.2, rel=1e-5) and w["weight"].abs().sum() < 1.0
+    # trade_gross 0: nothing changes, whatever the collateral cap
+    same, same_log, _ = walk(months, replace(base, trade_collateral=0.2), stock_costs=stock,
+                             market=market)  # fmt: skip
+    assert same.equals(off) and same_log.drop("seconds").equals(off_log.drop("seconds"))
+
+    with pytest.raises(ValueError, match="trade_gross needs costs"):
+        priced.pricing(months, Settings("linear", trade_gross=1.0), "cpu", None, market)
+    with pytest.raises(ValueError, match="trade_gross needs market data"):
+        priced.pricing(months, replace(base, trade_gross=1.0, margin_cushion=0.0,
+                                       trade_margin=False), "cpu", stock)  # fmt: skip
+    with pytest.raises(ValueError, match="negative"):
+        priced.pricing(months, replace(base, trade_gross=-1.0), "cpu", stock, market)

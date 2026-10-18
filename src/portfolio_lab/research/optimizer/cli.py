@@ -111,7 +111,8 @@ def _walk_one(  # noqa: PLR0913, PLR0917 - one walk's pieces
 
         table = pl.read_parquet(settings.costs)
         stock = costs.align(months, table)
-        market = realism.align(months, table) if realism.on(settings) else None
+        need = realism.on(settings) or settings.trade_gross  # trade_gross: prices for collateral
+        market = realism.align(months, table) if need else None
     weights, log, fitted = walk.walk(months, settings, device, stock, market)
     out.mkdir(parents=True, exist_ok=True)
     weights.write_parquet(out / "weights.parquet")
@@ -280,15 +281,29 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         str,
         typer.Option(help="Account profile filling the realism flags not given: alpaca or none."),
     ] = "none",
+    trade_gross: Annotated[
+        float,
+        typer.Option(
+            help="Trade each seed's book scaled to this gross, sum |w| (0: the model's own"
+            " size; the seed average is not rescaled)."
+        ),
+    ] = 0.0,
+    trade_collateral: Annotated[
+        float,
+        typer.Option(
+            help="With --trade-gross only: at most this collateral, share of equity (0: no cap)."
+        ),
+    ] = 0.5,
 ) -> None:
     """Walk a model forward, one run per seed, and save each seed's monthly portfolios.
 
     Seeds run ``jobs`` at a time in separate processes: one walk takes small steps (one month
     each) and leaves the GPU mostly idle, so several share it. With more than one seed the
     seeds' portfolios are also averaged (the paper's 10-seed average). The loss options that
-    need the per-stock cost table are refused without ``--costs``. A realism flag given wins (0
-    too); one left out takes the profile's value (``--profile``), else the setting's default
-    (``walk.Settings``: off, the T-bill for cash, a 0.10 charge, $100,000).
+    need the per-stock cost table are refused without ``--costs``, and so is ``--trade-gross``
+    (its collateral needs the table's prices). A realism flag given wins (0 too); one left out
+    takes the profile's value (``--profile``), else the setting's default (``walk.Settings``:
+    off, the T-bill for cash, a 0.10 charge, $100,000).
     """
     _need_costs(costs, {
         "--holdings-input": holdings_input, "--borrow-input": borrow_input,
@@ -297,6 +312,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         "--margin-cushion": bool(margin_cushion), "--gross-limit": bool(gross_limit),
         "--invest-floor": bool(invest_floor), "--impact": bool(impact),
         "--trade-margin": trade_margin, "--start-book": start_book != "guess",
+        "--trade-gross": bool(trade_gross),
     })  # fmt: skip
     import multiprocessing  # noqa: PLC0415
     import os  # noqa: PLC0415
@@ -322,7 +338,8 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         holdout_seed=None if holdout_seed < 0 else holdout_seed,
         only=tuple(date.fromisoformat(d) for d in only.split(",")) if only else None,
         stock_drop=stock_drop, invest_floor=invest_floor, trade_margin=trade_margin,
-        start_book=start_book, **given,
+        start_book=start_book, trade_gross=trade_gross, trade_collateral=trade_collateral,
+        **given,
     )  # fmt: skip
     try:
         settings = realism.with_profile(settings, profile, keep=given)
