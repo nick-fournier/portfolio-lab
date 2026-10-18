@@ -264,3 +264,17 @@ def test_loss_gross_takes_the_loss_on_the_sized_book_with_a_chosen_risk_aversion
         with pytest.raises(ValueError, match=r"loss_gross|risk_aversion"):
             priced.pricing(months, bad, "cpu", stock, market)
     assert priced.objective(torch.tensor(0.02), base) == pytest.approx((1 - 0.02) ** 2)
+    # the size anchor: the loss pays log(own gross / 1.0)^2 and pulls the own gross toward 1.0
+    anchored = replace(sized, size_anchor=0.5)
+    pricing2 = priced.pricing(months, anchored, "cpu", stock, market)
+    pricing2.book[0] = torch.zeros(4)
+    model.zero_grad()
+    total = priced.loss(net, tensors, pricing2, anchored, 1)
+    own = float(net(torch.cat([tensors[1][0], torch.zeros(4, 2)], dim=1)).abs().sum())
+    plain_loss = float(priced.loss(net, tensors, pricing, sized, 1))
+    assert float(total) == pytest.approx(plain_loss + 0.5 * np.log(own) ** 2, rel=1e-4)
+    total.backward()
+    model.weight.data -= 1e-3 * model.weight.grad  # one small step down the gradient
+    assert float(net(torch.cat([tensors[1][0], torch.zeros(4, 2)], dim=1)).abs().sum()) < own
+    with pytest.raises(ValueError, match="size_anchor"):
+        priced.pricing(months, replace(base, size_anchor=0.5), "cpu", stock, market)

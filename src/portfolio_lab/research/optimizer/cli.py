@@ -317,6 +317,12 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     risk_aversion: Annotated[
         float, typer.Option(help="With --loss-gross: expected return less this / 2 x its square.")
     ] = 1.0,
+    size_anchor: Annotated[
+        float,
+        typer.Option(
+            help="With --loss-gross: this x log(model's gross / loss gross)^2 in the loss."
+        ),
+    ] = 0.0,
     price_gross: Annotated[
         float,
         typer.Option(
@@ -373,6 +379,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         stock_drop=stock_drop, invest_floor=invest_floor, trade_margin=trade_margin,
         start_book=start_book, trade_gross=trade_gross, trade_collateral=trade_collateral,
         price_gross=price_gross, loss_gross=loss_gross, risk_aversion=risk_aversion,
+        size_anchor=size_anchor,
         **given,
     )  # fmt: skip
     try:

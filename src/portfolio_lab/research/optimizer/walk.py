@@ -47,10 +47,9 @@ training left it.
 
 ``winsor`` pulls training returns in to each month's quantiles and ``stock_drop`` hides a share
 of each step's stocks from the loss; held-out and test months are scored on real returns.
-``average``: the walk holds a moving average of the model's parameters. ``only`` trains and
-trades just the listed test months. With ``trade_gross`` (2026-10-18) the test month's book is
-scaled when it is picked, to that gross or to the collateral cap (realism.trade_size); the
-weights, log and next month's holdings are the scaled book. ``loss_gross``: Settings.
+``average``: a moving average of the model's parameters is what trades. ``only`` trains and
+trades just the listed test months. ``trade_gross`` (2026-10-18) scales the test month's book
+when picked, to that gross or the collateral cap (realism.trade_size); ``loss_gross``: Settings.
 """
 
 import contextlib
@@ -138,10 +137,10 @@ class Settings:
             encodings (2026-10-18; holdings.with_holdings): leave the holding column out; the
             borrow fee as a centred hard-to-borrow flag; the spread, or the holding, as its rank
             in [-0.5, 0.5].
-        loss_gross / risk_aversion: The loss is taken on the book sized to ``loss_gross`` (sum
-            |w|, capped by ``trade_collateral``; must equal ``trade_gross``) as expected return
-            less ``risk_aversion`` / 2 times its square (research.optimizer.priced ``objective``;
-            2026-10-18). ``loss_gross`` 0: the paper's loss at the model's own size.
+        loss_gross / risk_aversion / size_anchor: The loss is taken on the book sized to
+            ``loss_gross`` (= ``trade_gross``, capped by ``trade_collateral``) as expected return
+            less ``risk_aversion`` / 2 times its square, plus ``size_anchor`` times the squared
+            log of the model's own gross over ``loss_gross`` (priced; 0: the paper's loss).
     """
 
     model: str
@@ -191,6 +190,7 @@ class Settings:
     holding_rank: bool = False
     loss_gross: float = 0.0
     risk_aversion: float = 1.0
+    size_anchor: float = 0.0
 
 
 #: Settings removed in the cleanup of 2026-10-18, each with the value that left it off: an

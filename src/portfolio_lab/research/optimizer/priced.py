@@ -87,6 +87,8 @@ def _check_sizes(settings, market: list | None) -> None:
                          "book as the trade will)")  # fmt: skip
     if settings.loss_gross and settings.price_gross:
         raise ValueError("loss_gross already prices the charges at its size; drop price_gross")
+    if settings.size_anchor < 0 or (settings.size_anchor and not settings.loss_gross):
+        raise ValueError("size_anchor needs loss_gross and cannot be negative")
     if settings.price_gross and market is None:
         raise ValueError("price_gross needs a realism term (it reprices margin, cash and impact)")
     if settings.trade_gross and not settings.costs:
@@ -220,9 +222,26 @@ def objective(r: torch.Tensor, settings) -> torch.Tensor:
 
 
 def loss(model, data: list[Pair], pricing: Pricing, settings, k: int) -> torch.Tensor:
-    """Month k's loss on its return net of costs (walk docs); stores its book in the table."""
+    """Month k's loss on its return net of costs (walk docs); stores its book in the table.
+
+    With ``size_anchor`` (2026-10-18) the loss also pays ``size_anchor * log(g / loss_gross)^2``,
+    ``g`` the model's own gross before sizing: the sized loss is indifferent to that scale, and
+    without an anchor it drifts without bound (to millions of x in six months), the network's
+    activations grow with it and its attention saturates, so the model stops learning. Anchored,
+    the model's own book is the book it trades and sizing is only the collateral clamp.
+    """
     held = pricing.held()
-    w = book_for(model, data, pricing, settings, k, held)
+    raw = realism.book(model, holdings.inputs(data, pricing, held, k), pricing, k)
+    w = raw
+    if settings.loss_gross:
+        w = realism.sized(raw, pricing.market[k], settings.loss_gross, settings.trade_collateral)
     if pricing.book is not None:
         pricing.book[k] = w.detach()  # with loss_gross the sized book: what next month holds
-    return objective(net(model, data, pricing, settings, k, w, held), settings)
+    value = objective(net(model, data, pricing, settings, k, w, held), settings)
+    if settings.size_anchor:
+        value = (
+            value
+            + settings.size_anchor
+            * torch.log(raw.abs().sum().clamp(min=1e-12) / settings.loss_gross) ** 2
+        )
+    return value
