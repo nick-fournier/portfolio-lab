@@ -21,13 +21,10 @@ With ``watch`` (research.optimizer.stopping) ``holdout`` training months are hel
 month and scored after every pass (``held_curve``; ``held_returns``: their returns at the last
 score), but every pass runs and the last is kept. ``scatter`` holds out single months drawn
 anywhere in the window instead of one consecutive block; ``holdout_seed`` draws them from
-their own random stream, so runs that differ only in it train on the same month order with
-different months held out. Before each score the held-out months' book entries are rolled
+their own random stream. Before each score the held-out months' book entries are rolled
 forward, in month order, with the model as it stands. ``test_curve`` is the test month's loss
-after each pass (a diagnostic: it uses the month's return, which the walk does not know when
-it picks; with nothing held out, ``holdout`` 0, it is still logged). A warm model has already
-trained on most of this month's held-out months (they move every month), so its score is not
-out of sample; a cold one's is.
+after each pass (a diagnostic). A warm model has already trained on most of this month's
+held-out months (they move every month), so its score is not out of sample; a cold one's is.
 
 With per-stock ``costs`` the loss is (1 - net)^2, net the month's return after each stock's
 spread on the dollars traded from the book held going in (the month before's weights after its
@@ -50,11 +47,10 @@ training left it.
 
 ``winsor`` pulls training returns in to each month's quantiles and ``stock_drop`` hides a share
 of each step's stocks from the loss; held-out and test months are scored on real returns.
-``average``: the walk holds a moving average of the model's parameters, not its latest step.
-``only`` trains and trades just the listed test months (with ``cold`` each is independent of
-the others): a cheap sample of the walk. With ``trade_gross`` (2026-10-18) the test month's book
-is scaled when it is picked, to that gross or to the collateral cap ``trade_collateral``
-(realism.trade_size); the weights, the log and the next month's holdings are the scaled book.
+``average``: the walk holds a moving average of the model's parameters. ``only`` trains and
+trades just the listed test months. With ``trade_gross`` (2026-10-18) the test month's book is
+scaled when it is picked, to that gross or to the collateral cap (realism.trade_size); the
+weights, log and next month's holdings are the scaled book. ``loss_gross``: Settings.
 """
 
 import contextlib
@@ -142,6 +138,10 @@ class Settings:
             encodings (2026-10-18; holdings.with_holdings): leave the holding column out; the
             borrow fee as a centred hard-to-borrow flag; the spread, or the holding, as its rank
             in [-0.5, 0.5].
+        loss_gross / risk_aversion: The loss is taken on the book sized to ``loss_gross`` (sum
+            |w|, capped by ``trade_collateral``; must equal ``trade_gross``) as expected return
+            less ``risk_aversion`` / 2 times its square (research.optimizer.priced ``objective``;
+            2026-10-18). ``loss_gross`` 0: the paper's loss at the model's own size.
     """
 
     model: str
@@ -189,6 +189,8 @@ class Settings:
     borrow_flag: bool = False
     spread_rank: bool = False
     holding_rank: bool = False
+    loss_gross: float = 0.0
+    risk_aversion: float = 1.0
 
 
 #: Settings removed in the cleanup of 2026-10-18, each with the value that left it off: an
@@ -318,25 +320,28 @@ def _held_loss(model: Optimizer, data: list[Pair], pricing: priced.Pricing | Non
     with torch.no_grad():
         r = []
         for k in months:
-            x = holdings.inputs(data, pricing, pricing.held() if pricing else None, k)
-            w = realism.book(model, x, pricing, k)
-            r.append(w @ data[k][1] if pricing is None
-                     else priced.net(model, data, pricing, settings, k, w))  # fmt: skip
+            if pricing is None:
+                r.append(realism.book(model, holdings.inputs(data, None, None, k), None, k)
+                         @ data[k][1])  # fmt: skip
+            else:
+                w = priced.book_for(model, data, pricing, settings, k)
+                r.append(priced.net(model, data, pricing, settings, k, w))
         r = torch.stack(r)
     if keep is not None:
         keep[:] = r.tolist()
+    if pricing is not None and settings.loss_gross:
+        return float(priced.objective(r, settings).mean())
     return float(((1 - r) ** 2).mean())
 
 
-def _roll(model: Optimizer, data: list[Pair], pricing: priced.Pricing | None,
+def _roll(model: Optimizer, data: list[Pair], pricing: priced.Pricing | None, settings: Settings,
           months: list[int]) -> None:  # fmt: skip
     """With a book, ``months``' entries become the model's weights, in month order."""
     if pricing is None or pricing.book is None:
         return
     with torch.no_grad():
         for k in sorted(months):
-            x = holdings.inputs(data, pricing, pricing.held(), k)
-            pricing.book[k] = realism.book(model, x, pricing, k)
+            pricing.book[k] = priced.book_for(model, data, pricing, settings, k)
 
 
 def _fit(  # noqa: PLR0913 - one month's training pieces
@@ -366,7 +371,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     held: list[float] = []
 
     def score() -> float:
-        _roll(model, raw, pricing, block)
+        _roll(model, raw, pricing, settings, block)
         if test >= 0:
             tests.append(_held_loss(model, raw, pricing, settings, [test]))
         return _held_loss(model, raw, pricing, settings, block, held)

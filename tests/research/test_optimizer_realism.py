@@ -174,6 +174,26 @@ def test_price_gross_prices_margin_cash_and_impact_at_the_traded_size_per_dollar
         float(realism.charges(c * w, c * held, m, full, 1e5)))  # fmt: skip
 
 
+def test_sized_scales_a_book_to_its_gross_or_its_collateral_cap_differentiably():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
+
+    m = realism.Market(torch.tensor([1.0, 4.0, 10.0, 50.0]), torch.full((4,), 0.02),
+                       torch.full((4,), 1e6), 0.004)  # fmt: skip
+    w = torch.tensor([30.0, 20.0, -10.0, -5.0], requires_grad=True)  # a free-size book, 65x
+    got = realism.sized(w, m, 1.0, 0.0)  # no collateral cap: exactly 1.0x, same direction
+    assert float(got.abs().sum()) == pytest.approx(1.0)
+    assert torch.allclose(got / got.abs().sum(), w / w.abs().sum())
+    # requirement per $ of this book is 0.4846; a 0.2 cap binds first: gross 0.2 / 0.4846
+    capped = realism.sized(w, m, 1.0, 0.2)
+    assert float(realism.requirement(capped, m.price)) == pytest.approx(0.2)
+    assert float(capped.abs().sum()) < 1.0
+    capped.sum().backward()  # the factor is a function of w: gradients flow through it
+    assert torch.isfinite(w.grad).all()
+    cash = torch.zeros(4)
+    assert realism.sized(cash, m, 1.0, 0.5).abs().sum() == 0  # cash stays cash
+
+
 def test_the_alpaca_profile_sets_every_realism_term():
     pytest.importorskip("torch")
     from portfolio_lab.research.optimizer import realism  # noqa: PLC0415

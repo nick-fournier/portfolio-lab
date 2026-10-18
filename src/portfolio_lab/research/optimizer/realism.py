@@ -33,6 +33,11 @@ return in the loss (research.optimizer.priced), off unless its setting is on:
 were scaled to that gross (the traded size) and charged per dollar of the book's gross
 (:func:`charges`), so a free-size book in training pays the traded account's costs per dollar.
 
+``loss_gross`` (2026-10-18): the loss is taken on the book scaled to that gross at the month's
+prices, capped by ``trade_collateral`` (:func:`sized`, the same rule the trade applies), with an
+explicit risk aversion (research.optimizer.priced). The model then learns the direction of the
+book it will trade, and every charge is priced at the real size.
+
 The book is the model's output as it is (:func:`book`): any size, limited only by these charges.
 Only the traded book can be sized at trade time (``trade_gross``, 2026-10-18; :func:`trade_size`):
 scaled to that gross, or less if its maintenance requirement would pass ``trade_collateral`` x
@@ -182,6 +187,21 @@ def book(model, x: torch.Tensor, pricing=None, k: int | None = None) -> torch.Te
     traded book's clamp at trade time (:func:`trade_size`) comes after it, outside the loss.
     """
     return model(x)
+
+
+def sized(w: torch.Tensor, market: Market, gross: float, collateral: float) -> torch.Tensor:
+    """``w`` scaled to ``gross`` (sum |w|), or less if its requirement would pass ``collateral``.
+
+    The torch twin of :func:`trade_size` for the loss (``loss_gross``, 2026-10-18): the factor
+    ``min(gross / sum |w|, collateral / requirement(w))`` is a function of ``w``, so the model
+    learns the direction of a book that is always traded at this size. ``collateral`` 0: no
+    cap. An all-cash book stays cash.
+    """
+    total = w.abs().sum()
+    scale = gross / total.clamp(min=1e-12)
+    if collateral:
+        scale = torch.minimum(scale, collateral / requirement(w, market.price).clamp(min=1e-12))
+    return w * scale
 
 
 def trade_size(w: np.ndarray, market: Market | None, settings) -> tuple[np.ndarray, dict]:

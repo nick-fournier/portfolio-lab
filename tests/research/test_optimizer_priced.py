@@ -1,8 +1,10 @@
 """Class 3 optimizer: the book each training month trades from (research.optimizer.priced)."""
 
+from dataclasses import replace
 from datetime import date
 
 import numpy as np
+import polars as pl
 import pytest
 
 from portfolio_lab.research.optimizer import data
@@ -214,3 +216,51 @@ def test_pricing_refuses_a_traded_month_charge_or_start_book_that_cannot_work():
     good = Settings("linear", **base, holdings_input=True, gross_limit=1.25, trade_margin=True,
                     start_book="market")  # fmt: skip
     assert priced.pricing(months, good, "cpu", stock, market).market is not None
+
+
+def test_loss_gross_takes_the_loss_on_the_sized_book_with_a_chosen_risk_aversion():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import priced, realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings  # noqa: PLC0415
+
+    rng = np.random.default_rng(5)
+    months = [
+        data.Month(date(2000, k + 1, 1), list("ABCD"),
+                   rng.uniform(-0.5, 0.5, (4, 2)).astype(np.float32),
+                   rng.normal(0.01, 0.05, 4).astype(np.float32))
+        for k in range(3)
+    ]  # fmt: skip
+    stock = [(np.full(4, 0.002, np.float32), np.zeros(4, np.float32))] * 3
+    prices = (1.0, 4.0, 10.0, 50.0)
+    table = pl.DataFrame([
+        {"date": m.date, "symbol": s, "prc": p, "rvol_21d": 0.02, "adv": 1e6, "tbill": 0.004}
+        for m in months for s, p in zip(m.symbols, prices, strict=True)
+    ])  # fmt: skip
+    market = realism.align(months, table)
+    base = Settings("linear", costs="t.parquet", holdings_input=True, rebate=True, trade_gross=1.0)
+    sized = replace(base, loss_gross=1.0, risk_aversion=20.0)
+    torch.manual_seed(0)
+    model = torch.nn.Linear(4, 1, bias=False)  # 2 traits + holding + spread -> a weight
+
+    def net(x):
+        return model(x)[:, 0] * 50  # a free-size book, far above 1x
+
+    pricing = priced.pricing(months, sized, "cpu", stock, market)
+    tensors = [(torch.from_numpy(m.x), torch.from_numpy(m.r)) for m in months]
+    pricing.book[0] = torch.zeros(4)
+    got = priced.loss(net, tensors, pricing, sized, 1)
+    w = pricing.book[1]  # the table holds the SIZED book: 1.0x gross, or less at the 0.5 cap
+    gross, need = float(w.abs().sum()), float(realism.requirement(w, market[1].price))
+    assert gross == pytest.approx(1.0, rel=1e-5) or (gross < 1.0 and need == pytest.approx(0.5))
+    r = priced.net(net, tensors, pricing, sized, 1, w)
+    assert float(got) == pytest.approx(float(-r + 10 * r * r))
+    plain = priced.pricing(months, base, "cpu", stock, market)
+    plain.book[0] = torch.zeros(4)
+    priced.loss(net, tensors, plain, base, 1)
+    assert float(plain.book[1].abs().sum()) > 10  # loss_gross 0: the model's own size, as before
+    for bad in (replace(base, loss_gross=1.0, trade_gross=0.0),
+                replace(base, loss_gross=1.0, trade_gross=2.0), replace(sized, price_gross=1.0),
+                replace(sized, risk_aversion=0.0)):  # fmt: skip
+        with pytest.raises(ValueError, match=r"loss_gross|risk_aversion"):
+            priced.pricing(months, bad, "cpu", stock, market)
+    assert priced.objective(torch.tensor(0.02), base) == pytest.approx((1 - 0.02) ** 2)

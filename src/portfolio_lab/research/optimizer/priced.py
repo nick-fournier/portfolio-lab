@@ -80,6 +80,13 @@ def _check_sizes(settings, market: list | None) -> None:
         raise ValueError("borrow_flag shapes the borrow_input column")
     if settings.trade_gross < 0 or settings.trade_collateral < 0 or settings.price_gross < 0:
         raise ValueError("trade_gross, trade_collateral and price_gross cannot be negative")
+    if settings.loss_gross < 0 or settings.risk_aversion <= 0:
+        raise ValueError("loss_gross cannot be negative and risk_aversion must be positive")
+    if settings.loss_gross and settings.loss_gross != settings.trade_gross:
+        raise ValueError("loss_gross needs trade_gross set to the same size (the loss sizes the "
+                         "book as the trade will)")  # fmt: skip
+    if settings.loss_gross and settings.price_gross:
+        raise ValueError("loss_gross already prices the charges at its size; drop price_gross")
     if settings.price_gross and market is None:
         raise ValueError("price_gross needs a realism term (it reprices margin, cash and impact)")
     if settings.trade_gross and not settings.costs:
@@ -185,10 +192,37 @@ def trade_penalty(model, data: list[Pair], pricing: Pricing, settings, t: int,
     return realism.penalty(w, pricing.market[t], settings)
 
 
-def loss(model, data: list[Pair], pricing: Pricing, settings, k: int) -> torch.Tensor:
-    """Month k's paper loss on its return net of costs (walk docs); stores w in the book."""
-    held = pricing.held()
+def book_for(
+    model, data: list[Pair], pricing: Pricing, settings, k: int, held=None
+) -> torch.Tensor:
+    """Month k's book as the loss sees it: the model's, sized to ``loss_gross`` when set.
+
+    ``held``: where the holdings input comes from (default the pricing's book table).
+    """
+    held = pricing.held() if held is None else held
     w = realism.book(model, holdings.inputs(data, pricing, held, k), pricing, k)
+    if settings.loss_gross:
+        w = realism.sized(w, pricing.market[k], settings.loss_gross, settings.trade_collateral)
+    return w
+
+
+def objective(r: torch.Tensor, settings) -> torch.Tensor:
+    """The loss on a month's net return ``r`` (2026-10-18).
+
+    At the model's own size (``loss_gross`` 0) the paper's ``(1 - r)^2``: free size makes it a
+    maximum-Sharpe book. At a set size, ``-r + risk_aversion / 2 * r^2``: expected return less
+    a chosen aversion to its variance (the paper's loss is this with aversion 1, up to a
+    constant, but at ~1x that aversion leaves the variance term almost no weight).
+    """
+    if settings.loss_gross:
+        return -r + 0.5 * settings.risk_aversion * r * r
+    return (1 - r) ** 2
+
+
+def loss(model, data: list[Pair], pricing: Pricing, settings, k: int) -> torch.Tensor:
+    """Month k's loss on its return net of costs (walk docs); stores its book in the table."""
+    held = pricing.held()
+    w = book_for(model, data, pricing, settings, k, held)
     if pricing.book is not None:
-        pricing.book[k] = w.detach()
-    return (1 - net(model, data, pricing, settings, k, w, held)) ** 2
+        pricing.book[k] = w.detach()  # with loss_gross the sized book: what next month holds
+    return objective(net(model, data, pricing, settings, k, w, held), settings)

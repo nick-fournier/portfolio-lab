@@ -138,6 +138,10 @@ def test_the_trade_size_flags_reach_the_settings(tmp_path, monkeypatch):
     priced = _walked(tmp_path, monkeypatch, "--model", "linear", "--costs", "c.parquet",
                      "--price-gross", "1")[2]  # fmt: skip
     assert priced.price_gross == 1.0
+    sized = _walked(tmp_path, monkeypatch, "--model", "linear", "--costs", "c.parquet",
+                    "--trade-gross", "1", "--loss-gross", "1",
+                    "--risk-aversion", "20")[2]  # fmt: skip
+    assert (sized.loss_gross, sized.risk_aversion) == (1.0, 20.0)
     plain = walk.Settings("linear", costs="c.parquet")
     assert _walked(tmp_path, monkeypatch, "--model", "linear", "--costs", "c.parquet")[2] == plain
     assert (plain.trade_gross, plain.trade_collateral, plain.price_gross) == (0.0, 0.5, 0.0)
