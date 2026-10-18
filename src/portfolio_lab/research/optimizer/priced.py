@@ -57,6 +57,18 @@ class Held:
         return self.book.get(k)
 
 
+def _check_sizes(settings, market: list | None) -> None:
+    """The trade-time size and the size the loss prices at need costs and market data."""
+    if settings.trade_gross < 0 or settings.trade_collateral < 0 or settings.price_gross < 0:
+        raise ValueError("trade_gross, trade_collateral and price_gross cannot be negative")
+    if settings.price_gross and market is None:
+        raise ValueError("price_gross needs a realism term (it reprices margin, cash and impact)")
+    if settings.trade_gross and not settings.costs:
+        raise ValueError("trade_gross needs costs (and market data for the collateral)")
+    if settings.trade_gross and market is None:
+        raise ValueError("trade_gross needs market data (realism.align) for the collateral")
+
+
 def pricing(months: list[Month], settings, device: str,
             stock_costs: list[tuple[np.ndarray, ...]] | None,
             market: list | None = None) -> Pricing | None:  # fmt: skip
@@ -81,12 +93,7 @@ def pricing(months: list[Month], settings, device: str,
         raise ValueError("start_book needs holdings_input")
     if settings.start_book == "market" and not realism.on(settings):
         raise ValueError("a market start needs a realism term (its market data)")
-    if settings.trade_gross < 0 or settings.trade_collateral < 0:
-        raise ValueError("trade_gross and trade_collateral cannot be negative")
-    if settings.trade_gross and not settings.costs:
-        raise ValueError("trade_gross needs costs (and market data for the collateral)")
-    if settings.trade_gross and market is None:
-        raise ValueError("trade_gross needs market data (realism.align) for the collateral")
+    _check_sizes(settings, market)
     if not settings.costs:
         return None
     if stock_costs is None:

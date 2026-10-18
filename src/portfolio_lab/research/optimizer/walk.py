@@ -135,6 +135,9 @@ class Settings:
             ``trade_gross`` (0: off, the model's own size), or less if its maintenance
             requirement would pass ``trade_collateral`` x equity (0: no cap); realism.trade_size.
             Training, the loss and held-out scores do not see it (needs ``costs`` and ``market``).
+        price_gross: Margin interest, idle cash and impact in the loss are priced on the book
+            scaled to this gross and charged per dollar of the book's gross (0: at the book's
+            own size); realism.charges. Usually ``trade_gross``.
     """
 
     model: str
@@ -177,6 +180,7 @@ class Settings:
     equity: float = 100_000.0
     trade_gross: float = 0.0
     trade_collateral: float = 0.5
+    price_gross: float = 0.0
 
 
 #: Settings removed in the cleanup of 2026-10-18, each with the value that left it off: an

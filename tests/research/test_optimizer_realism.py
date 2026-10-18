@@ -147,6 +147,33 @@ def test_margin_at_the_brokers_rate_and_idle_cash_at_its_cash_rate():
     assert realism.on(replace(base, cash_rate=0.0)) and not realism.on(base)
 
 
+def test_price_gross_prices_margin_cash_and_impact_at_the_traded_size_per_dollar():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings  # noqa: PLC0415
+
+    m = realism.Market(torch.tensor([1.0, 4.0, 10.0, 50.0]), torch.full((4,), 0.02),
+                       torch.full((4,), 1e6), 0.004)  # fmt: skip
+    w = torch.tensor([30.0, 20.0, -10.0, -5.0], dtype=torch.float64)  # a free-size book, 65x
+    held = torch.tensor([20.0, 20.0, -10.0, 0.0], dtype=torch.float64)
+    full = Settings("linear", rebate=True, margin_rate=0.065, cash_rate=0.0356, impact=1.0)
+    priced = replace(full, price_gross=1.0)
+    one = float(realism.charges(w, held, m, priced, 1e5))
+    # scale-free: twice the book (and its held book) pays twice the charges
+    assert float(realism.charges(2 * w, 2 * held, m, priced, 1e5)) == pytest.approx(2 * one)
+    # per dollar of gross they are the charges of the same book scaled to 1.0x
+    c = 1.0 / float(w.abs().sum())
+    assert one * c == pytest.approx(float(realism.charges(c * w, c * held, m, full, 1e5)))
+    # at 1.0x a book with longs below equity pays idle cash, no margin interest
+    longs = float(torch.relu(c * w).sum())
+    no_impact = replace(priced, impact=0.0)
+    expect = 0.004 * 15.0 + (0.004 - 0.0356 / 12) * (1 - longs) / c
+    assert float(realism.charges(w, held, m, no_impact, 1e5)) == pytest.approx(expect)
+    # a book already at the traded size is charged as it is
+    assert float(realism.charges(c * w, c * held, m, priced, 1e5)) == pytest.approx(
+        float(realism.charges(c * w, c * held, m, full, 1e5)))  # fmt: skip
+
+
 def test_the_alpaca_profile_sets_every_realism_term():
     pytest.importorskip("torch")
     from portfolio_lab.research.optimizer import realism  # noqa: PLC0415

@@ -294,6 +294,13 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
             help="With --trade-gross only: at most this collateral, share of equity (0: no cap)."
         ),
     ] = 0.5,
+    price_gross: Annotated[
+        float,
+        typer.Option(
+            help="Loss: price margin, idle cash and impact on the book scaled to this gross,"
+            " per dollar of its gross (0: at the book's own size; usually --trade-gross)."
+        ),
+    ] = 0.0,
 ) -> None:
     """Walk a model forward, one run per seed, and save each seed's monthly portfolios.
 
@@ -312,7 +319,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         "--margin-cushion": bool(margin_cushion), "--gross-limit": bool(gross_limit),
         "--invest-floor": bool(invest_floor), "--impact": bool(impact),
         "--trade-margin": trade_margin, "--start-book": start_book != "guess",
-        "--trade-gross": bool(trade_gross),
+        "--trade-gross": bool(trade_gross), "--price-gross": bool(price_gross),
     })  # fmt: skip
     import multiprocessing  # noqa: PLC0415
     import os  # noqa: PLC0415
@@ -339,6 +346,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         only=tuple(date.fromisoformat(d) for d in only.split(",")) if only else None,
         stock_drop=stock_drop, invest_floor=invest_floor, trade_margin=trade_margin,
         start_book=start_book, trade_gross=trade_gross, trade_collateral=trade_collateral,
+        price_gross=price_gross,
         **given,
     )  # fmt: skip
     try:

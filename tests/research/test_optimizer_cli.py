@@ -135,9 +135,12 @@ def test_the_trade_size_flags_reach_the_settings(tmp_path, monkeypatch):
     s = _walked(tmp_path, monkeypatch, "--model", "linear", "--costs", "c.parquet",
                 "--trade-gross", "1", "--trade-collateral", "0.4")[2]  # fmt: skip
     assert (s.trade_gross, s.trade_collateral) == (1.0, 0.4)
+    priced = _walked(tmp_path, monkeypatch, "--model", "linear", "--costs", "c.parquet",
+                     "--price-gross", "1")[2]  # fmt: skip
+    assert priced.price_gross == 1.0
     plain = walk.Settings("linear", costs="c.parquet")
     assert _walked(tmp_path, monkeypatch, "--model", "linear", "--costs", "c.parquet")[2] == plain
-    assert (plain.trade_gross, plain.trade_collateral) == (0.0, 0.5)  # off by default
+    assert (plain.trade_gross, plain.trade_collateral, plain.price_gross) == (0.0, 0.5, 0.0)
 
 
 def test_an_unknown_profile_is_refused(tmp_path):

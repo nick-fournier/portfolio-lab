@@ -29,6 +29,10 @@ return in the loss (research.optimizer.priced), off unless its setting is on:
   with daily volatility s and daily dollar volume V costs ``K * s * sqrt(t * equity / V) * t``
   (square-root law), on the dollars traded from the book held going in.
 
+``price_gross`` (2026-10-18): margin interest, idle cash and impact are priced as if the book
+were scaled to that gross (the traded size) and charged per dollar of the book's gross
+(:func:`charges`), so a free-size book in training pays the traded account's costs per dollar.
+
 The book is the model's output as it is (:func:`book`): any size, limited only by these charges.
 Only the traded book can be sized at trade time (``trade_gross``, 2026-10-18; :func:`trade_size`):
 scaled to that gross, or less if its maintenance requirement would pass ``trade_collateral`` x
@@ -222,10 +226,42 @@ def penalty(w: torch.Tensor, market: Market, settings) -> torch.Tensor:
     return total
 
 
+def _sized(w: torch.Tensor, held: torch.Tensor, market: Market, settings,
+           equity: float) -> torch.Tensor:  # fmt: skip
+    """Margin interest, idle cash and impact on the book ``w`` traded from ``held`` (docs)."""
+    total = w.new_zeros(())
+    longs = torch.relu(w).sum()
+    if settings.margin_rate:
+        total = total + max(settings.margin_rate / 12 - market.tbill, 0.0) * torch.relu(longs - 1)
+    if settings.cash_rate is not None:
+        total = total + max(market.tbill - settings.cash_rate / 12, 0.0) * torch.relu(1 - longs)
+    if settings.impact:
+        t = (w - held).abs()
+        total = total + settings.impact * (market.vol * torch.sqrt(t * equity / market.adv + 1e-12)
+                                           * t).sum()  # fmt: skip
+    return total
+
+
 def charges(w: torch.Tensor, held: torch.Tensor, market: Market, settings,
             equity: float) -> torch.Tensor:  # fmt: skip
-    """The month's realism charges on the book ``w`` traded from ``held`` (module docs)."""
-    total = w.new_zeros(())
+    """The month's realism charges on the book ``w`` traded from ``held`` (module docs).
+
+    With ``price_gross`` (2026-10-18) the charges that do not grow in step with the book's size
+    (margin interest, idle cash, impact) are priced on the book and its held book scaled by the
+    same factor to gross ``price_gross``, the size the account trades (``trade_gross``), and
+    charged per dollar of the book's own gross: ``sized(c w, c held) / c`` with
+    ``c = price_gross / sum |w|``. Every charge then scales with the book, as its return does,
+    so the model's own size stays free (the paper's loss) while the account's costs are those
+    of the traded size. The lost rebate is per dollar already; the limit penalties stay on ``w``.
+    """
+    if settings.price_gross:
+        total = w.new_zeros(())
+        if settings.rebate:
+            total = total + market.tbill * torch.relu(-w).sum()
+        c = settings.price_gross / w.abs().sum().clamp(min=1e-12)
+        return total + penalty(w, market, settings) + _sized(c * w, c * held, market, settings,
+                                                             equity) / c  # fmt: skip
+    total = w.new_zeros(())  # at the book's own size: the terms in their original order
     if settings.rebate:
         total = total + market.tbill * torch.relu(-w).sum()
     longs = torch.relu(w).sum()
