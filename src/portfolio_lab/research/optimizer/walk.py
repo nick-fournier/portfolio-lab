@@ -38,10 +38,13 @@ With ``holdings_input`` (2026-10-15; needs ``costs``) each stock's row also gets
 and spread (research.optimizer.holdings): in training, from a book table of each month's
 weights (filled in month order the first time a month enters the window, refreshed at every
 step); for the test month, from the walk's real holdings of the month before after its
-returns. ``borrow_input`` adds the stock's borrow fee as well. When the month before was not
-traded (the walk's first month, or with ``only`` a month after one not listed) the test month
-starts from ``start_book``: nothing (``cash``) or the market (realism.start_book), or with
-``guess`` the model's own book-table entry for that month, as its training left it.
+returns. A training month whose month before is not in the table (a cold month's first, the
+table filled from there) holds cash going in: a zero holding, and its trades priced from cash
+(priced.held_going_in). ``borrow_input`` adds the stock's borrow fee as well. When the month
+before was not traded (the walk's first month, or with ``only`` a month after one not listed)
+the test month starts from ``start_book``: nothing (``cash``) or the market
+(realism.start_book), or with ``guess`` the model's own book-table entry for that month, as its
+training left it.
 
 ``winsor`` pulls training returns in to each month's quantiles and ``stock_drop`` hides a share
 of each step's stocks from the loss; held-out and test months are scored on real returns.

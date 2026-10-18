@@ -46,6 +46,45 @@ def test_a_month_trades_from_the_stored_book_after_its_returns():
     assert costs.carry(other[1], p.links[2]).tolist() == other[1].tolist()
 
 
+def test_the_windows_first_month_trades_from_cash_as_its_holding_input_says():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import holdings, priced, realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings, _held_loss  # noqa: PLC0415
+
+    months = _months(8)
+    stock = [(np.full(4, 0.01, np.float32), np.full(4, 0.05, np.float32))] * len(months)
+    market = [realism.Market(torch.full((4,), 10.0), torch.full((4,), 0.02),
+                             torch.full((4,), 1e6), 0.0)] * len(months)  # fmt: skip
+    s = Settings("linear", costs="t.parquet", holdings_input=True, impact=1.0)
+    p = priced.pricing(months, s, "cpu", stock, market)
+    pairs = [(torch.from_numpy(m.x), torch.from_numpy(m.r)) for m in months]
+    torch.manual_seed(0)
+    model = Optimizer("linear", 2 + 2)
+    lo, t = 3, 7  # a cold month: its table is filled from the window's first month on
+    holdings.fill(model, pairs, p, range(lo, t))
+    assert lo - 1 not in p.book
+    assert holdings.inputs(pairs, p, p.held(), lo)[:, 2].abs().sum() == 0  # a cash holding input
+    assert priced.held_going_in(model, pairs, p, lo) is None  # and trades from cash
+    later = priced.held_going_in(model, pairs, p, lo + 1)
+    assert torch.allclose(later, p.book[lo] * (1 + pairs[lo][1]))  # later months: the table
+
+    def from_cash(w):  # same stocks both months: every dollar of w is traded
+        r = pairs[lo][1]
+        return (w @ r - 0.01 * w.abs().sum() - 0.05 / 12 * torch.relu(-w).sum()
+                - realism.charges(w, torch.zeros(4), p.market[lo], s, s.equity))  # fmt: skip
+
+    w = torch.tensor([2.5, 0.0, 0.3, -1.0])
+    zeros = {lo - 1: torch.zeros(4)}  # an all-zero book
+    got = float(priced.net(model, pairs, p, s, lo, w))
+    assert got == pytest.approx(float(from_cash(w)), rel=1e-5)
+    assert got == pytest.approx(float(priced.net(model, pairs, p, s, lo, w, zeros)), rel=1e-5)
+    own = model(holdings.inputs(pairs, p, p.held(), lo)).detach()  # the model's book for lo
+    want = float((1 - from_cash(own)) ** 2)
+    assert _held_loss(model, pairs, p, s, [lo]) == pytest.approx(want, rel=1e-5)  # held out
+    assert float(priced.loss(model, pairs, p, s, lo).detach()) == pytest.approx(want, rel=1e-5)
+
+
 def test_the_loss_stores_each_months_book_and_trades_from_the_month_before():
     torch = pytest.importorskip("torch")
     from portfolio_lab.research.optimizer import holdings, priced  # noqa: PLC0415

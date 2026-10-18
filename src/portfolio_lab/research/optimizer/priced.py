@@ -4,7 +4,10 @@ Each training month k is traded from the book held going into it: month k-1's we
 k-1's returns (they grow with their stocks), from the book table (``holdings_input``) or, without
 one, the current model's own weights for k-1. Holdings are tracked, not recomputed (2026-10-16):
 the book table keeps each month's weights as last written (a training step, a held-out roll or
-the walk's real trade), and the month after trades from them.
+the walk's real trade), and the month after trades from them. A month whose month before is not
+in the table holds cash going in, as its holding input (research.optimizer.holdings) says, and
+its trades are priced from cash: the window's first month after a cold start, whose table is
+cleared and filled from that month on (:func:`held_going_in`).
 """
 
 from dataclasses import dataclass
@@ -95,17 +98,27 @@ def held_going_in(model, data: list[Pair], pricing: Pricing, k: int,
                   held=None) -> torch.Tensor | None:  # fmt: skip
     """The book month k trades from: month k-1's weights after its returns (no gradient).
 
-    From ``held`` (anything with ``get(month)``; default the pricing's book table) when it has
-    month k-1, else the model's own weights for it; ``None`` (cash) for the first month.
+    ``None`` is cash. From ``held`` (anything with ``get(month)``; default the pricing's book
+    table): its month k-1, or cash when it lacks that month, the same test month k's holding
+    input makes (``holdings.with_holdings``: zeros), so a month trades from the book it is shown.
+    Only the window's first month, ``lo``, can lack it: the walk fills the table from ``lo`` on,
+    and a cold month (or a warm walk's first) starts from an empty table, so ``lo - 1`` is not in
+    it; a later warm month keeps ``lo - 1`` from the months before and trades from it. Until
+    2026-10-18 a month the table lacked was priced from the model's own weights for k-1, against
+    its cash holding input. Without a table: the model's own weights for month k-1. The first
+    month (k 0) starts in cash.
     """
     if k == 0:
         return None
     with torch.no_grad():
         held = pricing.held() if held is None else held
-        before = held.get(k - 1) if held is not None else None
-        if before is None:
-            before = realism.book(model, holdings.inputs(data, pricing, held, k - 1),
+        if held is None:  # no book table: the model's own weights for month k-1
+            before = realism.book(model, holdings.inputs(data, pricing, None, k - 1),
                                   pricing, k - 1)  # fmt: skip
+        else:
+            before = held.get(k - 1)
+            if before is None:  # not in the table: cash, as the holding input says
+                return None
         return before * (1 + data[k - 1][1])
 
 
