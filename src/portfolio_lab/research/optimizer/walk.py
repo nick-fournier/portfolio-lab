@@ -346,7 +346,7 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
         return _held_loss(model, raw, pricing, settings, block, held)
 
     norms: list[torch.Tensor] = []
-    guard = stopping.Guard(model, adam, average)
+    guard = stopping.Guard(model, adam, average, pricing.book if pricing is not None else None)
 
     def one_pass(p: int) -> list:
         lr = rate(settings.schedule, start_lr, settings.lr_min, p, epochs) * guard.scale

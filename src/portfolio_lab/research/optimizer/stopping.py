@@ -77,18 +77,21 @@ class Guard:
     """Rolls back a pass that leaves the model broken; the passes after it run at half rate.
 
     A pass whose weights come out not finite (a blown-up step, bench1-3) is undone: model,
-    Adam and ``average`` go back to where the pass began, ``rollbacks`` counts it and
-    ``scale`` (the factor on every later pass's rate) halves, so a month never ends broken.
+    Adam, ``average`` and ``book`` (the pricing's book table, refreshed at every step, so a
+    broken model's steps leave it not finite too) go back to where the pass began,
+    ``rollbacks`` counts it and ``scale`` (the factor on every later pass's rate) halves, so a
+    month never ends broken.
     """
 
-    def __init__(self, model, adam, average=None):
-        self.model, self.adam, self.average = model, adam, average
+    def __init__(self, model, adam, average=None, book: dict | None = None):
+        self.model, self.adam, self.average, self.book = model, adam, average, book
         self.scale, self.rollbacks = 1.0, 0
 
     def __call__(self, one_pass, p: int) -> list:
         """Run ``one_pass(p)``; its losses, or none if it was rolled back."""
+        book = None if self.book is None else {k: w.clone() for k, w in self.book.items()}
         saved = (copy.deepcopy(self.model.state_dict()), copy.deepcopy(self.adam.state_dict()),
-                 self.average.state() if self.average is not None else None)  # fmt: skip
+                 self.average.state() if self.average is not None else None, book)  # fmt: skip
         losses = one_pass(p)
         if all(bool(q.isfinite().all()) for q in self.model.parameters()):
             return losses
@@ -96,5 +99,8 @@ class Guard:
         self.adam.load_state_dict(saved[1])
         if self.average is not None:
             self.average.load(saved[2])
+        if self.book is not None:  # in place: the pricing holds this table
+            self.book.clear()
+            self.book.update(saved[3])
         self.scale, self.rollbacks = self.scale / 2, self.rollbacks + 1
         return []

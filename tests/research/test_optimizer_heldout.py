@@ -151,6 +151,48 @@ def test_guard_rolls_back_a_pass_that_breaks_the_model_and_halves_later_rates():
     assert guard(lambda p: ["fine"], 1) == ["fine"] and guard.rollbacks == 1
 
 
+def test_a_rolled_back_pass_puts_the_book_table_back_so_later_steps_stay_finite(monkeypatch):
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import priced  # noqa: PLC0415
+    from portfolio_lab.research.optimizer import walk as walking  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.clipping import Clipper  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+
+    rng = np.random.default_rng(12)
+    months = [
+        data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCD"),
+                   rng.uniform(-0.5, 0.5, (4, 2)).astype(np.float32),
+                   rng.normal(0.01, 0.05, 4).astype(np.float32))
+        for k in range(12)
+    ]  # fmt: skip
+    stock = [(np.full(4, 0.005, np.float32), np.full(4, 0.05, np.float32))] * 12
+    s = walking.Settings("linear", costs="t.parquet", holdings_input=True)
+    p = priced.pricing(months, s, "cpu", stock)
+    pairs, raw = walking._data(months, s, "cpu")
+    torch.manual_seed(0)
+    model = Optimizer("linear", 2 + 2)
+    real, calls = walking._pass, []
+
+    def blown(net, *args):  # the first pass breaks the model, so its steps store NaN books
+        calls.append(len(calls))
+        if len(calls) == 1:
+            with torch.no_grad():
+                for q in net.parameters():
+                    q.fill_(math.nan)
+        return real(net, *args)
+
+    monkeypatch.setattr(walking, "_pass", blown)
+    train = list(range(11))
+    losses, *_, diag = walking._fit(
+        model, torch.optim.Adam(model.parameters()), pairs, train, 3, s,
+        np.random.default_rng(0), p, start_lr=0.01, span=range(11), clipper=Clipper(None),
+        average=None, test=-1, hold_rng=np.random.default_rng(1), raw=raw,
+    )  # fmt: skip
+    assert diag["rollbacks"] == 1 and len(calls) == 3 and sorted(p.book) == train
+    assert all(bool(w.isfinite().all()) for w in p.book.values())  # the books came back too
+    assert len(losses) == len(train) and bool(torch.stack(losses).isfinite().all())
+
+
 def test_stock_drop_changes_training_with_or_without_costs():
     pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
