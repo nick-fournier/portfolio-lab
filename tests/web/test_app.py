@@ -15,7 +15,7 @@ from portfolio_lab.strategies.base import create
 from portfolio_lab.web import series
 from portfolio_lab.web.app import create_app
 from portfolio_lab.web.routes import compare, paper
-from portfolio_lab.web.routes.status import data_freshness
+from portfolio_lab.web.routes.status import chains, data_freshness
 
 
 def _shows(page: str, text: str) -> bool:
@@ -66,10 +66,13 @@ def client(tmp_path):
         tmp_path,
         "scheduler",
         {
-            "daily_ingest": {
-                "last_success": "2024-01-03T01:00:00+00:00",
-                "last_session": "2024-01-02",
-                "last_error": None,
+            "daily": {
+                "next": "2024-01-04T01:00:00+00:00",
+                "completed": "2024-01-03T01:00:00+00:00",
+                "jobs": {
+                    "daily_ingest": {"last_success": "2024-01-03T01:05:00+00:00"},
+                    "derive": {"last_error": "RuntimeError: boom"},
+                },
             }
         },
     )
@@ -132,6 +135,15 @@ def test_run_detail(client):
 @pytest.mark.parametrize("run_id", ["nope", "%2E%2E", "a%2F..%2Fb"])
 def test_run_detail_404(client, run_id):
     assert client.get(f"/runs/{run_id}").status_code == 404
+
+
+def test_status_lists_each_chain_with_its_next_run_in_new_york():
+    state = {"weekly": {"next": "2024-07-06T10:00:00+00:00", "jobs": {"macro": {}}},
+             "daily": {"next": "2024-07-09T00:00:00+00:00", "jobs": {}}, "stray": 1}  # fmt: skip
+    out = chains(state)
+    assert [c["name"] for c in out] == ["daily", "weekly"]
+    assert out[0]["next"].hour == 20 and out[1]["next"].hour == 6  # New York time
+    assert out[1]["jobs"] == {"macro": {}}
 
 
 def test_status_and_health(client):

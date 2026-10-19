@@ -27,19 +27,25 @@
 </table></div>
 
 <h2>Scheduler</h2>
+<p class="muted">Two chains at fixed times. In each, a job starts once the jobs it needs have
+  succeeded; independent ones run side by side (one heavy job at a time).</p>
+{% for c in chains %}
+<h3>{{ c.name | capitalize }}: {{ c.when }}</h3>
+<p class="muted">Next run {{ c.next.strftime("%a %b %-d, %-I:%M %p") if c.next else "–" }} ET.
+  Last complete run: {{ (c.completed or "none yet")[:16] | replace("T", " ") }}{% if c.completed %} UTC{% endif %}.</p>
 <div class="table-wrap"><table>
-  <thead><tr><th>Job</th><th>Last success (UTC)</th><th>Last session</th><th>Last error</th></tr></thead>
+  <thead><tr><th>Job</th><th>Last success (UTC)</th><th>Last error</th></tr></thead>
   <tbody>
-  {% for name, s in scheduler.items() %}
+  {% for name, s in c.jobs.items() %}
     <tr>
       <td>{{ name }}</td>
       <td class="muted">{{ (s.last_success or "never")[:19] | replace("T", " ") }}</td>
-      <td class="muted">{{ s.last_session or "–" }}</td>
       <td class="{{ 'neg' if s.last_error else 'muted' }}">{{ s.last_error or "–" }}</td>
     </tr>
-  {% else %}
-    <tr><td colspan="4" class="muted">The scheduler has not run yet.</td></tr>
   {% endfor %}
   </tbody>
 </table></div>
+{% else %}
+<p class="muted">The scheduler has not run yet.</p>
+{% endfor %}
 {% endblock %}

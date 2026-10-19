@@ -61,6 +61,25 @@ def read_job(data_dir: Path, name: str) -> dict[str, Any] | None:
     )
 
 
+#: The scheduler's chains (``jobs.scheduler``), in run order, with when they run.
+CHAINS = {"daily": "Trading days, 8 pm ET (5 pm after an early close)",
+          "weekly": "Saturdays, 6 am ET"}  # fmt: skip
+
+
+def chains(scheduler: dict[str, Any]) -> list[dict[str, Any]]:
+    """Each chain's schedule, next run (New York time), last completed run and jobs."""
+    out = []
+    for name, when in CHAINS.items():
+        record = scheduler.get(name)
+        if not isinstance(record, dict):
+            continue
+        nxt = record.get("next")
+        out.append({"name": name, "when": when, "completed": record.get("completed"),
+                    "next": datetime.fromisoformat(nxt).astimezone(NEW_YORK) if nxt else None,
+                    "jobs": record.get("jobs", {})})  # fmt: skip
+    return out
+
+
 @router.get("/status", response_class=HTMLResponse)
 def status_page(request: Request) -> HTMLResponse:
     """Show each data job's latest summary and the scheduler's state."""
@@ -79,13 +98,12 @@ def status_page(request: Request) -> HTMLResponse:
                 }
             )
     scheduler = _read(status_dir / "scheduler.json") or {}
-    scheduler_jobs = {k: v for k, v in scheduler.items() if isinstance(v, dict)}
     return request.app.state.templates.TemplateResponse(
         request,
         "status.html",
         {
             "jobs": jobs,
-            "scheduler": scheduler_jobs,
+            "chains": chains(scheduler),
             "freshness": data_freshness(read_job(request.app.state.data_dir, "prices")),
         },
     )
