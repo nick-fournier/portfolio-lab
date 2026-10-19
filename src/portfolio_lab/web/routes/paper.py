@@ -128,11 +128,9 @@ def _last_orders(folder: Path) -> tuple[date | None, list[dict]]:
     return last, mine.sort("side", "symbol").to_dicts()
 
 
-@router.get("/paper", response_class=HTMLResponse)
-def paper_page(request: Request) -> HTMLResponse:
-    """Render paper equity against SPY and the backtest, holdings and the last orders."""
-    data_dir = request.app.state.data_dir
-    paths = DataPaths(data_dir, request.app.state.trading_dir)
+def page_context(data_dir: Path, trading_dir: Path | None = None) -> dict:
+    """The page's model, summary, chart, holdings and last rebalance (see module docs)."""
+    paths = DataPaths(data_dir, trading_dir)
     snapshots = _read(paths.paper / "snapshots.parquet")
     snapshots = snapshots.sort("date") if snapshots.height else snapshots
     production = _name(PAPER_STRATEGY)
@@ -158,4 +156,11 @@ def paper_page(request: Request) -> HTMLResponse:
             context["chart"] = growth_figure(growth, names, set(names), skip_weekends=True)
         context["holdings"] = _holdings(paths.paper, latest["equity"])
         context["last_rebalance"], context["orders"] = _last_orders(paths.paper)
+    return context
+
+
+@router.get("/paper", response_class=HTMLResponse)
+def paper_page(request: Request) -> HTMLResponse:
+    """Render paper equity against SPY and the backtest, holdings and the last orders."""
+    context = page_context(request.app.state.data_dir, request.app.state.trading_dir)
     return request.app.state.templates.TemplateResponse(request, "paper.html", context)
