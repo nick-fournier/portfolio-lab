@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from portfolio_lab.backtest.results import RunResult, save_run
 from portfolio_lab.core.store import write_status
+from portfolio_lab.jobs.models import CLASS_2, model_record
 from portfolio_lab.jobs.taxes import publish_runs
 from portfolio_lab.web import series
 from portfolio_lab.web.app import create_app
@@ -294,6 +295,25 @@ def test_paper_page_empty_then_with_records(client, tmp_path):
     for expected in ("$101,000", "1.0%", "CCC", "Paper vs SPY", "Last rebalance: 2024-01-02"):
         assert expected in page.text
     assert "5940.00" not in page.text  # the orders table is gone; the orders live on Alpaca
+    # a rebalance saved before models were recorded was class 1's; production is class 2
+    assert "<b>Momentum + health filter</b>; production is now <b>Linear model</b>" in page.text
+
+
+def test_paper_page_compares_from_the_latest_model_switch(client, tmp_path):
+    folder = tmp_path / "trading" / "paper"
+    folder.mkdir(parents=True)
+    days = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
+    _write(folder, "snapshots", {"date": days, "equity": [100_000.0, 101_000.0, 103_020.0],
+                                 "cash": [1_000.0] * 3, "positions": [2] * 3})  # fmt: skip
+    _write(folder, "rebalances", {"date": days[:2], "targets": [2, 2], "closes": [0, 1],
+                                  "orders": [2, 3], "equity": [100_000.0, 101_000.0],
+                                  "model": [None, model_record(*CLASS_2)]},
+           model=pl.String)  # fmt: skip
+    page = client.get("/paper").text
+    assert "production is now" not in page  # the account holds production's model
+    for expected in ("Holding Linear model since", "2024-01-03", "2.0%",
+                     "Return since the account opened", "3.0%"):  # fmt: skip
+        assert expected in page, expected
 
 
 def test_paper_page_reads_a_separate_trading_dir(tmp_path):

@@ -1,11 +1,12 @@
 """The models the lab runs: the two production classes, their Kelly versions, the baselines.
 
 Class 1 and class 2 are production: drawn on the Overview and Compare charts, and the paper
-account follows class 1 (``jobs.tasks.PAPER_STRATEGY``). Their Kelly versions weigh the same
+account follows one of them (:data:`PAPER_STRATEGY`). Their Kelly versions weigh the same
 candidates for long-run growth instead of return per unit of risk; they are drawn beside
 production so the trade-off (more return, much deeper drops) stays in view.
 """
 
+import json
 from typing import Any
 
 from portfolio_lab.backtest.engine import label as strategy_label
@@ -53,6 +54,11 @@ MODELS: tuple[tuple[str, dict[str, Any]], ...] = (CLASS_1, CLASS_2)
 #: The production models' higher-risk versions, drawn beside them (every other strategy is
 #: listed in the tables but starts hidden on the charts).
 KELLY_MODELS: tuple[tuple[str, dict[str, Any]], ...] = (CLASS_1_KELLY, CLASS_2_KELLY)
+#: The model the paper account follows, and production wherever one model stands for the lab
+#: (the Compare page's head-to-heads with young funds, the tax calculator): class 2 from the
+#: 2026-10-30 rebalance on, class 1 before (same Sharpe since 2000, class 2 about 2% a year
+#: ahead; the paper account tests its forecaster pipeline before any real money).
+PAPER_STRATEGY: tuple[str, dict[str, Any]] = CLASS_2
 #: Backtests the scheduler refreshes weekly so the dashboard always shows current baselines.
 SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("buy_hold", {}),  # SPY
@@ -85,3 +91,10 @@ def run_label(meta: dict[str, Any]) -> str:
     except (KeyError, TypeError, ValueError):  # a retired strategy or parameter
         saved = None
     return titled.get(saved) or meta.get("label") or meta["strategy"]
+
+
+def model_record(name: str, params: dict[str, Any]) -> str:
+    """A model's identity as saved with each paper rebalance; :func:`run_label` reads it back."""
+    untitled = {k: v for k, v in params.items() if k != "title"}
+    label = strategy_label(create(name, **params))
+    return json.dumps({"strategy": name, "params": untitled, "label": label})

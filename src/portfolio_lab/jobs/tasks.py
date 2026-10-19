@@ -38,7 +38,7 @@ from portfolio_lab.data.sources import sharadar as sharadar_api
 from portfolio_lab.data.sources.alpaca import make_client
 from portfolio_lab.data.sources.tiingo import fetch_fund_history
 from portfolio_lab.forecasters import linear, report
-from portfolio_lab.jobs.models import CLASS_1, SCHEDULED_BACKTESTS, run_label
+from portfolio_lab.jobs.models import PAPER_STRATEGY, SCHEDULED_BACKTESTS, model_record, run_label
 from portfolio_lab.research.conditions import caution_dial, conditional_ic
 from portfolio_lab.research.context import STOCK_FEATURES
 from portfolio_lab.research.features import FEATURES
@@ -408,7 +408,7 @@ def make_vs_buy_task(settings: Settings) -> dict:
     rates = reader.read(settings.data_dir, "series").filter(pl.col("series") == "DTB3")
     rates = rates.select("date", pl.col("value").alias("rate"))
     start = min(frame["date"].min() for _, _, frame in series.values())
-    production = f"ours: {strategy_label(create(CLASS_1[0], **CLASS_1[1]))}"
+    production = f"ours: {strategy_label(create(PAPER_STRATEGY[0], **PAPER_STRATEGY[1]))}"
     production = production if production in series else None
     summary, growth = compare(series, rates, start, ours=production)
     write_parquet_atomic(summary, paths.make_vs_buy / "summary.parquet")
@@ -417,10 +417,6 @@ def make_vs_buy_task(settings: Settings) -> dict:
     status = {"series": summary["key"].n_unique(), "common_start": common["start"].min()}
     write_status(settings.data_dir, "make_vs_buy", status)
     return status
-
-
-#: The strategy the paper account follows: class 1 (switch to ``jobs.models.CLASS_2`` here).
-PAPER_STRATEGY: tuple[str, dict[str, Any]] = CLASS_1
 
 
 def paper_task(settings: Settings, dry_run: bool = False) -> dict:
@@ -437,7 +433,8 @@ def paper_task(settings: Settings, dry_run: bool = False) -> dict:
     try:
         return paper.run(settings.data_dir, strategy, broker,
                          refresh=lambda: derive_task(settings), dry_run=dry_run,
-                         trading_dir=settings.trading_dir)  # fmt: skip
+                         trading_dir=settings.trading_dir,
+                         model=model_record(name, params))  # fmt: skip
     finally:
         broker.close()
         if callable(close := getattr(strategy, "close", None)):

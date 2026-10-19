@@ -5,23 +5,26 @@
 <h1>Paper trading</h1>
 <p class="lede">The production strategy running on Alpaca's paper account: dummy money, real
   prices. At each month end it computes the target weights from that day's close and places
-  market orders that fill at the next open, as the backtest assumes. Strategy:
-  <code>{{ strategy }}</code>.</p>
+  market orders that fill at the next open, as the backtest assumes. The account holds
+  <b>{{ held }}</b>{% if production != held %}; production is now <b>{{ production }}</b>,
+  which it switches to at the next month end{% endif %}.</p>
 
 {% if summary %}
 <div class="table-wrap"><table>
   <tbody>
-    <tr><td>Since</td><td class="num">{{ summary.start }}</td></tr>
+    <tr><td>Holding {{ held }} since</td><td class="num">{{ summary.start }}</td></tr>
     <tr><td>Equity ({{ summary.date }})</td><td class="num">${{ "{:,.0f}".format(summary.equity) }}</td></tr>
     <tr><td>Cash</td><td class="num">${{ "{:,.0f}".format(summary.cash) }}</td></tr>
-    <tr><td>Return since start</td><td class="num">{{ summary.ret | pct }}</td></tr>
+    <tr><td>Return since then</td><td class="num">{{ summary.ret | pct }}</td></tr>
+    {% if summary.opened != summary.start %}<tr><td>Return since the account opened
+      ({{ summary.opened }})</td><td class="num">{{ summary.total | pct }}</td></tr>{% endif %}
   </tbody>
 </table></div>
 
 {% if chart %}
 <h2>Paper vs SPY and the backtest</h2>
-<p class="muted">Growth of $1 since the paper account started. If paper and backtest drift
-  apart, live trading differs from the model (fills, timing, data).</p>
+<p class="muted">Growth of $1 since the account started holding {{ held }}. If paper and
+  backtest drift apart, live trading differs from the model (fills, timing, data).</p>
 <div id="growth" class="chart"></div>
 {% endif %}
 

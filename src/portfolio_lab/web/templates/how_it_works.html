@@ -62,12 +62,12 @@
   500 15% below its two-year high and below its 200-day average three month ends in a
   row).</p>
 <ul>
-  <li><b>Momentum + health filter</b> (class 1; the paper account follows it): each stock's expected
-    return is its trailing one-year return, and its risk the shrunk covariance of a year of
-    daily prices.</li>
-  <li><b>Linear model</b> (class 2): each stock's expected return comes from the
-    <a href="/forecasts">forecaster</a>, nine terms fitted on all earlier months, rescaled
-    by Grinold's rule; its risk is the same shrunk covariance of a year of daily prices.</li>
+  <li><b>Momentum + health filter</b> (class 1): each stock's expected return is its trailing
+    one-year return, and its risk the shrunk covariance of a year of daily prices.</li>
+  <li><b>Linear model</b> (class 2; the paper account follows it from October 30, 2026, class 1
+    before): each stock's expected return comes from the <a href="/forecasts">forecaster</a>,
+    nine terms fitted on all earlier months, rescaled by Grinold's rule; its risk is the same
+    shrunk covariance of a year of daily prices.</li>
 </ul>
 <p>Beside each, the charts draw a higher-risk version weighted for the highest expected
   long-run growth instead (Kelly: expected return minus half the variance; class 2's bets 16
