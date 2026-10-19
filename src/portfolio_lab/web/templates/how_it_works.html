@@ -62,9 +62,9 @@
   500 15% below its two-year high and below its 200-day average three month ends in a
   row).</p>
 <ul>
-  <li><b>Momentum + health filter</b> (class 1): each stock's expected return is its trailing
+  <li><b>Momentum · health · max-Sharpe</b> (class 1): each stock's expected return is its trailing
     one-year return, and its risk the shrunk covariance of a year of daily prices.</li>
-  <li><b>Linear model</b> (class 2; the paper account follows it from October 30, 2026, class 1
+  <li><b>Linear · health · max-Sharpe</b> (class 2; the paper account follows it from October 30, 2026, class 1
     before): each stock's expected return comes from the <a href="/forecasts">forecaster</a>,
     nine terms fitted on all earlier months, rescaled by Grinold's rule; its risk is the same
     shrunk covariance of a year of daily prices.</li>
@@ -78,10 +78,10 @@
 <table>
   <thead><tr><th>January 2000 to September 2026</th><th class="num">Per year</th><th class="num">Sharpe</th><th class="num">Worst drop</th></tr></thead>
   <tbody>
-    <tr><td>Momentum + health filter (class 1)</td><td class="num">17.9%</td><td class="num">0.86</td><td class="num">−34%</td></tr>
-    <tr><td>Linear model (class 2)</td><td class="num">19.3%</td><td class="num">0.86</td><td class="num">−38%</td></tr>
-    <tr><td>Momentum + health filter, Kelly</td><td class="num">20.9%</td><td class="num">0.74</td><td class="num">−66%</td></tr>
-    <tr><td>Linear model, Kelly</td><td class="num">22.6%</td><td class="num">0.78</td><td class="num">−63%</td></tr>
+    <tr><td>Momentum · health · max-Sharpe (class 1)</td><td class="num">17.9%</td><td class="num">0.86</td><td class="num">−34%</td></tr>
+    <tr><td>Linear · health · max-Sharpe (class 2)</td><td class="num">19.3%</td><td class="num">0.86</td><td class="num">−38%</td></tr>
+    <tr><td>Momentum · health · Kelly</td><td class="num">20.9%</td><td class="num">0.74</td><td class="num">−66%</td></tr>
+    <tr><td>Linear · health · Kelly x16</td><td class="num">22.6%</td><td class="num">0.78</td><td class="num">−63%</td></tr>
     <tr><td>SPY</td><td class="num">8.2%</td><td class="num">0.51</td><td class="num">−55%</td></tr>
   </tbody>
 </table>

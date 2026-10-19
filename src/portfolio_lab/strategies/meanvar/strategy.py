@@ -112,7 +112,7 @@ class MeanVar:
         gauge_band: Stress levels (0 to 1) where the tilt starts and where it is complete
             (all minimum variance).
         schedule: Rebalance frequency.
-        title: Display name of a named configuration (e.g. "Linear model"); not a
+        title: Display name of a named configuration (e.g. "Linear · health · max-Sharpe"); not a
             parameter, so it never changes a run's identity.
         cache_dir: Forecast cache root, set by the runner (not a strategy parameter).
         forecaster_dir: The nine-term forecaster's results, set by the runner (not a
