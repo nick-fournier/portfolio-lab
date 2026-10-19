@@ -333,6 +333,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     keep_patience: Annotated[
         int, typer.Option(help="With --keep-best: passes without a new best before stopping.")
     ] = 4,
+    holdout_every: Annotated[
+        int, typer.Option(help="With --watch: hold out every K-th month end for good (0: draw).")
+    ] = 0,
     price_gross: Annotated[
         float,
         typer.Option(
@@ -390,6 +393,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         start_book=start_book, trade_gross=trade_gross, trade_collateral=trade_collateral,
         price_gross=price_gross, loss_gross=loss_gross, risk_aversion=risk_aversion,
         size_anchor=size_anchor, keep_best=keep_best, keep_patience=keep_patience,
+        holdout_every=holdout_every,
         **given,
     )  # fmt: skip
     try:

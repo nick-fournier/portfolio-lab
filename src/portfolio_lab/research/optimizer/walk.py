@@ -1,10 +1,9 @@
 """Walk-forward training: at each month end, train on earlier months, then pick the portfolio.
 
-At month end t, the months whose next-month returns are already known are the ones before
-t. The training months are the ``window`` months before t (all earlier months if ``window``
-is ``None``). Each pass visits the training months in a shuffled order and takes one Adam step
-per month (paper, Algorithm 2), the rate following ``schedule`` over the month's passes. Then
-the model's weights for month t's candidates are the portfolio held over the next month.
+At month end t the training months are the ``window`` months before t (all earlier months if
+``window`` is ``None``), whose next-month returns are known. Each pass visits them in a
+shuffled order and takes one Adam step per month (paper, Algorithm 2), the rate following
+``schedule``. Then the model's weights for month t's candidates are held over the next month.
 
 With ``cold`` (2026-10-15) every month trains a fresh model: the seed's same starting weights,
 a fresh Adam and average, ``first_epochs`` passes from ``lr``, an empty book table (so its
@@ -103,8 +102,10 @@ class Settings:
         watch: Hold out and score ``holdout`` months every pass; every pass runs (module docs).
         keep_best / keep_patience: With ``watch``: score the held-out months by ranking, keep
             the best pass and stop after this many passes without a new best (stopping.Keeper).
-        scatter: Hold out single months drawn anywhere in the window, not a block.
-        holdout_seed: Seed of the held-out draw's own random stream (``None``: ``seed``'s).
+        scatter / holdout_seed: Hold out single months drawn anywhere in the window, not a
+            block; the draw's own random stream's seed (``None``: ``seed``'s).
+        holdout_every: Hold out every this-many-th month end for good instead of drawing (0:
+            draw); a warm model then never trains on them (stopping.held_months).
         only: Train and trade only these test month ends (``None``: every month).
         stock_drop: Share of the month's stocks each training step hides from the loss, drawn
             afresh (returns 0, the rest x 1 / (1 - share)); the model sees all; costs still paid.
@@ -116,12 +117,10 @@ class Settings:
             per dollar above it (also for ``gross_limit`` and ``invest_floor``); impact
             constant K (0: off); account size in dollars (for impact).
         gross_limit: Gross (sum |w|) allowed before it is charged like the cushion (0: off).
-        invest_floor: Longs (sum of positive w) below this are charged like the cushion (0: off;
-            the long-priority toggle). With ``trade_margin`` the traded month is charged too.
+        invest_floor: Longs below this are charged like the cushion (0: off; long priority).
         start_book: What a traded month starts from when nothing was traded the month before:
             ``guess`` (the model's own weights), ``cash`` or ``market`` (realism.start_book).
-        trade_margin: Each training step also pays the traded month's penalty (margin cushion,
-            gross limit, investment floor; research.optimizer.realism; needs one of them).
+        trade_margin: Each training step also pays the traded month's penalty (realism).
         trade_gross / trade_collateral: The traded book's size at trade time: gross (sum |w|)
             ``trade_gross`` (0: off), or less if its maintenance requirement would pass
             ``trade_collateral`` x equity (0: no cap); realism.trade_size (needs ``market``).
@@ -186,6 +185,7 @@ class Settings:
     size_anchor: float = 0.0
     keep_best: bool = False
     keep_patience: int = 4
+    holdout_every: int = 0
 
 
 #: Settings removed in the cleanup of 2026-10-18, each with the value that left it off: an
@@ -355,7 +355,8 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     """
     if pricing is not None:
         holdings.fill(data, pricing, span)
-    fit, block = (stopping.held_months(train, settings.holdout, hold_rng, settings.scatter)
+    fit, block = (stopping.held_months(train, settings.holdout, hold_rng, settings.scatter,
+                                       settings.holdout_every)
                   if settings.watch else (train, []))  # fmt: skip
     tests: list[float] = []
     held: list[float] = []
@@ -430,13 +431,12 @@ def walk(
         ``weights`` (date, symbol, weight) for every test month; ``log`` (date, ret = the
         portfolio's next-month return over the T-bill before costs, ``long`` and ``short`` =
         the sums of the positive and negative weights, ``largest`` = the largest absolute
-        weight's share of the sum of absolute weights, mean training loss over the last pass,
-        passes run, best smoothed held-out score and its per-pass curve with ``watch`` (minus
-        the held-out ranking with ``keep_best``, and ``best_pass`` the pass kept), the median
-        and largest gradient size over the month's steps before clipping, the share of steps
-        clipped and the last step's limit, seconds, ``model_gross`` and ``scale``: the model's
-        own gross and the trade-time scale on it, realism.trade_size); and the final
-        model (with ``average``, its averaged parameters: the model that traded the last month).
+        weight's share of gross, mean training loss over the last pass, passes run, best
+        smoothed held-out score and its per-pass curve with ``watch`` (minus the held-out
+        ranking with ``keep_best``, and ``best_pass`` the pass kept), the median and largest
+        gradient size over the month's steps before clipping, the share of steps clipped and
+        the last step's limit, seconds, ``model_gross`` and ``scale``, realism.trade_size); and
+        the final model (with ``average``, its averaged parameters: the one that traded last).
     """
     if settings.keep_best and not settings.watch:
         raise ValueError("keep_best needs watch: held-out months to score each pass")

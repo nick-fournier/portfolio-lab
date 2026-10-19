@@ -231,6 +231,11 @@ def test_keeper_keeps_the_best_smoothed_pass_and_stops_on_patience():
     assert float(stopping.rank_corr(a, b)) == pytest.approx(1.0)
     assert float(stopping.rank_corr(a, -b)) == pytest.approx(-1.0)
     assert abs(float(stopping.rank_corr(a, torch.tensor([1.0, 4.0, 3.0, 2.0])))) < 1.0
+    # every 3rd month end held out for good: fixed by position, the random stream untouched
+    rng = np.random.default_rng(5)
+    fit, block = stopping.held_months(list(range(7, 20)), 12, rng, scatter=True, every=3)
+    assert block == [9, 12, 15, 18] and fit == [k for k in range(7, 20) if k % 3]
+    assert rng.integers(1000) == np.random.default_rng(5).integers(1000)
 
 
 def test_walk_logs_passes_gradients_and_with_watch_the_held_out_curve():

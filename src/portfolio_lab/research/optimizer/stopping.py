@@ -38,12 +38,18 @@ def held_block(train: list[int], holdout: int, rng: np.random.Generator) -> tupl
 
 
 def held_months(train: list[int], holdout: int, rng: np.random.Generator,
-                scatter: bool = False) -> tuple[list, list]:  # fmt: skip
+                scatter: bool = False, every: int = 0) -> tuple[list, list]:  # fmt: skip
     """``holdout`` months of ``train`` held out: one block (:func:`held_block`) or scattered.
 
     ``scatter``: single months drawn at random anywhere in ``train`` (in month order), so no
     one stretch of the market (a crash) decides alone; same too-few-months rule as the block.
+    ``every`` (2026-10-19): instead, every ``every``-th month end (by its position in the
+    walk's months) is held out, the same months whichever month is training, so a model that
+    continues from month to month never trains on them and their score stays out of sample;
+    ``holdout``, ``rng`` and ``scatter`` are then not used.
     """
+    if every:
+        return [k for k in train if k % every], [k for k in train if not k % every]
     if not scatter:
         return held_block(train, holdout, rng)
     if holdout <= 0 or len(train) <= holdout + 2:
