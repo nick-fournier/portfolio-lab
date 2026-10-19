@@ -131,7 +131,7 @@ def pricing(months: list[Month], settings, device: str,
         raise ValueError("per-stock costs need stock_costs")
     stock = [(torch.from_numpy(c[0]).to(device), torch.from_numpy(c[1]).to(device))
              for c in stock_costs]  # fmt: skip
-    moved = None if not realism.on(settings) else [
+    moved = None if not (realism.on(settings) or settings.loss_gross) else [  # sizing: collateral
         realism.Market(m.price.to(device), m.vol.to(device), m.adv.to(device), m.tbill,
                        None if m.mv is None else m.mv.to(device))
         for m in market

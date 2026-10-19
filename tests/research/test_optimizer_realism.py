@@ -410,3 +410,19 @@ def test_a_walk_trades_holds_and_logs_the_scaled_book(monkeypatch):
                                        trade_margin=False), "cpu", stock)  # fmt: skip
     with pytest.raises(ValueError, match="negative"):
         priced.pricing(months, replace(base, trade_gross=-1.0), "cpu", stock, market)
+
+
+def test_the_sized_loss_runs_with_every_account_charge_off():
+    """The sizing needs the month's prices for the collateral cap even with no charge on."""
+    pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import priced, realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings  # noqa: PLC0415
+
+    months = _months(6)
+    stock = [(np.full(4, 0.001, np.float32), np.full(4, 0.003, np.float32))] * 6
+    market = realism.align(months, _market_table(months))
+    s = Settings("linear", costs="t.parquet", holdings_input=True, loss_gross=1.0,
+                 trade_gross=1.0)  # fmt: skip
+    assert not realism.on(s)
+    p = priced.pricing(months, s, "cpu", stock, market)
+    assert p.market is not None
