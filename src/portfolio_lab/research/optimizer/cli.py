@@ -284,6 +284,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     ] = 0,
     unit_start: Annotated[bool, typer.Option(help="Start a new model's book at gross 1.")] = False,
     fixed_readout: Annotated[bool, typer.Option(help="Hold the readout's length.")] = False,
+    normalize: Annotated[bool, typer.Option(help="Normalize each stock's row per block.")] = False,
     trade_margin: Annotated[
         bool, typer.Option(help="Loss: also charge the traded month's margin, gross and floor.")
     ] = False,
@@ -395,7 +396,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         size_anchor=size_anchor, keep_best=keep_best, keep_patience=keep_patience,
         holdout_every=holdout_every, max_weight=max_weight, max_names=max_names,
         short_cap=None if short_cap < 0 else short_cap, unit_start=unit_start,
-        fixed_readout=fixed_readout,
+        fixed_readout=fixed_readout, normalize=normalize,
         **given,
     )  # fmt: skip
     try:

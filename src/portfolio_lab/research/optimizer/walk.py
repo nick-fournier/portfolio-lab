@@ -71,10 +71,8 @@ class Settings:
         blocks: Blocks for ``mlp`` / ``transformer``.
         hidden: Feed-forward hidden width.
         window: Training months before each test month (``None``: all earlier months).
-        first_epochs: Passes over the training months for a fresh model (every month with
-            ``cold``; the first test month without it).
-        warm_epochs: Passes for every later test month, continuing from the last model
-            (without ``cold``).
+        first_epochs / warm_epochs: Passes for a fresh model (every month with ``cold``) and
+            for each later month continuing the last model (without ``cold``).
         lr: Adam's learning rate.
         seed: Random seed (initial weights and month order).
         start: First test month end.
@@ -113,6 +111,7 @@ class Settings:
             number of names above the cap (realism.penalty); all charged like the cushion.
         unit_start: Scale a fresh model so its first book starts at gross 1 (walkbits).
         fixed_readout: After every step, put the readout back to its starting length (walkbits).
+        normalize: Normalize each stock's row before every sublayer and the readout (model).
         start_book: What a traded month starts from when nothing was traded the month before:
             ``guess`` (the model's own weights), ``cash`` or ``market`` (realism.start_book).
         trade_margin: Each training step also pays the traded month's penalty (realism).
@@ -186,6 +185,7 @@ class Settings:
     max_names: int = 0
     unit_start: bool = False
     fixed_readout: bool = False
+    normalize: bool = False
 
 
 #: Settings removed in the cleanup of 2026-10-18, each with the value that left it off: an
@@ -391,7 +391,7 @@ def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, 
     torch.manual_seed(settings.seed)
     extra = settings.holdings_input * (1 + settings.holding_column) + settings.borrow_input
     model = Optimizer(settings.model, width + extra, settings.blocks, settings.hidden,
-                      settings.fast_attention)  # fmt: skip
+                      settings.fast_attention, settings.normalize)  # fmt: skip
     model.to(device)
     if settings.compile:
         model.compile(dynamic=True)

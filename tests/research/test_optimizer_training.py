@@ -397,3 +397,24 @@ def test_fixed_readout_holds_the_readouts_length_through_training():
     _, _, free = walk(months, Settings("mlp", blocks=1, hidden=8, **base))
     assert abs(float(free.lam.detach().norm()) - free.readout_length) > 1e-3  # it moves without
     assert torch.isfinite(held.lam).all()
+
+
+def test_normalize_bounds_the_raw_weights_however_large_the_block_weights_grow():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+
+    torch.manual_seed(2)
+    x = torch.rand(40, 6) - 0.5
+    plain, normed = Optimizer("transformer", 6, 3, 16), Optimizer("transformer", 6, 3, 16,
+                                                                  normalize=True)  # fmt: skip
+    normed.load_state_dict(plain.state_dict())
+    assert not torch.equal(plain(x), normed(x))
+    with torch.no_grad():
+        for m in (plain, normed):
+            for name, q in m.named_parameters():
+                if name != "lam":
+                    q.mul_(30.0)  # block weights grown 30x
+    # |norm(y) . lam| <= |norm(y)| |lam|, and |norm(y)| = sqrt(D)
+    bound = float(normed.lam.norm()) * 6**0.5
+    assert float(normed(x).abs().max()) <= bound * (1 + 1e-4)
+    assert float(plain(x).abs().max()) > 100 * bound  # without it the weights grow with the blocks

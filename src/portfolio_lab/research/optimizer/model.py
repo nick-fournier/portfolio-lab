@@ -15,6 +15,12 @@ A block, on the (candidates x inputs) matrix Y, with residual connections and no
     Y <- Y + softmax((Y Q)(Y K)^T) (Y V)       attention: every stock against every stock
     Y <- Y + relu(Y W1 + b1) W2 + b2           feed-forward: each stock alone
 
+With ``normalize`` (2026-10-19, not in the paper) each sublayer reads, and the readout uses,
+:func:`norm` of Y (each stock's row at mean 0 and standard deviation 1) while Y itself still
+accumulates: Y <- Y + attention(norm(Y)), Y <- Y + feedforward(norm(Y)), w = norm(Y) lam. The
+attention scores and the raw weights then cannot grow with Y (the sized loss does not see the
+book's size, so nothing else holds Y's).
+
 Initialization as in the paper (sec. 4.3), its N(0, a) read as standard deviations: Q, K, V,
 W2 and lam ~ N(0, sd 1/D), W1 ~ N(0, sd 1/hidden), biases 0. Each stock's row then keeps its
 size through 10 blocks and the starting loss is ~1; read as variances, rows grow ~1.7x per
@@ -47,10 +53,12 @@ class Block(nn.Module):
             formula written out.
     """
 
-    def __init__(self, width: int, hidden: int, attention: bool, fast: bool = False):
+    def __init__(self, width: int, hidden: int, attention: bool, fast: bool = False,
+                 normalize: bool = False):  # fmt: skip
         super().__init__()
         self.attention = attention
         self.fast = fast
+        self.normalize = normalize
         if attention:
             self.q = _normal(width, width, sd=1 / width)
             self.k = _normal(width, width, sd=1 / width)
@@ -66,15 +74,17 @@ class Block(nn.Module):
 
     def forward(self, y: torch.Tensor) -> torch.Tensor:
         """(candidates x width) -> (candidates x width)."""
+        z = norm(y) if self.normalize else y  # what the attention reads
         if self.attention and self.fast:  # same formula, unscaled like the paper
-            q, k, v = (y @ m for m in (self.q, self.k, self.v))
+            q, k, v = (z @ m for m in (self.q, self.k, self.v))
             mixed = nn.functional.scaled_dot_product_attention(
                 *(t.bfloat16()[None, None] for t in (q, k, v)), scale=1.0
             )
             y = y + mixed[0, 0].float()
         elif self.attention:
-            y = y + self.peers(y) @ (y @ self.v)
-        return y + (torch.relu(y @ self.w1 + self.b1) @ self.w2 + self.b2)  # the update, then y
+            y = y + self.peers(z) @ (z @ self.v)
+        z = norm(y) if self.normalize else y  # what the feed-forward reads
+        return y + (torch.relu(z @ self.w1 + self.b1) @ self.w2 + self.b2)  # the update, then y
 
 
 class Optimizer(nn.Module):
@@ -86,18 +96,20 @@ class Optimizer(nn.Module):
         blocks: Blocks for ``mlp`` and ``transformer`` (ignored for ``linear``).
         hidden: Feed-forward hidden width.
         fast_attention: bfloat16 fused attention (:class:`Block`).
+        normalize: Normalize what each sublayer and the readout read (module docs).
     """
 
     def __init__(
         self, kind: str, width: int, blocks: int = 1, hidden: int = 256,
-        fast_attention: bool = False,
+        fast_attention: bool = False, normalize: bool = False,
     ):  # fmt: skip
         super().__init__()
+        self.normalize = normalize
         if kind not in MODELS:
             raise ValueError(f"unknown model {kind!r}; known: {MODELS}")
         n = 0 if kind == "linear" else blocks
         self.blocks = nn.ModuleList(
-            Block(width, hidden, kind == "transformer", fast_attention) for _ in range(n)
+            Block(width, hidden, kind == "transformer", fast_attention, normalize) for _ in range(n)
         )
         self.lam = _normal(width, sd=1 / width)
 
@@ -105,7 +117,12 @@ class Optimizer(nn.Module):
         """(candidates x width) -> a weight per candidate."""
         for block in self.blocks:
             x = block(x)
-        return x @ self.lam
+        return (norm(x) if self.normalize else x) @ self.lam
+
+
+def norm(y: torch.Tensor) -> torch.Tensor:
+    """Each row at mean 0 and standard deviation 1 (a layer norm without learned scale or shift)."""
+    return nn.functional.layer_norm(y, y.shape[-1:])
 
 
 def loss(model: Optimizer, x: torch.Tensor, r: torch.Tensor) -> torch.Tensor:
