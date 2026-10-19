@@ -1,7 +1,9 @@
 """Growth series and return horizons shared by the Overview and Compare pages.
 
-Two sources, merged by key: the fund comparison (``make_vs_buy``: funds since launch)
-and each configuration's latest run, which wins for a key in both. Everything is cached
+Two sources: the funds from the fund comparison (``make_vs_buy``: funds since launch) and
+our strategies from each configuration's latest run. The comparison's own copies of our
+strategies are ignored, so a renamed or deleted run never lingers until its next weekly
+refresh. Everything is cached
 until one of its files changes, and charts use weekly points (the last close of each
 week), which look the same as daily ones at a fraction of the size.
 """
@@ -55,7 +57,8 @@ def sources(data_dir: Path) -> list[Path]:
 
 def _from_growth(summary: pl.DataFrame, growth: pl.DataFrame) -> dict[str, Series]:
     """Series from a comparison's summary (names, categories, starts) and growth table."""
-    full = summary.filter(pl.col("period") == "full").unique("key")
+    full = summary.filter((pl.col("period") == "full") & (pl.col("category") != "ours"))
+    full = full.unique("key")
     out = {}
     for key, name, category, start in full.select("key", "name", "category", "start").iter_rows():
         rows = growth.filter((pl.col("key") == key) & (pl.col("date") >= start)).sort("date")

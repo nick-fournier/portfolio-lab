@@ -238,9 +238,10 @@ def test_compare_page(client, tmp_path):
     pl.DataFrame(rows).write_parquet(folder / "summary.parquet")
     pl.DataFrame(curves).write_parquet(folder / "growth.parquet")
     page = client.get("/compare").text
-    for expected in ("Returns", "Passive factor funds", "18.0%", "8.0%",
-                     "since 1999-01-04", ">10Y<", ">20Y<"):  # fmt: skip
+    for expected in ("Returns", "Passive factor funds", "12.0%", "since 1999-01-04", ">10Y<",
+                     ">20Y<"):  # fmt: skip
         assert expected in page, expected
+    assert "18.0%" not in page  # our strategies come from live runs, not the comparison's copy
     assert page.count('class="chart tall"') == 1
     assert "Not a fair fight" not in page
 
