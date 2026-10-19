@@ -130,7 +130,7 @@ def on(settings) -> bool:
     """Whether any realism term is switched on."""
     return bool(settings.rebate or settings.margin_rate or settings.cash_rate is not None
                 or settings.margin_cushion or settings.gross_limit or settings.invest_floor
-                or settings.impact or settings.max_weight
+                or settings.impact or settings.max_weight or settings.max_names
                 or settings.short_cap is not None)  # fmt: skip
 
 
@@ -237,8 +237,10 @@ def penalty(w: torch.Tensor, market: Market, settings) -> torch.Tensor:
     """The limit charges on ``w`` (docs); no return.
 
     Margin cushion, gross limit, investment floor, and (2026-10-19, the box) ``max_weight``,
-    each name's dollars above the cap, and ``short_cap``, short dollars above it (0: long-only;
-    ``None``: off); all at ``cushion_rate``.
+    each name's dollars above the cap; ``short_cap``, short dollars above it (0: long-only;
+    ``None``: off); ``max_names``, the book's effective number of names, (sum |w|)^2 / sum w^2,
+    as a multiple of the cap above 1 (a 3,000-name sliver book is ~2,000 effective names; the
+    cap pulls it to a portfolio); all at ``cushion_rate``.
     """
     total = w.new_zeros(())
     for over in ((torch.relu(requirement(w, market.price) - settings.margin_cushion)
@@ -250,7 +252,10 @@ def penalty(w: torch.Tensor, market: Market, settings) -> torch.Tensor:
                  (torch.relu(w.abs() - settings.max_weight).sum()
                   if settings.max_weight else None),
                  (torch.relu(torch.relu(-w).sum() - settings.short_cap)
-                  if settings.short_cap is not None else None)):  # fmt: skip
+                  if settings.short_cap is not None else None),
+                 (torch.relu(w.abs().sum() ** 2 / (w * w).sum().clamp(min=1e-12)
+                             / settings.max_names - 1)
+                  if settings.max_names else None)):  # fmt: skip
         if over is not None:
             total = total + settings.cushion_rate * over
     return total

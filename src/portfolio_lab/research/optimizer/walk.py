@@ -99,10 +99,8 @@ class Settings:
         watch: Hold out and score ``holdout`` months every pass; every pass runs (module docs).
         keep_best / keep_patience: With ``watch``: score the held-out months by ranking, keep
             the best pass and stop after this many passes without a new best (stopping.Keeper).
-        scatter / holdout_seed: Hold out single months drawn anywhere in the window, not a
-            block; the draw's own random stream's seed (``None``: ``seed``'s).
-        holdout_every: Hold out every this-many-th month end for good instead of drawing (0:
-            draw); a warm model then never trains on them (stopping.held_months).
+        scatter / holdout_seed: Draw single months anywhere in the window; the draw's own seed.
+        holdout_every: Hold out every this-many-th month end for good (0: draw them instead).
         only: Train and trade only these test month ends (``None``: every month).
         stock_drop: Share of each step's stocks hidden from the loss (returns 0, rest scaled up).
         rebate / margin_rate / cash_rate / margin_cushion / cushion_rate / impact / equity: The
@@ -114,8 +112,9 @@ class Settings:
             constant K (0: off); account size in dollars (for impact).
         gross_limit: Gross (sum |w|) allowed before it is charged like the cushion (0: off).
         invest_floor: Longs below this are charged like the cushion (0: off; long priority).
-        max_weight / short_cap: The box (2026-10-19): each name's dollars above the cap, and
-            short dollars above the cap (0: long-only; ``None``: off), charged like the cushion.
+        max_weight / short_cap / max_names: The box (2026-10-19): each name's dollars above
+            the cap; short dollars above the cap (0: long-only; ``None``: off); the effective
+            number of names above the cap (realism.penalty); all charged like the cushion.
         start_book: What a traded month starts from when nothing was traded the month before:
             ``guess`` (the model's own weights), ``cash`` or ``market`` (realism.start_book).
         trade_margin: Each training step also pays the traded month's penalty (realism).
@@ -186,6 +185,7 @@ class Settings:
     holdout_every: int = 0
     max_weight: float = 0.0
     short_cap: float | None = None
+    max_names: int = 0
 
 
 #: Settings removed in the cleanup of 2026-10-18, each with the value that left it off: an

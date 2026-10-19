@@ -279,6 +279,9 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
     short_cap: Annotated[
         float, typer.Option(help="Loss: short dollars above this charged (0: long-only; -1: off).")
     ] = -1.0,
+    max_names: Annotated[
+        int, typer.Option(help="Loss: effective number of names above this charged (0: off).")
+    ] = 0,
     trade_margin: Annotated[
         bool, typer.Option(help="Loss: also charge the traded month's margin, gross and floor.")
     ] = False,
@@ -325,11 +328,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         float, typer.Option(help="With --loss-gross: this x log(own gross / loss gross)^2.")
     ] = 0.0,
     keep_best: Annotated[
-        bool,
-        typer.Option(
-            help="With --watch: score the held-out months by ranking each pass, keep the best"
-            " pass and stop after --keep-patience passes without a new best."
-        ),
+        bool, typer.Option(help="With --watch: keep the best pass by held-out ranking, then stop.")
     ] = False,
     keep_patience: Annotated[
         int, typer.Option(help="With --keep-best: passes without a new best before stopping.")
@@ -338,11 +337,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         int, typer.Option(help="With --watch: hold out every K-th month end for good (0: draw).")
     ] = 0,
     price_gross: Annotated[
-        float,
-        typer.Option(
-            help="Loss: price margin, idle cash and impact on the book scaled to this gross,"
-            " per dollar of its gross (0: at the book's own size; usually --trade-gross)."
-        ),
+        float, typer.Option(help="Loss: price margin, cash and impact at this gross (0: own).")
     ] = 0.0,
 ) -> None:
     """Walk a model forward, one run per seed, and save each seed's monthly portfolios.
@@ -362,6 +357,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         "--margin-cushion": bool(margin_cushion), "--gross-limit": bool(gross_limit),
         "--invest-floor": bool(invest_floor), "--impact": bool(impact),
         "--max-weight": bool(max_weight), "--short-cap": short_cap >= 0,
+        "--max-names": bool(max_names),
         "--trade-margin": trade_margin, "--start-book": start_book != "guess",
         "--trade-gross": bool(trade_gross), "--price-gross": bool(price_gross),
         "--loss-gross": bool(loss_gross),
@@ -395,7 +391,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         start_book=start_book, trade_gross=trade_gross, trade_collateral=trade_collateral,
         price_gross=price_gross, loss_gross=loss_gross, risk_aversion=risk_aversion,
         size_anchor=size_anchor, keep_best=keep_best, keep_patience=keep_patience,
-        holdout_every=holdout_every, max_weight=max_weight,
+        holdout_every=holdout_every, max_weight=max_weight, max_names=max_names,
         short_cap=None if short_cap < 0 else short_cap,
         **given,
     )  # fmt: skip

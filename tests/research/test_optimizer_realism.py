@@ -315,6 +315,9 @@ def test_the_investment_floor_charges_idle_cash_like_the_caps():
     assert float(realism.penalty(w, m, replace(box, short_cap=None, max_weight=0.0))) == 0.0
     assert realism.on(replace(box, max_weight=0.0))
     assert not realism.on(replace(box, max_weight=0.0, short_cap=None))
+    names = Settings("linear", max_names=2, cushion_rate=0.1)  # effective names 0.81 / 0.29 = 2.79
+    assert float(realism.penalty(w, m, names)) == pytest.approx(0.1 * (0.81 / 0.29 / 2 - 1))
+    assert float(realism.penalty(w, m, replace(names, max_names=3))) == 0.0 and realism.on(names)
 
 
 def test_trade_size_scales_the_book_to_the_gross_or_the_collateral_keeping_its_direction():
