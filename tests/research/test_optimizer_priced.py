@@ -260,7 +260,7 @@ def test_loss_gross_takes_the_loss_on_the_sized_book_with_a_chosen_risk_aversion
     assert float(plain.book[1].abs().sum()) > 10  # loss_gross 0: the model's own size, as before
     for bad in (replace(base, loss_gross=1.0, trade_gross=0.0),
                 replace(base, loss_gross=1.0, trade_gross=2.0), replace(sized, price_gross=1.0),
-                replace(sized, risk_aversion=0.0)):  # fmt: skip
+                replace(sized, risk_aversion=-1.0)):  # fmt: skip
         with pytest.raises(ValueError, match=r"loss_gross|risk_aversion"):
             priced.pricing(months, bad, "cpu", stock, market)
     assert priced.objective(torch.tensor(0.02), base) == pytest.approx((1 - 0.02) ** 2)
