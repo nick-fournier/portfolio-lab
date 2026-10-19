@@ -419,10 +419,16 @@ def make_vs_buy_task(settings: Settings) -> dict:
     return status
 
 
-def paper_task(settings: Settings, dry_run: bool = False) -> dict:
+def paper_task(settings: Settings, dry_run: bool = False, refresh: bool = True) -> dict:
     """Record the paper account and rebalance it at month ends (``trading.paper``).
 
     Refuses to run while the last quality check found a broken invariant (``data.quality``).
+
+    Args:
+        settings: Application settings.
+        dry_run: Plan the rebalance without placing orders or writing records.
+        refresh: Rebuild the derived tables before a rebalance; the scheduler's daily chain
+            passes False because its derive job has just run.
     """
     last = read_status(settings.data_dir, "quality") or {}
     if last.get("hard"):
@@ -432,7 +438,8 @@ def paper_task(settings: Settings, dry_run: bool = False) -> dict:
     broker = PaperBroker(settings)
     try:
         return paper.run(settings.data_dir, strategy, broker,
-                         refresh=lambda: derive_task(settings), dry_run=dry_run,
+                         refresh=(lambda: derive_task(settings)) if refresh else None,
+                         dry_run=dry_run,
                          trading_dir=settings.trading_dir,
                          model=model_record(name, params))  # fmt: skip
     finally:
