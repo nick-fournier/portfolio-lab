@@ -72,8 +72,10 @@ PAIRS = {
     "piotroski (pool=100)": "QUAL",
     "meanvar (min_fscore=7)": "QUAL",
     "meanvar (healthy_share=0.27)": "QUAL",
-    "Momentum + health filter": "QUAL",
-    "Linear model": "QUAL",
+    "Momentum · health · max-Sharpe": "QUAL",
+    "Linear · health · max-Sharpe": "QUAL",
+    "Momentum · health · Kelly": "QUAL",
+    "Linear · health · Kelly x16": "QUAL",
 }
 
 METRICS = ("cagr", "volatility", "sharpe", "max_drawdown", "beta", "alpha")

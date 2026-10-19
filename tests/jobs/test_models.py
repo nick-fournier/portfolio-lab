@@ -21,15 +21,18 @@ def _untitled(model: tuple) -> dict:
 
 
 def test_a_run_saved_before_its_title_takes_the_title():
-    assert run_label(_meta(_untitled(CLASS_1), "meanvar (...)")) == "Momentum + health filter"
-    assert run_label(_meta(_untitled(CLASS_2), "meanvar (...)")) == "Linear model"
+    assert run_label(_meta(_untitled(CLASS_1), "meanvar (...)")) == "Momentum · health · max-Sharpe"
+    assert run_label(_meta(_untitled(CLASS_2), "meanvar (...)")) == "Linear · health · max-Sharpe"
 
 
 def test_runs_saved_while_kelly_was_production_take_the_kelly_titles():
     # saved under the production titles from 2026-10-06 to 2026-10-18
-    saved = _meta(_untitled(CLASS_1_KELLY), "Momentum + health filter")
-    assert run_label(saved) == "Momentum + health filter, Kelly"
-    assert run_label(_meta(_untitled(CLASS_2_KELLY), "Linear model")) == "Linear model, Kelly"
+    saved = _meta(_untitled(CLASS_1_KELLY), "Momentum · health · max-Sharpe")
+    assert run_label(saved) == "Momentum · health · Kelly"
+    assert (
+        run_label(_meta(_untitled(CLASS_2_KELLY), "Linear · health · max-Sharpe"))
+        == "Linear · health · Kelly x16"
+    )
 
 
 def test_other_runs_keep_their_saved_label():
@@ -38,5 +41,5 @@ def test_other_runs_keep_their_saved_label():
 
 
 def test_a_paper_rebalance_record_reads_back_as_its_model():
-    assert run_label(json.loads(model_record(*CLASS_2))) == "Linear model"
-    assert run_label(json.loads(model_record(*CLASS_1_KELLY))) == "Momentum + health filter, Kelly"
+    assert run_label(json.loads(model_record(*CLASS_2))) == "Linear · health · max-Sharpe"
+    assert run_label(json.loads(model_record(*CLASS_1_KELLY))) == "Momentum · health · Kelly"

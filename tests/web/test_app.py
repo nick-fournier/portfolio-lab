@@ -79,8 +79,8 @@ def test_how_it_works(client):
     page = client.get("/how-it-works")
     assert page.status_code == 200
     for expected in (
-        "Momentum + health filter",
-        "Linear model",
+        "Momentum · health · max-Sharpe",
+        "Linear · health · max-Sharpe",
         "Grinold",
         "Sharadar",
         "paper account",
@@ -296,7 +296,8 @@ def test_paper_page_empty_then_with_records(client, tmp_path):
         assert expected in page.text
     assert "5940.00" not in page.text  # the orders table is gone; the orders live on Alpaca
     # a rebalance saved before models were recorded was class 1's; production is class 2
-    assert "<b>Momentum + health filter</b>; production is now <b>Linear model</b>" in page.text
+    held, production = "Momentum · health · max-Sharpe", "Linear · health · max-Sharpe"
+    assert f"<b>{held}</b>; production is now <b>{production}</b>" in page.text
 
 
 def test_paper_page_compares_from_the_latest_model_switch(client, tmp_path):
@@ -311,7 +312,7 @@ def test_paper_page_compares_from_the_latest_model_switch(client, tmp_path):
            model=pl.String)  # fmt: skip
     page = client.get("/paper").text
     assert "production is now" not in page  # the account holds production's model
-    for expected in ("Holding Linear model since", "2024-01-03", "2.0%",
+    for expected in ("Holding Linear · health · max-Sharpe since", "2024-01-03", "2.0%",
                      "Return since the account opened", "3.0%"):  # fmt: skip
         assert expected in page, expected
 
