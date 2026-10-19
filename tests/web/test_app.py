@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import UTC, date, datetime, timedelta
 
 import polars as pl
@@ -15,6 +16,12 @@ from portfolio_lab.web import series
 from portfolio_lab.web.app import create_app
 from portfolio_lab.web.routes import compare, paper
 from portfolio_lab.web.routes.status import data_freshness
+
+
+def _shows(page: str, text: str) -> bool:
+    """Whether ``text`` is on the page as a whole value: no digit, decimal point or thousands
+    separator touches it, so "8.0%" doesn't match inside "18.0%" nor "0.03" inside "0.030"."""
+    return re.search(rf"(?<![\d.,]){re.escape(text)}(?![\d])", page) is not None
 
 
 def _run(strategy, dates):
@@ -119,7 +126,7 @@ def test_run_detail(client):
         "60.00%",
         "/vendor/plotly.min.js",
     ):
-        assert expected in page.text
+        assert _shows(page.text, expected), expected
 
 
 @pytest.mark.parametrize("run_id", ["nope", "%2E%2E", "a%2F..%2Fb"])
@@ -165,7 +172,7 @@ def test_signals_page(client, tmp_path):
     assert page.status_code == 200
     for expected in ("next month's return", "momentum", "+0.030", "Lower is better",
                      "Reliability", "High 20%"):  # fmt: skip
-        assert expected in page.text, expected
+        assert _shows(page.text, expected), expected
     assert page.text.count("<tbody>") == 1  # next month only, production's pool only
     assert "Next quarter" not in page.text
     # accruals: lower is better, IC negative every month, so it was right 100% of the time.
@@ -199,7 +206,7 @@ def test_run_page_explains_the_run(tmp_path):
     page = TestClient(create_app(tmp_path)).get(f"/runs/{run_id}").text
     for expected in ("How this run works", "Portfolio construction", "Worked example",
                      "largest 1 shown", "150.0%", "Compared with related strategies"):  # fmt: skip
-        assert expected in page, expected
+        assert _shows(page, expected), expected
 
 
 def test_context_page(client, tmp_path):
@@ -222,7 +229,7 @@ def test_context_page(client, tmp_path):
     page = client.get("/context").text
     for expected in ("Conditions now", "$80.00", "+11%", "calm ◂ now", "below bonds",
                      "Which traits paid off", "+0.040", "S&amp;P 500 did next"):  # fmt: skip
-        assert expected in page, expected
+        assert _shows(page, expected), expected
 
 
 def test_compare_page(tmp_path):
@@ -341,7 +348,7 @@ def test_paper_page_reads_a_separate_trading_dir(tmp_path):
     _write(folder, "snapshots", {"date": [date(2024, 1, 2)], "equity": [100_000.0],
                                  "cash": [1_000.0], "positions": [0]})  # fmt: skip
     page = TestClient(create_app(tmp_path / "data", trading)).get("/paper")
-    assert page.status_code == 200 and "$100,000" in page.text
+    assert page.status_code == 200 and _shows(page.text, "$100,000")
 
 
 def test_forecasts_page(client, tmp_path):
@@ -375,7 +382,7 @@ def test_forecasts_page(client, tmp_path):
     for expected in ("27.8%", "0.034", "16 of 18", "60%", "production label",
                      "0.044 / 0.035 / 0.026", "±0.025", "slope 0.12", 'id="fit"',
                      'id="grinold"', 'id="trailing"', 'id="tenths"'):  # fmt: skip
-        assert expected in page, expected
+        assert _shows(page, expected), expected
     assert "revious" not in page
 
 
