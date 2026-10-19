@@ -5,12 +5,15 @@ import polars as pl
 import pytest
 from fastapi.testclient import TestClient
 
+from portfolio_lab.backtest.engine import label as strategy_label
 from portfolio_lab.backtest.results import RunResult, save_run
 from portfolio_lab.core.store import write_status
-from portfolio_lab.jobs.models import CLASS_2, model_record
+from portfolio_lab.jobs.models import CLASS_1, CLASS_2, model_record
 from portfolio_lab.jobs.taxes import publish_runs
+from portfolio_lab.strategies.base import create
 from portfolio_lab.web import series
 from portfolio_lab.web.app import create_app
+from portfolio_lab.web.routes import compare, paper
 from portfolio_lab.web.routes.status import data_freshness
 
 
@@ -222,7 +225,8 @@ def test_context_page(client, tmp_path):
         assert expected in page, expected
 
 
-def test_compare_page(client, tmp_path):
+def test_compare_page(tmp_path):
+    client = TestClient(create_app(tmp_path))  # no saved runs: every series is the comparison's
     assert "No comparison yet" in client.get("/compare").text
     folder = tmp_path / "results" / "make_vs_buy"
     folder.mkdir(parents=True)
@@ -237,11 +241,14 @@ def test_compare_page(client, tmp_path):
                    for d in days]  # fmt: skip
     pl.DataFrame(rows).write_parquet(folder / "summary.parquet")
     pl.DataFrame(curves).write_parquet(folder / "growth.parquet")
+    rows = {r["key"]: r for r in compare.page_context(tmp_path)["rows"]}
+    # our strategies come from live runs, never the comparison's copy
+    assert set(rows) == {"SPY", "MTUM"}
+    assert rows["SPY"]["Max"] == pytest.approx(0.08, abs=1e-3)
+    assert rows["MTUM"]["10Y"] == pytest.approx(0.12, abs=1e-3)
     page = client.get("/compare").text
-    for expected in ("Returns", "Passive factor funds", "12.0%", "since 1999-01-04", ">10Y<",
-                     ">20Y<"):  # fmt: skip
+    for expected in ("Returns", "Passive factor funds", "since 1999-01-04", ">10Y<", ">20Y<"):
         assert expected in page, expected
-    assert "18.0%" not in page  # our strategies come from live runs, not the comparison's copy
     assert page.count('class="chart tall"') == 1
     assert "Not a fair fight" not in page
 
@@ -265,6 +272,10 @@ def test_tax_page(client, tmp_path):
     for expected in ("Is the strategy worth sheltering", "Rough rates by income", "SPY, taxable",
                      "Taxable, holding gains a year", '"unrealized": [0.0, 1.0]'):  # fmt: skip
         assert expected in page, expected
+
+
+def _name(model):
+    return strategy_label(create(model[0], **model[1]))
 
 
 def _write(folder, name, columns, **schema):
@@ -291,14 +302,17 @@ def test_paper_page_empty_then_with_records(client, tmp_path):
         "side": ["buy"], "notional": [59_400.0], "qty": [None], "status": ["filled"],
         "filled_qty": [10.0], "filled_avg_price": [5940.0],
     }, qty=pl.Float64)  # fmt: skip
+    context = paper.page_context(tmp_path)
+    # a rebalance saved before models were recorded was class 1's; production is class 2
+    assert context["held"] == _name(CLASS_1) and context["production"] == _name(CLASS_2)
+    summary = context["summary"]
+    assert summary["equity"] == 101_000 and summary["ret"] == pytest.approx(0.01)
+    assert {h["symbol"] for h in context["holdings"]} == {"AAA", "BBB", "CCC"}
+    assert context["last_rebalance"] == days[0]
     page = client.get("/paper")
     assert page.status_code == 200
-    for expected in ("$101,000", "1.0%", "CCC", "Paper vs SPY", "Last rebalance: 2024-01-02"):
-        assert expected in page.text
-    assert "5940.00" not in page.text  # the orders table is gone; the orders live on Alpaca
-    # a rebalance saved before models were recorded was class 1's; production is class 2
-    held, production = "Momentum · health · max-Sharpe", "Linear · health · max-Sharpe"
-    assert f"<b>{held}</b>; production is now <b>{production}</b>" in page.text
+    for expected in ("Paper vs SPY", "production is now", "Last rebalance"):
+        assert expected in page.text, expected
 
 
 def test_paper_page_compares_from_the_latest_model_switch(client, tmp_path):
@@ -311,11 +325,13 @@ def test_paper_page_compares_from_the_latest_model_switch(client, tmp_path):
                                   "orders": [2, 3], "equity": [100_000.0, 101_000.0],
                                   "model": [None, model_record(*CLASS_2)]},
            model=pl.String)  # fmt: skip
+    context = paper.page_context(tmp_path)
+    assert context["held"] == context["production"] == _name(CLASS_2)
+    summary = context["summary"]
+    assert summary["start"] == days[1] and summary["opened"] == days[0]
+    assert summary["ret"] == pytest.approx(0.02) and summary["total"] == pytest.approx(0.0302)
     page = client.get("/paper").text
-    assert "production is now" not in page  # the account holds production's model
-    for expected in ("Holding Linear · health · max-Sharpe since", "2024-01-03", "2.0%",
-                     "Return since the account opened", "3.0%"):  # fmt: skip
-        assert expected in page, expected
+    assert "production is now" not in page and "Return since the account opened" in page
 
 
 def test_paper_page_reads_a_separate_trading_dir(tmp_path):
