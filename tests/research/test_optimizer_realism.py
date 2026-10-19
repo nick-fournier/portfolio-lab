@@ -306,6 +306,15 @@ def test_the_investment_floor_charges_idle_cash_like_the_caps():
     assert float(realism.penalty(half, m, s)) == pytest.approx(0.1 * 0.5)
     assert float(realism.penalty(torch.tensor([0.7, 0.4, -0.2]), m, s)) == 0.0  # longs 1.1
     assert realism.on(s) and not realism.on(replace(s, invest_floor=0.0))
+    # the box (2026-10-19): a cap per name and a cap on short dollars (0 = long-only)
+    box = Settings("linear", max_weight=0.25, short_cap=0.1, cushion_rate=0.1)
+    w = torch.tensor([0.3, 0.2, -0.4])  # 0.05 over the cap on the first name; shorts 0.3 over
+    assert float(realism.penalty(w, m, box)) == pytest.approx(0.1 * (0.05 + 0.3))
+    long_only = replace(box, short_cap=0.0)
+    assert float(realism.penalty(w, m, long_only)) == pytest.approx(0.1 * (0.05 + 0.4))
+    assert float(realism.penalty(w, m, replace(box, short_cap=None, max_weight=0.0))) == 0.0
+    assert realism.on(replace(box, max_weight=0.0))
+    assert not realism.on(replace(box, max_weight=0.0, short_cap=None))
 
 
 def test_trade_size_scales_the_book_to_the_gross_or_the_collateral_keeping_its_direction():

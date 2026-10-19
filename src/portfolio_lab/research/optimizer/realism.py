@@ -130,7 +130,8 @@ def on(settings) -> bool:
     """Whether any realism term is switched on."""
     return bool(settings.rebate or settings.margin_rate or settings.cash_rate is not None
                 or settings.margin_cushion or settings.gross_limit or settings.invest_floor
-                or settings.impact)  # fmt: skip
+                or settings.impact or settings.max_weight
+                or settings.short_cap is not None)  # fmt: skip
 
 
 def align(months: list[Month], table: pl.DataFrame, device: str = "cpu") -> list[Market]:
@@ -233,14 +234,23 @@ def trade_size(w: np.ndarray, market: Market | None, settings) -> tuple[np.ndarr
 
 
 def penalty(w: torch.Tensor, market: Market, settings) -> torch.Tensor:
-    """The margin-cushion, gross-limit and investment-floor charges on ``w`` (docs); no return."""
+    """The limit charges on ``w`` (docs); no return.
+
+    Margin cushion, gross limit, investment floor, and (2026-10-19, the box) ``max_weight``,
+    each name's dollars above the cap, and ``short_cap``, short dollars above it (0: long-only;
+    ``None``: off); all at ``cushion_rate``.
+    """
     total = w.new_zeros(())
     for over in ((torch.relu(requirement(w, market.price) - settings.margin_cushion)
                   if settings.margin_cushion else None),
                  (torch.relu(w.abs().sum() - settings.gross_limit)
                   if settings.gross_limit else None),
                  (torch.relu(settings.invest_floor - torch.relu(w).sum())
-                  if settings.invest_floor else None)):  # fmt: skip
+                  if settings.invest_floor else None),
+                 (torch.relu(w.abs() - settings.max_weight).sum()
+                  if settings.max_weight else None),
+                 (torch.relu(torch.relu(-w).sum() - settings.short_cap)
+                  if settings.short_cap is not None else None)):  # fmt: skip
         if over is not None:
             total = total + settings.cushion_rate * over
     return total

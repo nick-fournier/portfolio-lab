@@ -80,8 +80,10 @@ def _check_sizes(settings, market: list | None) -> None:
         raise ValueError("borrow_flag shapes the borrow_input column")
     if settings.trade_gross < 0 or settings.trade_collateral < 0 or settings.price_gross < 0:
         raise ValueError("trade_gross, trade_collateral and price_gross cannot be negative")
-    if settings.loss_gross < 0 or settings.risk_aversion <= 0:
-        raise ValueError("loss_gross cannot be negative and risk_aversion must be positive")
+    if settings.loss_gross < 0 or settings.risk_aversion < 0:
+        raise ValueError("loss_gross and risk_aversion cannot be negative")
+    if settings.max_weight < 0 or (settings.short_cap is not None and settings.short_cap < 0):
+        raise ValueError("max_weight and short_cap cannot be negative")
     if settings.loss_gross and settings.loss_gross != settings.trade_gross:
         raise ValueError("loss_gross needs trade_gross set to the same size (the loss sizes the "
                          "book as the trade will)")  # fmt: skip

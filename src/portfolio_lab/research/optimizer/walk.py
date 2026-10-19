@@ -83,12 +83,9 @@ class Settings:
         seed: Random seed (initial weights and month order).
         start: First test month end.
         fast_attention: bfloat16 fused attention (model.Block).
-        clip: Largest gradient size per step: a number, ``"auto"`` (the 95th percentile of
-            recent steps, research.optimizer.clipping) or ``None`` (no clipping, the paper).
-        costs: A per-stock cost table (``costs.align``) for the loss; the walk gets it aligned
-            as ``stock_costs``. Recorded here as its path.
-        schedule: Learning rate within each month's training: ``flat`` (the starting rate every
-            epoch) or ``cosine`` (from the month's starting rate down to ``lr_min``).
+        clip: Largest gradient size per step: a number, ``"auto"`` (clipping) or ``None``.
+        costs: Path of the per-stock cost table (``costs.align``) the walk gets as ``stock_costs``.
+        schedule: Rate within a month's training: ``flat`` or ``cosine`` (down to ``lr_min``).
         lr_min: The cosine schedule's last rate.
         warm_lr: Starting rate for months that continue last month's model (``None``: ``lr``).
         compile: ``torch.compile`` each model (faster; same results).
@@ -107,8 +104,7 @@ class Settings:
         holdout_every: Hold out every this-many-th month end for good instead of drawing (0:
             draw); a warm model then never trains on them (stopping.held_months).
         only: Train and trade only these test month ends (``None``: every month).
-        stock_drop: Share of the month's stocks each training step hides from the loss, drawn
-            afresh (returns 0, the rest x 1 / (1 - share)); the model sees all; costs still paid.
+        stock_drop: Share of each step's stocks hidden from the loss (returns 0, rest scaled up).
         rebate / margin_rate / cash_rate / margin_cushion / cushion_rate / impact / equity: The
             account's size-dependent costs in the loss (research.optimizer.realism; need
             ``costs`` and the walk's ``market``): lost short rebate on/off; margin rate a year
@@ -118,6 +114,8 @@ class Settings:
             constant K (0: off); account size in dollars (for impact).
         gross_limit: Gross (sum |w|) allowed before it is charged like the cushion (0: off).
         invest_floor: Longs below this are charged like the cushion (0: off; long priority).
+        max_weight / short_cap: The box (2026-10-19): each name's dollars above the cap, and
+            short dollars above the cap (0: long-only; ``None``: off), charged like the cushion.
         start_book: What a traded month starts from when nothing was traded the month before:
             ``guess`` (the model's own weights), ``cash`` or ``market`` (realism.start_book).
         trade_margin: Each training step also pays the traded month's penalty (realism).
@@ -186,6 +184,8 @@ class Settings:
     keep_best: bool = False
     keep_patience: int = 4
     holdout_every: int = 0
+    max_weight: float = 0.0
+    short_cap: float | None = None
 
 
 #: Settings removed in the cleanup of 2026-10-18, each with the value that left it off: an
