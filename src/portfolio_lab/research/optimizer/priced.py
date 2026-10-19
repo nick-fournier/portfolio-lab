@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from portfolio_lab.research.optimizer import costs, holdings, realism
+from portfolio_lab.research.optimizer import costs, holdings, realism, stopping
 from portfolio_lab.research.optimizer.data import Month
 
 Pair = tuple[torch.Tensor, torch.Tensor]
@@ -206,6 +206,22 @@ def book_for(
     if settings.loss_gross:
         w = realism.sized(w, pricing.market[k], settings.loss_gross, settings.trade_collateral)
     return w
+
+
+def held_ranking(model, data: list[Pair], pricing: Pricing | None, settings,
+                 months: list[int]) -> float:  # fmt: skip
+    """Mean rank correlation of ``months``' books with their returns (the held-out ranking).
+
+    The books as the loss sees them (:func:`book_for`; without ``pricing`` the model's own
+    from the inputs alone); ``data`` holds the months' real returns (2026-10-19, stopping).
+    """
+    with torch.no_grad():
+        corr = []
+        for k in months:
+            w = (realism.book(model, holdings.inputs(data, None, None, k), None, k)
+                 if pricing is None else book_for(model, data, pricing, settings, k))  # fmt: skip
+            corr.append(stopping.rank_corr(w, data[k][1]))
+        return float(torch.stack(corr).mean())
 
 
 def objective(r: torch.Tensor, settings) -> torch.Tensor:

@@ -6,25 +6,25 @@ is ``None``). Each pass visits the training months in a shuffled order and takes
 per month (paper, Algorithm 2), the rate following ``schedule`` over the month's passes. Then
 the model's weights for month t's candidates are the portfolio held over the next month.
 
-The recipe in use is ``cold`` with ``watch``. With ``cold`` (2026-10-15) every month trains a
-fresh model: the seed's same starting weights, a fresh Adam and average, ``first_epochs``
-passes from ``lr``. A cold month also starts from an empty book table, so the holdings inputs
-of its training months come from its own model (cash until training reaches the month before),
-and its month order and held-out draw come from random streams of its own (the seed and the
-month), so a month's result does not depend on which months ran before it. Without ``cold``
-(warm continuation, an option): the first test month trains a fresh model for
-``first_epochs`` passes, and every later month continues from the previous month's model (and
-Adam's state) for ``warm_epochs`` passes from ``warm_lr`` (``None``: ``lr``) over its own
-training months.
+With ``cold`` (2026-10-15) every month trains a fresh model: the seed's same starting weights,
+a fresh Adam and average, ``first_epochs`` passes from ``lr``, an empty book table (so its
+training months' holdings inputs come from its own model) and random streams of its own (the
+seed and the month) for the month order and the held-out draw, so a month's result does not
+depend on which months ran before it. Without ``cold`` (warm continuation): the first test
+month trains a fresh model for ``first_epochs`` passes, and every later month continues from
+the previous month's model (and Adam's state) for ``warm_epochs`` passes from ``warm_lr``
+(``None``: ``lr``) over its own training months.
 
 With ``watch`` (research.optimizer.stopping) ``holdout`` training months are held out each
 month and scored after every pass (``held_curve``; ``held_returns``: their returns at the last
-score), but every pass runs and the last is kept. ``scatter`` holds out single months drawn
-anywhere in the window instead of one consecutive block; ``holdout_seed`` draws them from
-their own random stream. Before each score the held-out months' book entries are rolled
-forward, in month order, with the model as it stands. ``test_curve`` is the test month's loss
-after each pass (a diagnostic). A warm model has already trained on most of this month's
-held-out months (they move every month), so its score is not out of sample; a cold one's is.
+score); every pass runs and the last is kept, unless ``keep_best`` (2026-10-19): then the
+score is minus the held-out ranking (of the parameter average when there is one), the pass
+with the best smoothed score is kept (``best_pass``) and training stops after ``keep_patience``
+passes without a new best. ``scatter`` holds out single months drawn anywhere in the window
+instead of one block; ``holdout_seed`` draws them from their own stream. Before each score the
+held-out months' book entries are rolled forward with the model as it stands. ``test_curve``
+is the test month's loss after each pass. A warm model has already trained on most of this
+month's held-out months (they move every month), so its score is not out of sample.
 
 With per-stock ``costs`` the loss is (1 - net)^2, net the month's return after each stock's
 spread on the dollars traded from the book held going in (the month before's weights after its
@@ -37,19 +37,16 @@ and spread (research.optimizer.holdings): in training, from a book table of each
 weights (cash, an all-zero book, the first time a month enters the window; the model's weights
 from its first training step on, refreshed at every step; holdings.fill); for the test month,
 from the walk's real holdings of the month before after its returns. A training month whose
-month before is not in the table (a cold month's first, the table filled from there) or not
-yet visited (still cash) holds cash going in: a zero holding, and its trades priced from cash
-(priced.held_going_in). ``borrow_input`` adds the stock's borrow fee as well. When the month
-before was not traded (the walk's first month, or with ``only`` a month after one not listed)
-the test month starts from ``start_book``: nothing (``cash``) or the market
-(realism.start_book), or with ``guess`` the model's own book-table entry for that month, as its
-training left it.
+month before is not in the table or not yet visited holds cash going in (priced.held_going_in).
+``borrow_input`` adds the stock's borrow fee as well. When the month before was not traded
+(the walk's first month, or with ``only`` a month after one not listed) the test month starts
+from ``start_book``: nothing (``cash``), the market (realism.start_book), or with ``guess`` the
+model's own book-table entry for that month, as its training left it.
 
 ``winsor`` pulls training returns in to each month's quantiles and ``stock_drop`` hides a share
 of each step's stocks from the loss; held-out and test months are scored on real returns.
-``average``: a moving average of the model's parameters is what trades. ``only`` trains and
-trades just the listed test months. ``trade_gross`` (2026-10-18) scales the test month's book
-when picked, to that gross or the collateral cap (realism.trade_size); ``loss_gross``: Settings.
+``average``: a moving average of the model's parameters is what trades. ``trade_gross``
+(2026-10-18) sizes the picked book (realism.trade_size); ``loss_gross``: Settings.
 """
 
 import contextlib
@@ -97,15 +94,15 @@ class Settings:
         warm_lr: Starting rate for months that continue last month's model (``None``: ``lr``).
         compile: ``torch.compile`` each model (faster; same results).
         winsor: Training months' returns are pulled in to their month's ``winsor`` and
-            1 - ``winsor`` quantiles (0.01: the 1st and 99th percentiles; 0: off). The paper
-            does not clip; our returns carry data errors and lottery outcomes that a book many
-            times its capital bets on, and blow training up (bench1). Everything that is not
-            a training step stays real: held-out and test scores, trades.
+            1 - ``winsor`` quantiles (0.01: the 1st and 99th percentiles; 0: off, the paper).
+            Everything that is not a training step stays real: held-out and test scores, trades.
         holdings_input / borrow_input: Feed each stock's holding and spread / also its borrow fee.
         holdout: Training months held out each month with ``watch``.
         average: Decay of the parameter average held each month (0: hold the latest model).
         cold: Train a fresh model every month (module docs).
         watch: Hold out and score ``holdout`` months every pass; every pass runs (module docs).
+        keep_best / keep_patience: With ``watch``: score the held-out months by ranking, keep
+            the best pass and stop after this many passes without a new best (stopping.Keeper).
         scatter: Hold out single months drawn anywhere in the window, not a block.
         holdout_seed: Seed of the held-out draw's own random stream (``None``: ``seed``'s).
         only: Train and trade only these test month ends (``None``: every month).
@@ -113,30 +110,26 @@ class Settings:
             afresh (returns 0, the rest x 1 / (1 - share)); the model sees all; costs still paid.
         rebate / margin_rate / cash_rate / margin_cushion / cushion_rate / impact / equity: The
             account's size-dependent costs in the loss (research.optimizer.realism; need
-            ``costs`` and the walk's ``market``): lost short rebate on/off; the broker's margin
-            rate a year (0: off); idle cash's rate a year (``None``: the T-bill); maintenance
-            requirement allowed before it is charged, as a share of equity (0: off), and the
-            charge a month per dollar above it (also for ``gross_limit`` and ``invest_floor``);
-            impact constant K (0: off); account size in dollars (for impact).
+            ``costs`` and the walk's ``market``): lost short rebate on/off; margin rate a year
+            (0: off); idle cash's rate a year (``None``: the T-bill); maintenance requirement
+            allowed before it is charged, as a share of equity (0: off), and the charge a month
+            per dollar above it (also for ``gross_limit`` and ``invest_floor``); impact
+            constant K (0: off); account size in dollars (for impact).
         gross_limit: Gross (sum |w|) allowed before it is charged like the cushion (0: off).
         invest_floor: Longs (sum of positive w) below this are charged like the cushion (0: off;
             the long-priority toggle). With ``trade_margin`` the traded month is charged too.
         start_book: What a traded month starts from when nothing was traded the month before:
-            ``guess`` (the model's own weights), ``cash`` or ``market`` (realism.start_book;
-            both need ``holdings_input``, ``market`` a realism term too).
+            ``guess`` (the model's own weights), ``cash`` or ``market`` (realism.start_book).
         trade_margin: Each training step also pays the traded month's penalty (margin cushion,
             gross limit, investment floor; research.optimizer.realism; needs one of them).
         trade_gross / trade_collateral: The traded book's size at trade time: gross (sum |w|)
-            ``trade_gross`` (0: off, the model's own size), or less if its maintenance
-            requirement would pass ``trade_collateral`` x equity (0: no cap); realism.trade_size.
-            Training, the loss and held-out scores do not see it (needs ``costs`` and ``market``).
+            ``trade_gross`` (0: off), or less if its maintenance requirement would pass
+            ``trade_collateral`` x equity (0: no cap); realism.trade_size (needs ``market``).
         price_gross: Margin interest, idle cash and impact in the loss are priced on the book
-            scaled to this gross and charged per dollar of the book's gross (0: at the book's
-            own size); realism.charges. Usually ``trade_gross``.
+            scaled to this gross, per dollar of its gross (0: at its own size); realism.charges.
         holding_column / borrow_flag / spread_rank / holding_rank: The extra columns'
-            encodings (2026-10-18; holdings.with_holdings): leave the holding column out; the
-            borrow fee as a centred hard-to-borrow flag; the spread, or the holding, as its rank
-            in [-0.5, 0.5].
+            encodings (2026-10-18; holdings.with_holdings): the holding column on/off; the borrow
+            fee as a centred hard-to-borrow flag; the spread, or the holding, as its rank.
         loss_gross / risk_aversion / size_anchor: The loss is taken on the book sized to
             ``loss_gross`` (= ``trade_gross``, capped by ``trade_collateral``) as expected return
             less ``risk_aversion`` / 2 times its square, plus ``size_anchor`` times the squared
@@ -191,6 +184,8 @@ class Settings:
     loss_gross: float = 0.0
     risk_aversion: float = 1.0
     size_anchor: float = 0.0
+    keep_best: bool = False
+    keep_patience: int = 4
 
 
 #: Settings removed in the cleanup of 2026-10-18, each with the value that left it off: an
@@ -213,14 +208,10 @@ EXTRAS = ("inputs", "end", "floors")
 def settings_from(meta: dict) -> Settings:
     """A run's :class:`Settings` from its settings.json (as ``plab optimizer walk`` writes it).
 
-    Lists come back as tuples, ``start`` and ``only`` as dates. The file's extras
-    (:data:`EXTRAS`) and the log-only settings (:data:`LOG_ONLY`) are dropped, and so is a
-    removed setting (:data:`REMOVED`) that holds its off value, or that tuned one that does
-    (:data:`TUNES`).
-
-    Raises:
-        ValueError: A removed setting was on (the run's recipe cannot be rebuilt), or a key is
-            not a setting at all (a typo, or a setting removed earlier, such as ``long_only``).
+    Lists come back as tuples, ``start`` and ``only`` as dates. Dropped: the file's extras
+    (:data:`EXTRAS`), log-only settings (:data:`LOG_ONLY`), a removed setting (:data:`REMOVED`)
+    at its off value or tuning one that is (:data:`TUNES`). Raises ValueError for a removed
+    setting that was on (the recipe cannot be rebuilt) or a key that is not a setting at all.
     """
     names = {f.name for f in fields(Settings)}
 
@@ -282,10 +273,9 @@ def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
 ) -> list[torch.Tensor]:  # fmt: skip
     """One pass over the ``train`` months in shuffled order at rate ``lr``; its losses.
 
-    Each step's (gradient size before clipping, limit) goes on ``norms``. A step whose loss
-    is not finite is skipped rather than poison Adam. ``trade``: (traded month, its real held
-    book or ``None``): with ``trade_margin`` each step also pays that month's penalty
-    (research.optimizer.realism).
+    Each step's (gradient size before clipping, limit) goes on ``norms``; a step whose loss is
+    not finite is skipped. ``trade``: (traded month, its real held book or ``None``): with
+    ``trade_margin`` each step also pays that month's penalty (research.optimizer.realism).
     """
     for group in adam.param_groups:
         group["lr"] = lr
@@ -352,16 +342,16 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
 ) -> tuple[list, int, float, list[float], list[torch.Tensor], list[float], dict]:  # fmt: skip
     """One month's training.
 
-    Returns the last pass's losses, passes run, best smoothed held-out loss, its per-pass curve
-    (research.optimizer.stopping), every step's (gradient size before clipping, limit), the
-    test month ``test``'s loss after each pass (``test`` < 0: none) and for the log the passes
-    rolled back (:class:`.stopping.Guard`) and the held-out months' returns at the last score
-    (month order). ``epochs`` passes, the rate following ``settings.schedule`` from
-    ``start_lr``. With a book (``holdings_input``) the ``span`` months not in it get cash first
-    (an all-zero book, holdings.fill), until a step or roll writes the model's. The held-out
-    months (``watch``) are drawn from ``hold_rng``; they and the test month are scored on their
-    real returns (``raw``), training alone sees ``data``'s clipped ones. ``trade``: the traded
-    month's penalty pieces (:func:`_pass`).
+    Returns the last pass's losses, passes run, best smoothed held-out score, its per-pass
+    curve (research.optimizer.stopping; with ``keep_best`` minus the held-out ranking), every
+    step's (gradient size before clipping, limit), the test month ``test``'s loss after each
+    pass (``test`` < 0: none) and for the log the passes rolled back (:class:`.stopping.Guard`),
+    the held-out months' returns at the last score (month order) and the pass kept (``None``
+    without ``keep_best``). Up to ``epochs`` passes, the rate following ``settings.schedule``
+    from ``start_lr``. With a book (``holdings_input``) the ``span`` months not in it get cash
+    first (holdings.fill). The held-out months (``watch``) are drawn from ``hold_rng``; they
+    and the test month are scored on their real returns (``raw``), training alone sees
+    ``data``'s clipped ones. ``trade``: the traded month's penalty pieces (:func:`_pass`).
     """
     if pricing is not None:
         holdings.fill(data, pricing, span)
@@ -374,10 +364,16 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
         _roll(model, raw, pricing, settings, block)
         if test >= 0:
             tests.append(_held_loss(model, raw, pricing, settings, [test]))
-        return _held_loss(model, raw, pricing, settings, block, held)
+        value = _held_loss(model, raw, pricing, settings, block, held)
+        if not settings.keep_best:
+            return value
+        with average.swapped() if average is not None else contextlib.nullcontext():
+            return -priced.held_ranking(model, raw, pricing, settings, block)
 
     norms: list[torch.Tensor] = []
     guard = stopping.Guard(model, adam, average, pricing.book if pricing is not None else None)
+    keeper = (stopping.Keeper(model, adam, average, settings.keep_patience)
+              if settings.keep_best else None)  # fmt: skip
 
     def one_pass(p: int) -> list:
         lr = rate(settings.schedule, start_lr, settings.lr_min, p, epochs) * guard.scale
@@ -387,8 +383,9 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
             tests.append(_held_loss(model, raw, pricing, settings, [test]))
         return losses
 
-    return (*stopping.fit_watched(lambda p: guard(one_pass, p), score, bool(block), epochs),
-            norms, tests, {"rollbacks": guard.rollbacks, "held_returns": held})  # fmt: skip
+    return (*stopping.fit_watched(lambda p: guard(one_pass, p), score, bool(block), epochs, keeper),
+            norms, tests, {"rollbacks": guard.rollbacks, "held_returns": held,
+                           "best_pass": None if keeper is None else keeper.best_pass})  # fmt: skip
 
 
 def _new_model(settings: Settings, width: int, device: str) -> tuple[Optimizer, torch.optim.Adam]:
@@ -434,12 +431,15 @@ def walk(
         portfolio's next-month return over the T-bill before costs, ``long`` and ``short`` =
         the sums of the positive and negative weights, ``largest`` = the largest absolute
         weight's share of the sum of absolute weights, mean training loss over the last pass,
-        passes run, best smoothed held-out loss and its per-pass curve with ``watch``, the
-        median and largest gradient size over the month's steps before clipping, the share
-        of steps clipped and the last step's limit, seconds, the model's own gross and the
-        trade-time scale on it, ``model_gross`` and ``scale``: realism.trade_size); and the final
+        passes run, best smoothed held-out score and its per-pass curve with ``watch`` (minus
+        the held-out ranking with ``keep_best``, and ``best_pass`` the pass kept), the median
+        and largest gradient size over the month's steps before clipping, the share of steps
+        clipped and the last step's limit, seconds, ``model_gross`` and ``scale``: the model's
+        own gross and the trade-time scale on it, realism.trade_size); and the final
         model (with ``average``, its averaged parameters: the model that traded the last month).
     """
+    if settings.keep_best and not settings.watch:
+        raise ValueError("keep_best needs watch: held-out months to score each pass")
     rng, hold_rng = walkbits.walk_streams(settings)
     clipper = Clipper(settings.clip)
     model, adam = _new_model(settings, months[0].x.shape[1], device)

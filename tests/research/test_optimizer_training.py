@@ -200,6 +200,39 @@ def test_fit_watched_runs_every_pass_and_logs_the_best_smoothed_score():
     assert calls == [0, 1, 2, 3] and passes == 4 and np.isnan(best) and curve == []
 
 
+def test_keeper_keeps_the_best_smoothed_pass_and_stops_on_patience():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import stopping  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.averaging import Average  # noqa: PLC0415
+
+    model = torch.nn.Linear(2, 1)
+    adam = torch.optim.Adam(model.parameters())
+    average = Average(model, 0.5)
+
+    def one_pass(p):  # pass p leaves the weights at p and folds them into the average
+        with torch.no_grad():
+            model.weight.fill_(float(p))
+        average.update()
+        return [float(p)]
+
+    # smoothed over 3: 4.0 at pass 2, 3.0 at 3, 2.67 at 4 (best), 3.0 at 5, 4.0 at 6, 5.0 at 7
+    raw = iter([5.0, 4.0, 3.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+    keeper = stopping.Keeper(model, adam, average, patience=3)
+    losses, passes, best, curve = stopping.fit_watched(
+        one_pass, lambda: next(raw), True, 10, keeper
+    )
+    assert passes == 8 and keeper.best_pass == 4 and best == pytest.approx(8 / 3)  # 4 + 3
+    assert losses == [7.0] and len(curve) == 8  # the last pass run was 7; its loss is logged
+    assert float(model.weight.detach()[0, 0]) == 4.0 and average.steps == 5  # pass 4's state
+    keeper = stopping.Keeper(model, adam, None, patience=2)  # no finite score: nothing kept
+    _, passes, _, _ = stopping.fit_watched(one_pass, lambda: math.nan, True, 3, keeper)
+    assert passes == 3 and keeper.best_pass == -1 and float(model.weight.detach()[0, 0]) == 2.0
+    a, b = torch.tensor([0.1, 0.5, 0.3, 0.9]), torch.tensor([1.0, 3.0, 2.0, 4.0])
+    assert float(stopping.rank_corr(a, b)) == pytest.approx(1.0)
+    assert float(stopping.rank_corr(a, -b)) == pytest.approx(-1.0)
+    assert abs(float(stopping.rank_corr(a, torch.tensor([1.0, 4.0, 3.0, 2.0])))) < 1.0
+
+
 def test_walk_logs_passes_gradients_and_with_watch_the_held_out_curve():
     pytest.importorskip("torch")
     from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
@@ -227,6 +260,16 @@ def test_walk_logs_passes_gradients_and_with_watch_the_held_out_curve():
     assert all(len(c) == 6 for c in cold["held_curve"])
     assert all(len(c) == 6 for c in cold["test_curve"].drop_nulls())
     assert cold["held_loss"].is_finite().all()
+    kept = Settings("linear", window=20, first_epochs=6, warm_epochs=2, start=date(2001, 9, 1),
+                    costs="table.parquet", holdings_input=True, holdout=6, cold=True,
+                    watch=True, keep_best=True, keep_patience=2, average=0.9)  # fmt: skip
+    _, best, _ = walk(months, kept, stock_costs=stock)
+    assert (best["passes"] <= 6).all() and (best["best_pass"] < best["passes"]).all()
+    assert (best["best_pass"] >= 0).all() and (best["passes"] < 6).any()  # stopped early somewhere
+    assert all(-1 <= v <= 1 for c in best["held_curve"] for v in c)  # minus the held-out ranking
+    with pytest.raises(ValueError, match="keep_best needs watch"):
+        walk(months, Settings("linear", window=20, first_epochs=2, warm_epochs=2,
+                              start=date(2001, 9, 1), keep_best=True))  # fmt: skip
 
 
 def test_auto_clipping_sets_the_bar_once_from_the_first_steps_and_holds_it():

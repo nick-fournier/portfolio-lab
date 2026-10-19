@@ -323,6 +323,16 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
             help="With --loss-gross: this x log(model's gross / loss gross)^2 in the loss."
         ),
     ] = 0.0,
+    keep_best: Annotated[
+        bool,
+        typer.Option(
+            help="With --watch: score the held-out months by ranking each pass, keep the best"
+            " pass and stop after --keep-patience passes without a new best."
+        ),
+    ] = False,
+    keep_patience: Annotated[
+        int, typer.Option(help="With --keep-best: passes without a new best before stopping.")
+    ] = 4,
     price_gross: Annotated[
         float,
         typer.Option(
@@ -379,7 +389,7 @@ def walk_cmd(  # noqa: PLR0913, PLR0917 - one option per setting
         stock_drop=stock_drop, invest_floor=invest_floor, trade_margin=trade_margin,
         start_book=start_book, trade_gross=trade_gross, trade_collateral=trade_collateral,
         price_gross=price_gross, loss_gross=loss_gross, risk_aversion=risk_aversion,
-        size_anchor=size_anchor,
+        size_anchor=size_anchor, keep_best=keep_best, keep_patience=keep_patience,
         **given,
     )  # fmt: skip
     try:
