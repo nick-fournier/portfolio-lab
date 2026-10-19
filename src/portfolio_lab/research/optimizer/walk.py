@@ -25,11 +25,9 @@ held-out months' book entries are rolled forward with the model as it stands. ``
 is the test month's loss after each pass. A warm model has already trained on most of this
 month's held-out months (they move every month), so its score is not out of sample.
 
-With per-stock ``costs`` the loss is (1 - net)^2, net the month's return after each stock's
-spread on the dollars traded from the book held going in (the month before's weights after its
-returns) and its borrow fee on shorts (research.optimizer.priced), less the account's
-size-dependent charges when any realism term is on (research.optimizer.realism; with
-``trade_margin`` each step also pays the traded month's penalty).
+With per-stock ``costs`` the loss is on the month's net return: after each stock's spread on
+the dollars traded from the book held going in, its borrow fee and the account's charges
+(research.optimizer.priced and realism).
 
 With ``holdings_input`` (2026-10-15; needs ``costs``) each stock's row also gets its holding
 and spread (research.optimizer.holdings): in training, from a book table of each month's
@@ -42,10 +40,8 @@ month before is not in the table or not yet visited holds cash going in (priced.
 from ``start_book``: nothing (``cash``), the market (realism.start_book), or with ``guess`` the
 model's own book-table entry for that month, as its training left it.
 
-``winsor`` pulls training returns in to each month's quantiles and ``stock_drop`` hides a share
-of each step's stocks from the loss; held-out and test months are scored on real returns.
-``average``: a moving average of the model's parameters is what trades. ``trade_gross``
-(2026-10-18) sizes the picked book (realism.trade_size); ``loss_gross``: Settings.
+``winsor`` and ``stock_drop`` shape training returns only; held-out and test months are real.
+``average``: a moving average of the parameters trades; ``trade_gross`` sizes the picked book.
 """
 
 import contextlib
@@ -115,6 +111,7 @@ class Settings:
         max_weight / short_cap / max_names: The box (2026-10-19): each name's dollars above
             the cap; short dollars above the cap (0: long-only; ``None``: off); the effective
             number of names above the cap (realism.penalty); all charged like the cushion.
+        unit_start: Scale a fresh model so its first book starts at gross 1 (walkbits).
         start_book: What a traded month starts from when nothing was traded the month before:
             ``guess`` (the model's own weights), ``cash`` or ``market`` (realism.start_book).
         trade_margin: Each training step also pays the traded month's penalty (realism).
@@ -186,6 +183,7 @@ class Settings:
     max_weight: float = 0.0
     short_cap: float | None = None
     max_names: int = 0
+    unit_start: bool = False
 
 
 #: Settings removed in the cleanup of 2026-10-18, each with the value that left it off: an
@@ -242,9 +240,8 @@ Pair = tuple[torch.Tensor, torch.Tensor]
 def _data(months: list[Month], settings: Settings, device: str) -> tuple[list[Pair], list[Pair]]:
     """Each month's (x, r) tensors for training, and the same with real returns.
 
-    Training returns are pulled in to the month's ``settings.winsor`` quantiles (months whose
-    returns are not all known are left as they are). The real pairs share the inputs and score
-    the held-out and test months.
+    Training returns are pulled in to the month's ``settings.winsor`` quantiles; the real pairs
+    share the inputs and score the held-out and test months.
     """
     raw = [(torch.from_numpy(m.x).to(device), torch.from_numpy(m.r).to(device)) for m in months]
     data = raw
@@ -443,11 +440,13 @@ def walk(
     rng, hold_rng = walkbits.walk_streams(settings)
     clipper = Clipper(settings.clip)
     model, adam = _new_model(settings, months[0].x.shape[1], device)
-    start_state = copy.deepcopy(model.state_dict()) if settings.cold else None
     average = Average(model, settings.average) if settings.average else None
     data, raw = _data(months, settings, device)
     known = [bool(np.isfinite(m.r).all()) for m in months]
     pricing = priced.pricing(months, settings, device, stock_costs, market)
+    if settings.unit_start:
+        walkbits.unit_start(model, data, pricing, months, settings)
+    start_state = copy.deepcopy(model.state_dict()) if settings.cold else None
     only = None if settings.only is None else set(settings.only)
     weights, log, trained, last, traded = [], [], False, None, -1
     for t, month in enumerate(months):

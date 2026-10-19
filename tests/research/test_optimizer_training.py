@@ -361,3 +361,22 @@ def test_parameter_average_is_bias_corrected_swaps_in_and_rolls_back_with_the_gu
     latest, _, _ = walk(months, Settings("linear", **base))
     assert held["weight"].is_finite().all()
     assert held["weight"].to_list() != latest["weight"].to_list()
+
+
+def test_unit_start_scales_a_fresh_model_so_its_first_book_has_gross_one():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import walkbits  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings  # noqa: PLC0415
+
+    rng = np.random.default_rng(3)
+    months = [data.Month(date(2000, k + 1, 1), list("ABCDEF"),
+                         rng.uniform(-0.5, 0.5, (6, 4)).astype(np.float32),
+                         rng.normal(0, 0.05, 6).astype(np.float32)) for k in range(6)]  # fmt: skip
+    pairs = [(torch.from_numpy(m.x), torch.from_numpy(m.r)) for m in months]
+    torch.manual_seed(0)
+    model = Optimizer("mlp", 4, blocks=2, hidden=8)
+    before = float(model(pairs[3][0]).abs().sum())
+    gross = walkbits.unit_start(model, pairs, None, months, Settings("mlp", start=date(2000, 5, 1)))
+    assert gross == pytest.approx(before)  # the month before the first traded month (May): April
+    assert float(model(pairs[3][0]).abs().sum()) == pytest.approx(1.0, rel=1e-5)
