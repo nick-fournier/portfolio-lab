@@ -15,11 +15,11 @@ def _month(k: int) -> date:
     return date(2010 + k // 12, k % 12 + 1, 28)
 
 
-def _inputs(tmp_path, months=40, seed=0) -> LinearInputs:
+def _inputs(tmp_path, months=40, seed=0, symbols=SYMBOLS) -> LinearInputs:
     rng = np.random.default_rng(seed)
     rows = []
     for m in range(months):
-        for s in SYMBOLS:
+        for s in symbols:
             rows.append({"date": _month(m), "symbol": s, "actual": rng.normal(0, 0.05),
                          "forecast": rng.normal(0, 0.01), "spy12": 0.1,
                          **{t: rng.normal() for t in linear.TERMS}})  # fmt: skip
@@ -50,8 +50,11 @@ def test_expected_returns_follow_grinolds_rule_with_the_ic_known_by_then(tmp_pat
     assert inputs.expected(asof, _prices(), 0.03).empty  # too few graded months
 
 
-def test_the_forecaster_starts_at_its_first_forecast(tmp_path):
-    _inputs(tmp_path)
+def test_the_forecaster_starts_once_its_ic_is_known(tmp_path):
+    graded = [f"S{k}" for k in range(60)]  # enough stocks to grade a month
+    _inputs(tmp_path, symbols=graded)
     strategy = create("meanvar", expected="linear", forecaster_dir=tmp_path)
-    assert strategy.first_decision() == _month(0)
+    assert strategy.first_decision() == _month(linear.MIN_IC_MONTHS)
     assert create("meanvar").first_decision() is None
+    (short := tmp_path / "short").mkdir()
+    assert _inputs(short, months=linear.MIN_IC_MONTHS, symbols=graded).first() is None

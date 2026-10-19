@@ -11,8 +11,9 @@ from portfolio_lab.web.routes.status import data_freshness, read_job
 
 router = APIRouter()
 
-#: Market references on the overview, drawn with the class 1 and 2 models; every other
-#: strategy is listed but starts hidden on the chart (shown from the legend).
+#: Market references on the overview, drawn with the class 1 and 2 models and their Kelly
+#: versions; every other strategy is listed but starts hidden on the chart (shown from the
+#: legend).
 MARKET = ("SPY", "QQQ")
 
 

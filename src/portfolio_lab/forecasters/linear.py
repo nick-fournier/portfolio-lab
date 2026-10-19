@@ -30,8 +30,11 @@ from portfolio_lab.research.scoreboard import forward_returns
 
 #: Where :func:`walk`'s forecasts (with each stock's terms) are kept, in ``DataPaths.forecaster``.
 FILE = "linear.parquet"
-#: Months of history before the first forecast.
-MIN_MONTHS = 24
+#: Months of history before the first forecast. Six, with :data:`MIN_IC_MONTHS` more to grade
+#: them, puts class 2's first trade at the end of 1999 (the inputs start at the end of 1998),
+#: so its backtest goes through the 2000-02 crash. Later forecasts don't depend on it: every
+#: fit uses all earlier months.
+MIN_MONTHS = 6
 #: Daily returns in one-year momentum (and SPY's one-year return).
 MOMENTUM_SESSIONS = 251
 #: One-year momentum needs bars on this share of its window.
@@ -161,4 +164,4 @@ def walk(data: pl.DataFrame) -> pl.DataFrame:
 #: Trading sessions in a year (Grinold's volatility is annualized with it).
 TRADING_DAYS = 252
 #: Months of graded forecasts needed before Grinold's IC (and so expected returns) is used.
-MIN_IC_MONTHS = 12
+MIN_IC_MONTHS = 6

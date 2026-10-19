@@ -30,7 +30,8 @@ from portfolio_lab.backtest.tax import CASH, monthly_gains
 from portfolio_lab.core.config import Settings
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import write_parquet_atomic
-from portfolio_lab.jobs.tasks import CLASS_1, _attach_runtime, first_start
+from portfolio_lab.jobs.models import PAPER_STRATEGY
+from portfolio_lab.jobs.tasks import _attach_runtime, first_start
 from portfolio_lab.research.panel import Panel
 from portfolio_lab.strategies.base import create
 
@@ -67,7 +68,7 @@ def tax_runs_task(settings: Settings, publish: Path | None = None) -> dict[str, 
     """
     panel = None
     runs: dict[str, str] = {}
-    jobs = [(variant_key(e), *CLASS_1, e) for e in VARIANTS]
+    jobs = [(variant_key(e), *PAPER_STRATEGY, e) for e in VARIANTS]
     jobs.append(("spy", *BENCHMARK, Execution()))
     for key, name, params, execution in jobs:
         strategy = _attach_runtime(create(name, **params), settings)

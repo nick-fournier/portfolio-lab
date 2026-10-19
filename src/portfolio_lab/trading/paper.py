@@ -136,18 +136,21 @@ def run(
     refresh: Callable[[], Any] | None = None,
     dry_run: bool = False,
     trading_dir: Path | None = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Record the account and, when due, rebalance to ``strategy``'s targets (module docs).
 
     Args:
         data_dir: The data directory (prices, features, and where records are kept).
-        strategy: The strategy object (``jobs.tasks.PAPER_STRATEGY``).
+        strategy: The strategy object (``jobs.models.PAPER_STRATEGY``).
         broker: The paper account.
         refresh: Called before computing targets on a rebalance day (rebuilds the monthly
             features so the month just closed is included); skipped in a dry run.
         dry_run: Plan the rebalance now and return the orders without placing them or
             writing records.
         trading_dir: Where trading records live (default ``data_dir/trading``).
+        model: The strategy's identity, saved with each rebalance so the Paper page knows
+            which model the account holds (``jobs.models.model_record``).
     """
     folder = DataPaths(data_dir, trading_dir).paper
     panel = Panel.load(data_dir)
@@ -183,7 +186,8 @@ def run(
         broker.submit(order, f"pl-{session:%Y%m%d}-{order.symbol}-{order.side}")
     _append(log_path, pl.DataFrame(
         {"date": [session], "targets": [len(targets)], "closes": [len(closes)],
-         "orders": [len(orders)], "equity": [equity]}
+         "orders": [len(orders)], "equity": [equity], "model": [model]},
+        schema_overrides={"model": pl.String},
     ), ("date",))  # fmt: skip
     _append(folder / "targets.parquet", pl.DataFrame(
         {"date": [session] * len(targets), "symbol": list(targets),

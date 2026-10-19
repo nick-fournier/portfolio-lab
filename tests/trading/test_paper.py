@@ -109,12 +109,13 @@ def test_run_rebalances_once_and_records(tmp_path, make_panel, monkeypatch):
     panel = make_panel()
     monkeypatch.setattr(paper.Panel, "load", classmethod(lambda cls, d: panel))
     broker = FakeBroker()
-    first = paper.run(tmp_path, FixedStrategy(), broker)
+    first = paper.run(tmp_path, FixedStrategy(), broker, model="fixed")
     assert first["rebalanced"] and len(broker.submitted) == 2
-    again = paper.run(tmp_path, FixedStrategy(), broker)
+    again = paper.run(tmp_path, FixedStrategy(), broker, model="fixed")
     assert not again["rebalanced"] and len(broker.submitted) == 2
     log = pl.read_parquet(tmp_path / "trading" / "paper" / "rebalances.parquet")
     assert log.height == 1 and log["date"][0] == panel.dates[-1]
+    assert log["model"].to_list() == ["fixed"]  # the page compares from the latest switch
 
 
 def test_dry_run_places_nothing(tmp_path, make_panel, monkeypatch):

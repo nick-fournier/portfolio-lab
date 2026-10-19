@@ -38,6 +38,7 @@ from portfolio_lab.data.sources import sharadar as sharadar_api
 from portfolio_lab.data.sources.alpaca import make_client
 from portfolio_lab.data.sources.tiingo import fetch_fund_history
 from portfolio_lab.forecasters import linear, report
+from portfolio_lab.jobs.models import PAPER_STRATEGY, SCHEDULED_BACKTESTS, model_record, run_label
 from portfolio_lab.research.conditions import caution_dial, conditional_ic
 from portfolio_lab.research.context import STOCK_FEATURES
 from portfolio_lab.research.features import FEATURES
@@ -51,45 +52,6 @@ from portfolio_lab.trading.broker import PaperBroker
 
 log = logging.getLogger(__name__)
 
-#: Class 1, "Momentum + health filter": meanvar on the healthiest
-#: (continuous F-score) of the most liquid stocks, monthly, with weight limits tapering near
-#: the edges of both lists instead of hard cutoffs (``strategies.meanvar.soft``), weighted for
-#: the highest expected long-run growth (the Kelly objective, ``strategies.meanvar.optimize``),
-#: holding the minimum-variance mix in bear markets and equal weights in rebounds (see
-#: ``strategies.meanvar`` and ``research.regimes``). Kelly replaced max-Sharpe on 2026-10-06.
-CLASS_1: tuple[str, dict[str, Any]] = (
-    "meanvar",
-    {"health_rank_pool": 400, "soften": "taper", "bear_defense": True, "rebound": "equal",
-     "objective": "kelly", "title": "Momentum + health filter"},
-)  # fmt: skip
-#: Class 2, "Linear model": the same pool, Kelly and bear switch as :data:`CLASS_1`, with
-#: the nine-term forecasts in Grinold's form (T-bill + sqrt(12) x IC x volatility x z, honest
-#: expected returns) and the price covariance, no rebound switch (``forecasters.grinold``).
-#: Kelly bets 16x as hard as full Kelly (risk aversion 1/16), the best of 1 .. 1/64 and 0 on
-#: the scratch hive 2005-2026 (22.9% at 1, 28.9% at 1/16) and a monthly walk-forward pick (#74).
-CLASS_2: tuple[str, dict[str, Any]] = (
-    "meanvar",
-    {"health_rank_pool": 400, "soften": "taper", "bear_defense": True, "objective": "kelly",
-     "expected": "linear", "risk_aversion": 1 / 16, "title": "Linear model"},
-)  # fmt: skip
-#: The models, drawn on the Overview and Compare charts against SPY and the best
-#: funds (every other strategy is listed in their tables but starts hidden on the chart).
-MODELS: tuple[tuple[str, dict[str, Any]], ...] = (CLASS_1, CLASS_2)
-#: Backtests the scheduler refreshes weekly so the dashboard always shows current baselines.
-SCHEDULED_BACKTESTS: tuple[tuple[str, dict[str, Any]], ...] = (
-    ("buy_hold", {}),  # SPY
-    # Control for meanvar: the same candidates (100 most liquid), equally weighted.
-    ("equal_weight", {"top_n": 100}),
-    ("momentum", {}),  # the 20 strongest of the 100 most liquid
-    ("meanvar", {}),
-    # The original design: a Piotroski quality filter, alone and in front of meanvar.
-    ("piotroski", {"pool": 100}),
-    ("meanvar", {"min_fscore": 7}),
-    # The first baseline: meanvar on the healthiest 27% by continuous F-score.
-    ("meanvar", {"healthy_share": 0.27}),
-    CLASS_1,
-    CLASS_2,
-)
 #: Signals the weekly scoreboard evaluates: mean-variance's forecasts and classic anomalies.
 SCOREBOARD_SIGNALS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("forecast", {"model": "arima320_price"}),
@@ -110,23 +72,6 @@ FORECAST_WORKERS = 4
 EDGAR_REQUESTS_PER_MINUTE = 300
 #: Runs kept per configuration; older ones are deleted after each scheduled refresh.
 RUNS_KEPT_PER_CONFIG = 3
-
-
-def run_label(meta: dict[str, Any]) -> str:
-    """A saved run's display name: its configuration's current title, else its saved label.
-
-    Configurations are matched by their untitled label, which spells out every non-default
-    parameter (a title is not one), so renaming a model renames its earlier runs too.
-    """
-    titled = {}
-    for name, params in MODELS:
-        untitled = {k: v for k, v in params.items() if k != "title"}
-        titled[strategy_label(create(name, **untitled))] = strategy_label(create(name, **params))
-    try:
-        saved = strategy_label(create(meta["strategy"], **meta.get("params", {})))
-    except (KeyError, TypeError, ValueError):  # a retired strategy or parameter
-        saved = None
-    return titled.get(saved) or meta.get("label") or meta["strategy"]
 
 
 def public_client(settings: Settings) -> RateLimitedClient:
@@ -463,7 +408,7 @@ def make_vs_buy_task(settings: Settings) -> dict:
     rates = reader.read(settings.data_dir, "series").filter(pl.col("series") == "DTB3")
     rates = rates.select("date", pl.col("value").alias("rate"))
     start = min(frame["date"].min() for _, _, frame in series.values())
-    production = f"ours: {strategy_label(create(CLASS_1[0], **CLASS_1[1]))}"
+    production = f"ours: {strategy_label(create(PAPER_STRATEGY[0], **PAPER_STRATEGY[1]))}"
     production = production if production in series else None
     summary, growth = compare(series, rates, start, ours=production)
     write_parquet_atomic(summary, paths.make_vs_buy / "summary.parquet")
@@ -472,10 +417,6 @@ def make_vs_buy_task(settings: Settings) -> dict:
     status = {"series": summary["key"].n_unique(), "common_start": common["start"].min()}
     write_status(settings.data_dir, "make_vs_buy", status)
     return status
-
-
-#: The strategy the paper account follows: class 1 (switch to :data:`CLASS_2` here).
-PAPER_STRATEGY: tuple[str, dict[str, Any]] = CLASS_1
 
 
 def paper_task(settings: Settings, dry_run: bool = False) -> dict:
@@ -492,7 +433,8 @@ def paper_task(settings: Settings, dry_run: bool = False) -> dict:
     try:
         return paper.run(settings.data_dir, strategy, broker,
                          refresh=lambda: derive_task(settings), dry_run=dry_run,
-                         trading_dir=settings.trading_dir)  # fmt: skip
+                         trading_dir=settings.trading_dir,
+                         model=model_record(name, params))  # fmt: skip
     finally:
         broker.close()
         if callable(close := getattr(strategy, "close", None)):

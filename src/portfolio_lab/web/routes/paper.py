@@ -1,5 +1,11 @@
-"""Paper trading page: the production strategy on Alpaca's paper account (dummy money)."""
+"""Paper trading page: the production strategy on Alpaca's paper account (dummy money).
 
+The account is compared from its first rebalance with the model it holds now (each rebalance
+saves its model, ``jobs.models.model_record``), against that model's backtest, so switching
+production starts a fresh comparison instead of mixing two models.
+"""
+
+import json
 from datetime import date
 from pathlib import Path
 
@@ -11,22 +17,47 @@ from portfolio_lab.backtest.engine import label as strategy_label
 from portfolio_lab.backtest.results import list_runs, load_run
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.data import ids, reader
-from portfolio_lab.jobs.tasks import PAPER_STRATEGY, run_label
+from portfolio_lab.jobs.models import CLASS_1, PAPER_STRATEGY, run_label
 from portfolio_lab.strategies.base import create
 from portfolio_lab.web.charts import growth_figure
 
 router = APIRouter()
+
+#: The model of rebalances saved before each one recorded its model: the account's first two
+#: (2026-09-30 and 2026-10-01) were class 1's.
+UNRECORDED = CLASS_1
 
 
 def _read(path: Path) -> pl.DataFrame:
     return pl.read_parquet(path) if path.exists() else pl.DataFrame()
 
 
-def _backtest(data_dir: Path) -> pl.DataFrame:
-    """Daily returns of the latest backtest of the paper strategy (empty if none)."""
-    wanted = strategy_label(create(PAPER_STRATEGY[0], **PAPER_STRATEGY[1]))
+def _name(model: tuple[str, dict]) -> str:
+    return strategy_label(create(model[0], **model[1]))
+
+
+def _held(rebalances: pl.DataFrame) -> tuple[str | None, date | None]:
+    """The model the account holds (its latest rebalance's, by its current name) and since when.
+
+    "Since" is the first rebalance of the latest unbroken run of that model.
+    """
+    if not rebalances.height:
+        return None, None
+    rows = rebalances.sort("date", descending=True)
+    records = rows["model"].to_list() if "model" in rows.columns else [None] * rows.height
+    models = [run_label(json.loads(r)) if r else _name(UNRECORDED) for r in records]
+    since = rows["date"][0]
+    for day, model in zip(rows["date"], models, strict=True):
+        if model != models[0]:
+            break
+        since = day
+    return models[0], since
+
+
+def _backtest(data_dir: Path, model: str) -> pl.DataFrame:
+    """Daily returns of ``model``'s latest backtest (empty if none)."""
     for run in list_runs(data_dir, latest_only=True):  # newest first
-        if run_label(run["meta"]) == wanted:
+        if run_label(run["meta"]) == model:
             return load_run(data_dir, run["meta"]["run_id"]).daily.select("date", "ret")
     return pl.DataFrame()
 
@@ -104,18 +135,25 @@ def paper_page(request: Request) -> HTMLResponse:
     paths = DataPaths(data_dir, request.app.state.trading_dir)
     snapshots = _read(paths.paper / "snapshots.parquet")
     snapshots = snapshots.sort("date") if snapshots.height else snapshots
-    context: dict = {"strategy": f"{PAPER_STRATEGY[0]} {PAPER_STRATEGY[1]}"}
+    production = _name(PAPER_STRATEGY)
+    held, since = _held(_read(paths.paper / "rebalances.parquet"))
+    held = held or production
+    context: dict = {"held": held, "production": production}
     if snapshots.height:
-        latest, start = snapshots.row(-1, named=True), snapshots["date"][0]
+        own = snapshots.filter(pl.col("date") >= since) if since else snapshots
+        own = own if own.height else snapshots
+        first, latest = own.row(0, named=True), own.row(-1, named=True)
+        opened = snapshots.row(0, named=True)
         context["summary"] = {
-            "start": start, "date": latest["date"], "equity": latest["equity"],
-            "cash": latest["cash"], "ret": latest["equity"] / snapshots["equity"][0] - 1,
+            "start": first["date"], "date": latest["date"], "equity": latest["equity"],
+            "cash": latest["cash"], "ret": latest["equity"] / first["equity"] - 1,
+            "opened": opened["date"], "total": latest["equity"] / opened["equity"] - 1,
         }  # fmt: skip
-        backtest = _backtest(data_dir)
-        growth = _growth(snapshots, {"SPY": _spy(paths, start), "backtest": backtest})
+        backtest = _backtest(data_dir, held)
+        growth = _growth(own, {"SPY": _spy(paths, first["date"]), "backtest": backtest})
         through = f" (through {backtest['date'].max()})" if backtest.height else ""
         names = {"paper": "Paper account", "SPY": "SPY",
-                 "backtest": f"Backtest, same strategy{through}"}  # fmt: skip
+                 "backtest": f"Backtest, {held}{through}"}  # fmt: skip
         if growth["date"].n_unique() > 1:
             context["chart"] = growth_figure(growth, names, set(names), skip_weekends=True)
         context["holdings"] = _holdings(paths.paper, latest["equity"])
