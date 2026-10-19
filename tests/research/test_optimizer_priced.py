@@ -283,3 +283,34 @@ def test_loss_gross_takes_the_loss_on_the_sized_book_with_a_chosen_risk_aversion
     assert own_gross() < own
     with pytest.raises(ValueError, match="size_anchor"):
         priced.pricing(months, replace(base, size_anchor=0.5), "cpu", stock, market)
+
+
+def test_the_sized_loss_and_the_normalized_model_have_correct_gradients():
+    """Clean-room rung 1 (2026-10-19): autograd agrees with finite differences."""
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer import costs, priced, realism  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.model import Optimizer  # noqa: PLC0415
+    from portfolio_lab.research.optimizer.walk import Settings  # noqa: PLC0415
+
+    gen = torch.Generator().manual_seed(4)
+    n = 7
+    price = torch.tensor([1.8, 3.0, 4.5, 8.0, 20.0, 55.0, 140.0], dtype=torch.float64)
+    market = realism.Market(price, torch.full((n,), 0.03, dtype=torch.float64),
+                            torch.full((n,), 2e6, dtype=torch.float64), 0.004)  # fmt: skip
+    s = Settings("linear", loss_gross=1.0, trade_gross=1.0, risk_aversion=3.0, rebate=True,
+                 margin_rate=0.065, cash_rate=0.0356, impact=1.0, equity=1e5)  # fmt: skip
+    r = torch.randn(n, generator=gen, dtype=torch.float64) * 0.1
+    spread = torch.full((n,), 0.004, dtype=torch.float64)
+    fee = torch.full((n,), 0.02, dtype=torch.float64)
+
+    def loss_of(w):  # the book sized to 1x, traded from cash, net of costs and charges
+        b = realism.sized(w, market, 1.0, 0.5)
+        net = costs.net_return(b, r, None, None, spread, fee)
+        net = net - realism.charges(b, torch.zeros_like(b), market, s, s.equity)
+        return priced.objective(net, s)
+
+    w = (torch.rand(n, generator=gen, dtype=torch.float64) - 0.4).requires_grad_()
+    assert torch.autograd.gradcheck(loss_of, (w,), eps=1e-7, atol=1e-6)
+    model = Optimizer("transformer", 5, 2, 8, normalize=True).double()
+    x = (torch.rand(9, 5, generator=gen, dtype=torch.float64) - 0.5).requires_grad_()
+    assert torch.autograd.gradcheck(model, (x,), eps=1e-7, atol=1e-6)
