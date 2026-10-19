@@ -380,3 +380,20 @@ def test_unit_start_scales_a_fresh_model_so_its_first_book_has_gross_one():
     gross = walkbits.unit_start(model, pairs, None, months, Settings("mlp", start=date(2000, 5, 1)))
     assert gross == pytest.approx(before)  # the month before the first traded month (May): April
     assert float(model(pairs[3][0]).abs().sum()) == pytest.approx(1.0, rel=1e-5)
+
+
+def test_fixed_readout_holds_the_readouts_length_through_training():
+    torch = pytest.importorskip("torch")
+    from portfolio_lab.research.optimizer.walk import Settings, walk  # noqa: PLC0415
+
+    rng = np.random.default_rng(11)
+    months = [data.Month(date(2000 + k // 12, k % 12 + 1, 1), list("ABCDEFGH"),
+                         rng.uniform(-0.5, 0.5, (8, 3)).astype(np.float32),
+                         rng.normal(0.01, 0.05, 8).astype(np.float32))
+              for k in range(16)]  # fmt: skip
+    base = dict(window=12, first_epochs=4, warm_epochs=2, lr=0.05, start=date(2001, 1, 1))
+    _, _, held = walk(months, Settings("mlp", blocks=1, hidden=8, fixed_readout=True, **base))
+    assert float(held.lam.detach().norm()) == pytest.approx(held.readout_length, rel=1e-5)
+    _, _, free = walk(months, Settings("mlp", blocks=1, hidden=8, **base))
+    assert abs(float(free.lam.detach().norm()) - free.readout_length) > 1e-3  # it moves without
+    assert torch.isfinite(held.lam).all()

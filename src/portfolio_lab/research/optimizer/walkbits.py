@@ -47,3 +47,14 @@ def unit_start(model, data: list, pricing, months: list, settings) -> float:
         if gross > 0:
             model.lam.div_(gross)
     return gross
+
+
+def hold_readout(model) -> None:
+    """Put the readout back to its starting length, keeping its direction (``fixed_readout``).
+
+    The sized loss is the same at any raw size (every book is rescaled), so each step is at
+    right angles to the readout and lengthens it a little; held at a fixed length it cannot
+    drift, and no size anchor is needed (2026-10-19).
+    """
+    with torch.no_grad():
+        model.lam.mul_(model.readout_length / model.lam.norm().clamp(min=1e-12))

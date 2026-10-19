@@ -112,6 +112,7 @@ class Settings:
             the cap; short dollars above the cap (0: long-only; ``None``: off); the effective
             number of names above the cap (realism.penalty); all charged like the cushion.
         unit_start: Scale a fresh model so its first book starts at gross 1 (walkbits).
+        fixed_readout: After every step, put the readout back to its starting length (walkbits).
         start_book: What a traded month starts from when nothing was traded the month before:
             ``guess`` (the model's own weights), ``cash`` or ``market`` (realism.start_book).
         trade_margin: Each training step also pays the traded month's penalty (realism).
@@ -184,6 +185,7 @@ class Settings:
     short_cap: float | None = None
     max_names: int = 0
     unit_start: bool = False
+    fixed_readout: bool = False
 
 
 #: Settings removed in the cleanup of 2026-10-18, each with the value that left it off: an
@@ -294,6 +296,8 @@ def _pass(  # noqa: PLR0913, PLR0917 - one pass's pieces
         value.backward()
         norms.append(clipper(model.parameters()))
         adam.step()
+        if settings.fixed_readout:
+            walkbits.hold_readout(model)
         if average is not None:
             average.update()
         losses.append(value.detach())
@@ -340,15 +344,11 @@ def _fit(  # noqa: PLR0913 - one month's training pieces
     """One month's training.
 
     Returns the last pass's losses, passes run, best smoothed held-out score, its per-pass
-    curve (research.optimizer.stopping; with ``keep_best`` minus the held-out ranking), every
-    step's (gradient size before clipping, limit), the test month ``test``'s loss after each
-    pass (``test`` < 0: none) and for the log the passes rolled back (:class:`.stopping.Guard`),
-    the held-out months' returns at the last score (month order) and the pass kept (``None``
-    without ``keep_best``). Up to ``epochs`` passes, the rate following ``settings.schedule``
-    from ``start_lr``. With a book (``holdings_input``) the ``span`` months not in it get cash
-    first (holdings.fill). The held-out months (``watch``) are drawn from ``hold_rng``; they
-    and the test month are scored on their real returns (``raw``), training alone sees
-    ``data``'s clipped ones. ``trade``: the traded month's penalty pieces (:func:`_pass`).
+    curve (stopping), every step's (gradient size, limit), the test month's loss after each
+    pass and for the log the rollbacks, the held-out months' returns at the last score and the
+    pass kept (``keep_best``). Up to ``epochs`` passes from ``start_lr``. The ``span`` months
+    not in the book get cash first (holdings.fill). Held-out (drawn from ``hold_rng``) and
+    test months are scored on real returns (``raw``); ``trade``: the traded month's penalty.
     """
     if pricing is not None:
         holdings.fill(data, pricing, span)
@@ -447,6 +447,7 @@ def walk(
     if settings.unit_start:
         walkbits.unit_start(model, data, pricing, months, settings)
     start_state = copy.deepcopy(model.state_dict()) if settings.cold else None
+    model.readout_length = float(model.lam.detach().norm())  # fixed_readout's length
     only = None if settings.only is None else set(settings.only)
     weights, log, trained, last, traded = [], [], False, None, -1
     for t, month in enumerate(months):
