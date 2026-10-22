@@ -134,6 +134,8 @@ def _paper(settings: Settings) -> dict:
 DAILY = Chain("daily", daily_slot, next_daily, (
     Job("daily_ingest", tasks.daily_ingest_task),
     Job("sharadar_ingest", tasks.sharadar_ingest_task),
+    # Not needed by conform: a day-old T-bill rate is fine, and it is retried on its own.
+    Job("rates", tasks.ingest_rates_task),
     Job("conform", tasks.conform_task, ("daily_ingest", "sharadar_ingest"), heavy=True),
     Job("derive", tasks.derive_task, ("conform",), heavy=True),
     Job("paper", _paper, ("derive",), heavy=True),
