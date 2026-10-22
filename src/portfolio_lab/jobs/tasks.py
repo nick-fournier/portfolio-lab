@@ -119,12 +119,14 @@ def ingest_rates_task(settings: Settings) -> dict:
 
 
 def daily_ingest_task(settings: Settings, full: bool = False) -> dict:
-    """Run universe, prices, benchmarks and rates in order; return their summaries."""
+    """Run universe, prices and benchmarks in order; return their summaries.
+
+    Rates are their own job (``ingest_rates_task``) so a FRED outage doesn't hold up prices.
+    """
     return {
         "universe": ingest_universe_task(settings),
         "prices": ingest_prices_task(settings, full),
         "benchmarks": ingest_benchmarks_task(settings, full),
-        "rates": ingest_rates_task(settings),
     }
 
 

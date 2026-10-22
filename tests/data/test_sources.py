@@ -6,8 +6,14 @@ import pytest
 
 from portfolio_lab.core.http import RateLimitedClient
 from portfolio_lab.data.sources.alpaca import end_param, fetch_bars
-from portfolio_lab.data.sources.fred import CONTEXT_SERIES, fetch_series, parse_dtb3
+from portfolio_lab.data.sources.fred import (
+    CONTEXT_SERIES,
+    FredUnavailableError,
+    fetch_series,
+    parse_dtb3,
+)
 from portfolio_lab.data.sources.tiingo import fetch_fund_history
+from portfolio_lab.data.sources.treasury import parse_bill_rates
 
 
 def _bar(t, c):
@@ -62,6 +68,32 @@ def test_parse_dtb3_drops_holidays_and_converts_percent():
     df = parse_dtb3("observation_date,DTB3\n2024-01-02,5.25\n2024-01-15,.\n2024-01-16,5.20\n")
     assert df["date"].to_list() == [date(2024, 1, 2), date(2024, 1, 16)]
     assert df["rate"].to_list() == pytest.approx([0.0525, 0.052])
+
+
+#: FRED's maintenance page, served with status 200 (2026-10-22).
+MAINTENANCE_PAGE = """<!doctype html>
+<html lang="en">
+<head>
+    <title>Site Maintenance | St. Louis Fed</title>
+</head>
+<body><article><h1>We&rsquo;ll be back soon!</h1></article></body>
+</html>
+"""
+
+
+def test_parse_dtb3_rejects_the_maintenance_page():
+    with pytest.raises(FredUnavailableError, match="HTML page"):
+        parse_dtb3(MAINTENANCE_PAGE)
+
+
+def test_parse_bill_rates_takes_the_13_week_discount_rate():
+    text = (
+        'Date,"4 WEEKS BANK DISCOUNT","13 WEEKS BANK DISCOUNT","13 WEEKS COUPON EQUIVALENT"\n'
+        "10/21/2026,3.92,4.07,4.17\n10/20/2026,3.93,4.08,4.18\n10/17/2026,3.94,,\n"
+    )
+    df = parse_bill_rates(text)
+    assert df["date"].to_list() == [date(2026, 10, 20), date(2026, 10, 21)]
+    assert df["rate"].to_list() == pytest.approx([0.0408, 0.0407])
 
 
 def test_end_param_caps_recent_data():

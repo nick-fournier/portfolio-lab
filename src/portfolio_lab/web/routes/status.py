@@ -17,7 +17,7 @@ DATA_JOBS = {
     "universe": ("asof", "listed", "included"),
     "prices": ("max_date", "rows_written", "symbols_with_data"),
     "benchmarks": ("max_date", "rows_written"),
-    "rates": ("max_date", "latest_rate"),
+    "rates": ("max_date", "latest_rate", "source"),
     "verify_prices": ("checked", "repaired"),
     "fundamentals": ("companies_with_facts", "facts", "latest_filing"),
     "conform": ("alpaca", "nasdaq", "edgar"),

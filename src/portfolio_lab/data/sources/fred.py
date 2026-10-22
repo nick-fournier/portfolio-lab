@@ -18,11 +18,22 @@ from portfolio_lab.core.http import RateLimitedClient
 DTB3_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 
 
+class FredUnavailableError(RuntimeError):
+    """FRED answered with something other than the data, e.g. its maintenance page."""
+
+
 def parse_dtb3(text: str) -> pl.DataFrame:
     """Parse FRED's DTB3 CSV into ``date`` and annualized ``rate`` (a fraction, not percent).
 
     FRED marks holidays with ``.``; those rows are dropped.
+
+    Raises:
+        FredUnavailableError: If the body is not the DTB3 CSV (FRED's maintenance page is HTML
+            served with status 200).
     """
+    if "DTB3" not in text.partition("\n")[0]:
+        kind = "an HTML page (maintenance?)" if text.lstrip().startswith("<") else "no CSV"
+        raise FredUnavailableError(f"FRED unavailable: got {kind} instead of DTB3 CSV")
     df = pl.read_csv(io.StringIO(text), null_values=".", infer_schema=False)
     return (
         df.rename({df.columns[0]: "date", df.columns[1]: "rate"})

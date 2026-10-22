@@ -113,7 +113,9 @@ def ingest_delisted_cmd() -> None:
 @ingest_app.command("all")
 def ingest_all_cmd(full: Full = False) -> None:
     """Run universe, prices, benchmarks and rates in order."""
-    tasks.daily_ingest_task(get_settings(), full)
+    settings = get_settings()
+    tasks.daily_ingest_task(settings, full)
+    tasks.ingest_rates_task(settings)
 
 
 def _parse_params(pairs: list[str]) -> dict[str, Any]:
