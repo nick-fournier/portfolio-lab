@@ -43,10 +43,16 @@ def build(root: Path, store: Path) -> dict:
         found = ids_.lookup(ids, symbols.with_columns(pl.col("last_seen").alias("date")))
         log.info("nasdaq: %d new ids", new.height)
     # A company's warrant or unit can resolve to the company itself: keep the common stock.
+    # The directory has no flag for ADRs or closed-end funds (they read as common), so a
+    # security the ids already know keeps the kind recorded there (Sharadar's, for its
+    # history); the directory's own kind is used only for securities it introduced.
+    kinds = ids.securities.select("sid", pl.col("category").alias("_kind"))
     rows = (
         found.drop_nulls("sid")
         .sort(pl.col("category") != "common")
         .unique(["sid", "first_seen"], keep="first", maintain_order=True)
+        .join(kinds, on="sid", how="left")
+        .with_columns(pl.coalesce("_kind", "category").alias("category"))
         .select(
             "sid", pl.col("first_seen").alias("from"),
             pl.when(pl.col("last_seen") < latest).then(pl.col("last_seen")).alias("to"),

@@ -114,6 +114,20 @@ def test_conform_casts_fills_missing_and_drops_extra_columns():
     assert out.schema["close"] == pl.Float64 and out["volume"][0] is None
 
 
+def test_nasdaq_listings_keep_the_kind_the_ids_record(tmp_path, ids):
+    """The directory lists an ADR with no flag (it reads as common): the ids' kind wins."""
+    adr = pl.when(pl.col("sid") == 200).then(pl.lit("adr")).otherwise(pl.col("category"))
+    ids_.Ids(ids.securities.with_columns(adr.alias("category")), ids.tickers, ids.sharadar).save(
+        tmp_path / "ids"
+    )
+    nasdaq.build(tmp_path, _old_store(tmp_path))
+    listings = reader.read(tmp_path, "listings").sort("sid")
+    assert listings.select("sid", "category").rows() == [
+        (200, "adr"),
+        (ids_.RESERVED + 1, "common"),
+    ]
+
+
 def _old_store(tmp_path):
     """A data directory in the old layout with one listed stock, one dead one, and rates."""
     old = DataPaths(tmp_path / "old")
