@@ -14,14 +14,15 @@ Pipeline (JKP ``create_acc_chars`` + ``combine_ann_qtr_chars``; spec tmp/jkp_fun
 5. Ratios to market equity use the current month's market value (``*_me``, ``*_mev``,
    ``eq_dur``, ``ival_me``, ``aliq_mat``); ``kz_index`` uses market value at the period end.
 
-Our filings map to Compustat items one to one where they exist (``ITEMS``). Missing items, as
-in the spec: preferred stock, deferred taxes, minority interest, long- and short-term
-investments set to 0 (or left out of a coalesce); income before extraordinary items = net
+Our filings map to Compustat items one to one where they exist (``ITEMS``), except ``che``
+(cash and short-term investments): our cash plus current investments, as Compustat counts it.
+Missing items, as in the spec: preferred stock, deferred taxes, minority interest set to 0 (or
+left out of a coalesce); income before extraordinary items = net
 income; pretax income = net income + taxes; EBITDA = operating income + depreciation; gross
 PP&E = net PP&E; EBIT = operating income (Compustat's EBIT is operating). The original version
 of each filing is used (the earliest filed), so later restatements never leak backwards.
-Not built (no data): employee growth, sales per employee, Altman Z, long- and short-term
-investment changes, equity issuance and payout ratios.
+Not built: employee growth, sales per employee, Altman Z (no data), long- and short-term
+investment changes (not yet), equity issuance and payout ratios (no data).
 """
 
 from pathlib import Path
@@ -61,6 +62,8 @@ ITEMS = {
     "oancf": "cfo",
     "capx": "capex",
     "dv": "dividends",
+    "ivst": "investments_cur",
+    "ivao": "investments_lt",
 }
 #: Months after the period end before a filing is used, and the most months it stays in use.
 LAG_TO_PUBLIC, MAX_DATA_LAG = 4, 18
@@ -109,6 +112,7 @@ def panels(f: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
 
 def helpers(p: pl.DataFrame) -> pl.DataFrame:
     """JKP ``add_helper_vars`` on our items (aux 4654-4928; substitutions in module docs)."""
+    p = p.with_columns(_sum_sas(C("che"), C("ivst")).alias("che"))  # cash + short-term investments
     p = p.with_columns(pl.when(C(c) >= 0).then(C(c)).alias(c) for c in ("at", "sale", "dv", "che"))
     p = p.with_columns(
         C("sale").alias("sale_x"),
@@ -117,7 +121,7 @@ def helpers(p: pl.DataFrame) -> pl.DataFrame:
         C("dv").alias("div_x"),
         C("act").alias("ca_x"),
         C("lct").alias("cl_x"),
-        pl.lit(0.0).alias("fna_x"),
+        (C("ivst").fill_null(0) + C("ivao").fill_null(0)).alias("fna_x"),
         (C("ppent") + C("invt")).alias("ppeinv_x"),
         C("ppent").alias("ppegt"),
         pl.coalesce(C("gp"), C("sale") - C("cogs")).alias("gp_x"),
@@ -146,7 +150,7 @@ def helpers(p: pl.DataFrame) -> pl.DataFrame:
         pl.coalesce(C("oiadp"), C("ebitda_x") - C("dp")).alias("ebit_x"),
         (C("ebitda_x") + C("xrd").fill_null(0)).alias("op_x"),
         (C("ebitda_x") - C("xint")).alias("ope_x"),
-        (C("at_x") - C("ca_x")).alias("ncoa_x"),
+        (C("at_x") - C("ca_x") - C("ivao").fill_null(0)).alias("ncoa_x"),
         (
             C("che")
             + 0.75 * (C("ca_x") - C("che"))

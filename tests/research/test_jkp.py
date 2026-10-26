@@ -214,3 +214,16 @@ def test_mispricing_ranks_within_the_month_and_needs_ten_stocks():
     assert out["mispricing_perf"].to_list()[-1] == pytest.approx(1 / n)
     assert out["mispricing_mgmt"].null_count() == n  # fewer than 3 inputs present
     assert not any(c.startswith("_") for c in out.columns)
+
+
+def test_financial_assets_cash_and_operating_assets_count_investments_as_jkp_does():
+    """fna = ivst + ivao, che = cash + ivst (Compustat's cash), ncoa = at - act - ivao."""
+    row = dict.fromkeys(jkp_fund.ITEMS, 0.0) | {
+        "sid": 1, "ym": 100, "count": 1, "at": 100.0, "act": 40.0, "che": 5.0, "ivst": 3.0,
+        "ivao": 10.0, "dltt": 20.0, "dlc": 2.0, "lt": 50.0, "lct": 15.0,
+    }  # fmt: skip
+    out = jkp_fund.helpers(pl.DataFrame([row])).row(0, named=True)
+    assert (out["fna_x"], out["che"], out["ncoa_x"]) == (13.0, 8.0, 50.0)
+    assert out["nfna_x"] == 13.0 - 22.0 and out["coa_x"] == 32.0 and out["netdebt_x"] == 14.0
+    none = jkp_fund.helpers(pl.DataFrame([row | {"ivst": None, "ivao": None}])).row(0, named=True)
+    assert (none["fna_x"], none["che"], none["ncoa_x"]) == (0.0, 5.0, 60.0)  # missing counts 0
