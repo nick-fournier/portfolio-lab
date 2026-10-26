@@ -4,7 +4,10 @@ The tables are ``tickers``, ``actions``, ``stocks``, ``funds`` and ``fundamental
 
 Prices: Sharadar's OHLC and volume are split-adjusted, ``closeunadj`` is the traded close
 and ``closeadj`` adjusts for dividends too; raw levels undo the split factor
-(``closeunadj / close``), keeping dollar volume unchanged. Filings: the as-reported rows
+(``closeunadj / close``), keeping dollar volume unchanged. They come from the bulk table
+plus the nightly updates (``sources.sharadar``), each ticker and day's latest version
+winning; a dividend or split restates a security's whole history in one update, so every
+security's adjusted close stays on one scale. Filings: the as-reported rows
 (``ART`` = trailing twelve months, ``ARQ`` = the quarter), dated by the SEC filing date,
 from the bulk table plus the nightly updates (``sources.sharadar``), each filing's latest
 version winning. Sharadar adjusts share counts for every split after the filing up to
@@ -13,14 +16,14 @@ Everything under the license stays inside the source's folder, so cancelling mea
 deleting one directory.
 
 :func:`build` writes every table from the bulk zips (prices included, about 3 minutes);
-:func:`update` is the nightly step: ids, listings, actions and filings from the latest
-tickers, actions and fundamentals, leaving prices as they are.
+:func:`update` is the nightly step: ids, listings, actions, filings and prices from the
+latest tickers, actions, fundamentals and price updates.
 """
 
 import logging
 import shutil
 import zipfile
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import polars as pl
@@ -28,7 +31,13 @@ import polars as pl
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.data import ids as ids_
 from portfolio_lab.data import reader
-from portfolio_lab.data.sources.sharadar import MAPS, UPDATES
+from portfolio_lab.data.sources.sharadar import (
+    MAPS,
+    PRICE_MAPS,
+    PRICE_UPDATES,
+    UPDATES,
+    zip_asof,
+)
 
 log = logging.getLogger(__name__)
 
@@ -78,26 +87,88 @@ def scan(raw: Path, table: str, dtypes: dict[str, pl.DataType] | None = None) ->
     return pl.scan_csv(csv, infer_schema_length=0, schema_overrides=dtypes)
 
 
-def prices(raw: Path, table: str, sids: pl.DataFrame) -> pl.DataFrame:
-    """Conformed price rows from the ``stocks`` or ``funds`` table (module docs).
+#: Price columns read from the bulk tables and the updates.
+PRICE_COLS = {"ticker": pl.String, "date": pl.Date, "open": pl.Float64, "high": pl.Float64,
+              "low": pl.Float64, "close": pl.Float64, "volume": pl.Float64,
+              "closeadj": pl.Float64, "closeunadj": pl.Float64, "lastupdated": pl.Date}  # fmt: skip
+
+
+def pulls(raw: Path, table: str, bulk_asof: date) -> pl.LazyFrame:
+    """Every pulled price row of ``table``, with the day its ticker was valid on.
+
+    Adds ``asof`` (``bulk_asof`` for the bulk table, else the day the update was pulled)
+    and ``_pull`` (-1 for the bulk table, then each update in order).
+    """
+    bulk = scan(raw, table, PRICE_COLS).select(list(PRICE_COLS))
+    parts = [bulk.with_columns(pl.lit(bulk_asof).alias("asof"), pl.lit(-1).alias("_pull"))]
+    for i, f in enumerate(sorted((raw / PRICE_UPDATES[table]).glob("*.parquet"))):
+        pulled = datetime.strptime(f.stem, "%Y%m%d").date()
+        part = pl.scan_parquet(f).select(  # pulled as text
+            pl.col(c).str.to_date() if t == pl.Date else pl.col(c).cast(t)
+            for c, t in PRICE_COLS.items()
+        )
+        parts.append(part.with_columns(pl.lit(pulled).alias("asof"), pl.lit(i).alias("_pull")))
+    return pl.concat(parts)
+
+
+def price_sids(rows: pl.LazyFrame, raw: Path, ids: ids_.Ids, sids: pl.DataFrame) -> pl.DataFrame:
+    """ticker, asof, sid for every ticker of the pulled ``rows`` (:func:`pulls`).
+
+    A row's ticker is valid on the day it was pulled: it resolves through Sharadar's own
+    ticker -> permaticker map as of that day, the prices' (``PRICE_MAPS``) else the
+    fundamentals' (``MAPS``; the bulk download's prices map was not kept), else today's
+    tickers (``sids``), else the name in use that day in the ids (a security Sharadar
+    has since dropped from its tickers). A security renamed or a ticker reused after a
+    pull keeps the rows pulled under the old name with the security that had it.
+    """
+    keys = rows.select("ticker", "asof").unique().collect(engine="streaming")
+    prices_map = _mapped(raw, ids, keys, PRICE_MAPS).rename({"sid": "_prices"})
+    funds_map = _mapped(raw, ids, keys, MAPS).rename({"sid": "_fundamentals"})
+    out = (
+        keys.join(prices_map, on=["ticker", "asof"], how="left")
+        .join(funds_map, on=["ticker", "asof"], how="left")
+        .join(sids.rename({"sid": "_today"}), on="ticker", how="left")
+        .select("ticker", "asof", pl.coalesce("_prices", "_fundamentals", "_today").alias("sid"))
+    )
+    left = out.filter(pl.col("sid").is_null()).drop("sid").rename({"asof": "date"})
+    named = ids_.lookup(ids, left).rename({"date": "asof", "sid": "_named"})
+    out = out.join(named, on=["ticker", "asof"], how="left").select(
+        "ticker", "asof", pl.coalesce("sid", "_named").alias("sid")
+    )
+    lost = out.filter(pl.col("sid").is_null())
+    if lost.height:
+        names = lost["ticker"].unique().sort()
+        log.warning("sharadar: %d price tickers resolve to no security, e.g. %s",
+                    names.len(), names.head(10).to_list())  # fmt: skip
+    return out.drop_nulls("sid")
+
+
+def price_rows(rows: pl.LazyFrame, sids: pl.DataFrame) -> pl.LazyFrame:
+    """The pulled ``rows`` (:func:`pulls`) of ``sids`` (ticker, asof, sid).
+
+    One row per security and day: the latest ``lastupdated``, then the latest pull.
+    """
+    rows = rows.join(sids.lazy(), on=["ticker", "asof"])
+    updates = (
+        rows.filter(pl.col("_pull") >= 0)
+        .sort("lastupdated", "_pull")
+        .unique(["sid", "date"], keep="last")
+    )
+    bulk = rows.filter(pl.col("_pull") < 0)
+    kept = bulk.join(updates.select("sid", "date"), on=["sid", "date"], how="anti")
+    return pl.concat([kept, updates]).drop("ticker", "asof", "_pull", "lastupdated")
+
+
+def prices(rows: pl.LazyFrame, sids: pl.DataFrame) -> pl.DataFrame:
+    """Conformed price rows from the ``stocks`` or ``funds`` pulls (module docs).
 
     Args:
-        raw: The bulk zips.
-        table: ``stocks`` or ``funds``.
-        sids: ticker, sid for the securities to keep (a few thousand at a time: the
-            stocks table has 45 M rows).
+        rows: The table's pulled rows (:func:`pulls`).
+        sids: ticker, asof, sid for the securities to keep (:func:`price_sids`; a few
+            thousand at a time: the stocks table has 45 M rows).
 
     """
-    cols = ["ticker", "date", "open", "high", "low", "close", "volume", "closeadj", "closeunadj"]
-    dtypes = {"date": pl.Date} | dict.fromkeys(cols[2:], pl.Float64)
-    frame = (
-        scan(raw, table, dtypes)
-        .select(cols)
-        .join(sids.lazy(), on="ticker")
-        .drop("ticker")
-        .collect(engine="streaming")
-        .sort("sid", "date")
-    )
+    frame = price_rows(rows, sids).collect(engine="streaming").sort("sid", "date")
     split = pl.col("closeunadj") / pl.col("close")
     prev_adj = pl.col("closeadj").shift(1).over("sid")
     rows = frame.select(
@@ -206,14 +277,14 @@ def filings(raw: Path, ids: ids_.Ids, sids: pl.DataFrame, actions: pl.DataFrame)
                     *CONCEPTS.values())  # fmt: skip
 
 
-def _mapped(raw: Path, ids: ids_.Ids, keys: pl.DataFrame) -> pl.DataFrame:
-    """ticker, asof, sid through the newest kept ``SF1`` map dated on or before ``asof``."""
+def _mapped(raw: Path, ids: ids_.Ids, keys: pl.DataFrame, name: str = MAPS) -> pl.DataFrame:
+    """ticker, asof, sid through the newest map kept in ``name`` dated on or before ``asof``."""
     maps = [
         pl.read_parquet(p).with_columns(
             pl.lit(datetime.strptime(p.stem, "%Y%m%d").date()).alias("_day"),
             pl.col("permaticker").cast(pl.Int64),
         )
-        for p in sorted((raw / MAPS).glob("*.parquet"))
+        for p in sorted((raw / name).glob("*.parquet"))
     ]
     if not maps:
         return keys.with_columns(pl.lit(None, pl.Int64).alias("sid")).select(
@@ -251,19 +322,34 @@ def _table(current: pl.DataFrame, *tables: str) -> pl.DataFrame:
     return current.filter(pl.col("table").is_in(tables)).drop("table").unique("ticker")
 
 
-def update(root: Path) -> dict:
-    """The nightly step: ids, listings, actions and filings from the latest tables.
+def _write_prices(root: Path, raw: Path, ids: ids_.Ids, current: pl.DataFrame) -> int:
+    """Replace Sharadar's conformed prices from the bulk tables and updates; rows written."""
+    reader.clear(root, SOURCE, "prices")
+    written, bulk_asof = 0, zip_asof(raw)
+    for table, name in (("SEP", "stocks"), ("SFP", "funds")):
+        today = current.filter(pl.col("table") == table).drop("table").unique("ticker")
+        rows = pulls(raw, name, bulk_asof)
+        wanted = price_sids(rows, raw, ids, today)
+        parts = wanted.with_columns((pl.col("sid") % CHUNKS).alias("_k")).partition_by("_k")
+        for k, chunk in enumerate(parts):
+            part = prices(rows, chunk.drop("_k"))
+            written += reader.write(root, SOURCE, "prices", part, f"{name}-{k}")
+            del part
+    return written
 
-    Prices are left as written by :func:`build`.
-    """
+
+def update(root: Path) -> dict:
+    """The nightly step: ids, listings, actions, filings and prices from the latest tables."""
     paths = DataPaths(root)
     raw = paths.raw(SOURCE)
     ids, current = _ids(paths, raw)
+    written = _write_prices(root, raw, ids, current)
     sf1 = _table(current, "SF1")
     current = _table(current, "SEP", "SFP")
     acts = actions(raw, current)
     return {
         "securities": ids.securities.height,
+        "prices": written,
         "listings": reader.write(root, SOURCE, "listings", listings(ids.securities)),
         "actions": reader.write(root, SOURCE, "actions", acts),
         "filings": reader.write(root, SOURCE, "filings", filings(raw, ids, sf1, acts)),
@@ -283,15 +369,7 @@ def build(root: Path, raw: Path | None = None) -> dict:
     paths = DataPaths(root)
     raw = raw or paths.raw(SOURCE)
     ids, current = _ids(paths, raw)
-    reader.clear(root, SOURCE, "prices")
-    counts = {"prices": 0}
-    for table, name in (("SEP", "stocks"), ("SFP", "funds")):
-        wanted = current.filter(pl.col("table") == table).drop("table")
-        parts = wanted.with_columns((pl.col("sid") % CHUNKS).alias("_k")).partition_by("_k")
-        for k, chunk in enumerate(parts):
-            rows = prices(raw, name, chunk.drop("_k"))
-            counts["prices"] += reader.write(root, SOURCE, "prices", rows, f"{name}-{k}")
-            del rows
+    counts = {"prices": _write_prices(root, raw, ids, current)}
     sf1, current = _table(current, "SF1"), _table(current, "SEP", "SFP")
     acts = actions(raw, current)
     counts["listings"] = reader.write(root, SOURCE, "listings", listings(ids.securities))

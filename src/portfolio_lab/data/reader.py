@@ -5,6 +5,13 @@ row per key (``schemas.KEYS``): the most complete row (most of ``schemas.REQUIRE
 filled), and among equally complete rows the source earliest in :data:`PRIORITY`. The
 result is the only view of the data that anything downstream sees.
 
+Prices are handed off per security instead (:func:`_handoff`): a security's prices come
+from the first source in :data:`PRIORITY` that has any, and another source's rows count
+only after that source's last day for it, and only if that day is the source's newest
+(the security was still trading when the source last priced anything). One source's
+adjusted closes stay on one scale, and another's bars never stand in for a history the
+first source does not have.
+
 :func:`write` is how a source stores its copy: whole for small tables, by year partition
 for the ones in ``schemas.PARTITIONED``.
 """
@@ -74,6 +81,8 @@ def read(
     if not frames:
         return pl.DataFrame(schema=schemas.TABLES[table])
     lf = pl.concat(frames, how="diagonal_relaxed")
+    if table == "prices":
+        lf = _handoff(lf, sids)
     when = schemas.PARTITIONED.get(table, "date" if "date" in schemas.TABLES[table] else None)
     if when and start:
         lf = lf.filter(pl.col(when) >= start)
@@ -92,6 +101,29 @@ def read(
     if columns is not None:
         wanted = [*key, *(c for c in columns if c not in key)]
     return lf.select(wanted).collect()
+
+
+def _handoff(lf: pl.LazyFrame, sids: Sequence[int] | None) -> pl.LazyFrame:
+    """Price rows each security's first source hands to the next (module docs)."""
+    rows = lf.select("sid", "date", "_rank")
+    newest = rows.group_by("_rank").agg(pl.col("date").max().alias("_newest"))
+    if sids is not None:
+        rows = rows.filter(pl.col("sid").is_in(list(sids)))
+    first = (
+        rows.group_by("sid", "_rank")
+        .agg(pl.col("date").max().alias("_last"))
+        .sort("_rank")
+        .group_by("sid")
+        .first()
+        .join(newest, on="_rank")
+        .select("sid", pl.col("_rank").alias("_first"), "_last", "_newest")
+    )
+    after = (pl.col("date") > pl.col("_last")) & (pl.col("_last") == pl.col("_newest"))
+    return (
+        lf.join(first, on="sid")
+        .filter((pl.col("_rank") == pl.col("_first")) | after)
+        .drop("_first", "_last", "_newest")
+    )
 
 
 def span(root: Path, table: str) -> tuple[date, date] | None:

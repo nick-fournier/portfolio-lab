@@ -7,13 +7,17 @@ deleting one directory (``data.conform.sharadar``). Per night:
   fundamentals' ticker -> permaticker map (``SF1`` rows) is kept per date in
   ``sf1-tickers/<YYYYMMDD>.parquet`` (written when it changes, starting with the bulk
   download's): fundamentals rows carry only a ticker, valid on the day they were pulled.
+  The prices' map (``SEP`` and ``SFP`` rows) is kept the same way in ``price-tickers``.
 - ``fundamentals``: the rows updated since the last pull, as
   ``fundamentals-updates/<YYYYMMDD>.csv`` (the date is when they were pulled, which is
   also the date their share counts are split-adjusted to). A query returns at most
   :data:`MAX_ROWS` rows; a pull that hits the cap downloads the whole table instead and
   clears the updates.
-
-Stock prices are not pulled: Alpaca carries them after the bulk download.
+- ``stocks`` and ``funds`` (daily prices): the rows updated since the last pull, as
+  ``<table>-updates/<YYYYMMDD>.parquet``. A dividend or split restates a security's whole
+  adjusted history, and Sharadar sends those rows again with a new ``lastupdated``, so the
+  updates carry restatements and corrections as well as the new days. A pull that hits
+  the cap is split by date range until every part fits (:func:`updated_prices`).
 """
 
 import logging
@@ -28,12 +32,18 @@ import polars as pl
 log = logging.getLogger(__name__)
 
 URL = "https://api.sharadar.com/v1.0/data/{table}"
-#: The API's cap on rows per query.
-MAX_ROWS = 10_000
+#: Rows per query: the API's ``limit`` maximum (its default is 10,000).
+MAX_ROWS = 100_000
 #: Days of overlap between pulls, so a late revision is never missed.
 OVERLAP = timedelta(days=3)
 UPDATES = "fundamentals-updates"
 MAPS = "sf1-tickers"
+#: Where the price tables' ticker -> permaticker maps are kept.
+PRICE_MAPS = "price-tickers"
+#: The price tables pulled nightly, and the folder each one's updates land in.
+PRICE_UPDATES = {"stocks": "stocks-updates", "funds": "funds-updates"}
+#: The earliest price date a split query covers (Sharadar's prices start in 1998).
+FIRST_PRICE = date(1990, 1, 1)
 
 
 def _get(key: str, table: str, params: dict, **kwargs) -> httpx.Response:
@@ -62,24 +72,53 @@ def download_table(key: str, table: str, raw: Path) -> Path:
 
 def updated_since(key: str, table: str, since: date) -> pl.DataFrame | None:
     """Rows of ``table`` updated on or after ``since``; None if the cap cut them short."""
-    response = _get(key, table, {"lastupdated.gte": since.isoformat()})
+    response = _get(key, table, {"lastupdated.gte": since.isoformat(), "limit": MAX_ROWS})
     rows = pl.read_csv(response.content, infer_schema_length=0)
     return None if rows.height >= MAX_ROWS else rows
 
 
-def last_pulled(raw: Path) -> date | None:
-    """The date of the newest fundamentals update file, if any."""
-    names = sorted(p.stem for p in (raw / UPDATES).glob("*.csv"))
+def updated_prices(key: str, table: str, since: date, today: date) -> pl.DataFrame:
+    """Price rows of ``table`` updated on or after ``since``, every one of them.
+
+    A query that returns :data:`MAX_ROWS` rows may have been cut short, so its date range
+    is halved and each half asked again, until every part comes back under the cap.
+    """
+    parts, ranges = [], [(FIRST_PRICE, today)]
+    while ranges:
+        lo, hi = ranges.pop()
+        params = {"lastupdated.gte": since.isoformat(), "date.gte": lo.isoformat(),
+                  "date.lte": hi.isoformat(), "limit": MAX_ROWS}  # fmt: skip
+        rows = pl.read_csv(_get(key, table, params).content, infer_schema_length=0)
+        if rows.height < MAX_ROWS:
+            parts.append(rows)
+        elif lo == hi:
+            raise RuntimeError(f"sharadar: {table} has {MAX_ROWS}+ rows on {lo} alone")
+        else:
+            mid = lo + timedelta(days=(hi - lo).days // 2)
+            ranges += [(lo, mid), (mid + timedelta(days=1), hi)]
+    return pl.concat(parts, how="diagonal") if parts else pl.DataFrame()
+
+
+def last_pulled(raw: Path, folder: str = UPDATES) -> date | None:
+    """The date of the newest update file in ``folder`` (fundamentals by default), if any."""
+    names = sorted(p.stem for p in (raw / folder).glob("*.*"))
     return datetime.strptime(names[-1], "%Y%m%d").date() if names else None
 
 
-def keep_ticker_map(raw: Path, day: date) -> None:
-    """Record the ``SF1`` ticker -> permaticker map of ``tickers.zip`` as of ``day``."""
+def keep_ticker_map(
+    raw: Path, day: date, tables: tuple[str, ...] = ("SF1",), name: str = MAPS
+) -> None:
+    """Record ``tables``' ticker -> permaticker map of ``tickers.zip`` as of ``day``."""
     with zipfile.ZipFile(raw / "tickers.zip") as z:
         cols = ["table", "ticker", "permaticker"]
         rows = pl.read_csv(z.open(z.namelist()[0]).read(), columns=cols, infer_schema_length=0)
-    new = rows.filter(pl.col("table") == "SF1").select("ticker", "permaticker").sort("ticker")
-    folder = raw / MAPS
+    new = (
+        rows.filter(pl.col("table").is_in(tables))
+        .select("ticker", "permaticker")
+        .unique()
+        .sort("ticker", "permaticker")
+    )
+    folder = raw / name
     folder.mkdir(exist_ok=True)
     kept = sorted(folder.glob("*.parquet"))
     if not kept or not pl.read_parquet(kept[-1]).equals(new):
@@ -93,17 +132,25 @@ def fetch(key: str, raw: Path, today: date) -> dict:
     for table in ("tickers", "actions"):
         download_table(key, table, raw)
     keep_ticker_map(raw, today)
+    keep_ticker_map(raw, today, ("SEP", "SFP"), PRICE_MAPS)
+    out = {}
+    for table, name in PRICE_UPDATES.items():
+        since = (last_pulled(raw, name) or zip_asof(raw)) - OVERLAP
+        rows = updated_prices(key, table, since, today)
+        (raw / name).mkdir(exist_ok=True)
+        rows.write_parquet(raw / name / f"{today:%Y%m%d}.parquet")
+        out[f"{table}_rows"] = rows.height
     since = (last_pulled(raw) or zip_asof(raw)) - OVERLAP
     rows = updated_since(key, "fundamentals", since)
     if rows is None:
         log.warning("sharadar: fundamentals updates since %s hit the cap; full download", since)
         download_table(key, "fundamentals", raw)
         shutil.rmtree(raw / UPDATES, ignore_errors=True)
-        return {"fundamentals": "full"}
+        return out | {"fundamentals": "full"}
     folder = raw / UPDATES
     folder.mkdir(exist_ok=True)
     rows.write_csv(folder / f"{today:%Y%m%d}.csv")
-    return {"fundamentals_since": since.isoformat(), "fundamentals_rows": rows.height}
+    return out | {"fundamentals_since": since.isoformat(), "fundamentals_rows": rows.height}
 
 
 def zip_asof(raw: Path) -> date:
