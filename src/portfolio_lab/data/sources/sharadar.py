@@ -7,6 +7,7 @@ deleting one directory (``data.conform.sharadar``). Per night:
   fundamentals' ticker -> permaticker map (``SF1`` rows) is kept per date in
   ``sf1-tickers/<YYYYMMDD>.parquet`` (written when it changes, starting with the bulk
   download's): fundamentals rows carry only a ticker, valid on the day they were pulled.
+  The prices' map (``SEP`` and ``SFP`` rows) is kept the same way in ``price-tickers``.
 - ``fundamentals``: the rows updated since the last pull, as
   ``fundamentals-updates/<YYYYMMDD>.csv`` (the date is when they were pulled, which is
   also the date their share counts are split-adjusted to). A query returns at most
@@ -37,6 +38,8 @@ MAX_ROWS = 100_000
 OVERLAP = timedelta(days=3)
 UPDATES = "fundamentals-updates"
 MAPS = "sf1-tickers"
+#: Where the price tables' ticker -> permaticker maps are kept.
+PRICE_MAPS = "price-tickers"
 #: The price tables pulled nightly, and the folder each one's updates land in.
 PRICE_UPDATES = {"stocks": "stocks-updates", "funds": "funds-updates"}
 #: The earliest price date a split query covers (Sharadar's prices start in 1998).
@@ -102,13 +105,20 @@ def last_pulled(raw: Path, folder: str = UPDATES) -> date | None:
     return datetime.strptime(names[-1], "%Y%m%d").date() if names else None
 
 
-def keep_ticker_map(raw: Path, day: date) -> None:
-    """Record the ``SF1`` ticker -> permaticker map of ``tickers.zip`` as of ``day``."""
+def keep_ticker_map(
+    raw: Path, day: date, tables: tuple[str, ...] = ("SF1",), name: str = MAPS
+) -> None:
+    """Record ``tables``' ticker -> permaticker map of ``tickers.zip`` as of ``day``."""
     with zipfile.ZipFile(raw / "tickers.zip") as z:
         cols = ["table", "ticker", "permaticker"]
         rows = pl.read_csv(z.open(z.namelist()[0]).read(), columns=cols, infer_schema_length=0)
-    new = rows.filter(pl.col("table") == "SF1").select("ticker", "permaticker").sort("ticker")
-    folder = raw / MAPS
+    new = (
+        rows.filter(pl.col("table").is_in(tables))
+        .select("ticker", "permaticker")
+        .unique()
+        .sort("ticker", "permaticker")
+    )
+    folder = raw / name
     folder.mkdir(exist_ok=True)
     kept = sorted(folder.glob("*.parquet"))
     if not kept or not pl.read_parquet(kept[-1]).equals(new):
@@ -122,6 +132,7 @@ def fetch(key: str, raw: Path, today: date) -> dict:
     for table in ("tickers", "actions"):
         download_table(key, table, raw)
     keep_ticker_map(raw, today)
+    keep_ticker_map(raw, today, ("SEP", "SFP"), PRICE_MAPS)
     out = {}
     for table, name in PRICE_UPDATES.items():
         since = (last_pulled(raw, name) or zip_asof(raw)) - OVERLAP

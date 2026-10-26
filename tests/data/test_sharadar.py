@@ -90,8 +90,12 @@ def test_price_updates_restate_the_history_and_add_the_new_days(root):
 
 
 def test_price_rows_pulled_under_an_old_name_stay_with_the_security(root):
-    """NEW was OLD until 2020-03-02: a pull from before the rename still belongs to sid 200."""
+    """A pull from when NEW was called OLD resolves through Sharadar's map kept that day."""
     raw = DataPaths(root).raw(sharadar.SOURCE)
+    (raw / api.PRICE_MAPS).mkdir()
+    pl.DataFrame({"ticker": ["OLD"], "permaticker": ["200"]}).write_parquet(
+        raw / api.PRICE_MAPS / "20200102.parquet"
+    )
     _pulled(raw, "stocks", "20200102", [_bar("OLD", "2020-01-02", 5.0, 4.0, "2020-01-02")])
     sharadar.update(root)
     p = reader.read(root, "prices").filter(pl.col("sid") == 200).sort("date")

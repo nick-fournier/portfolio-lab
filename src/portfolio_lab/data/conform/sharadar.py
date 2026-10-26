@@ -31,7 +31,13 @@ import polars as pl
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.data import ids as ids_
 from portfolio_lab.data import reader
-from portfolio_lab.data.sources.sharadar import MAPS, PRICE_UPDATES, UPDATES, zip_asof
+from portfolio_lab.data.sources.sharadar import (
+    MAPS,
+    PRICE_MAPS,
+    PRICE_UPDATES,
+    UPDATES,
+    zip_asof,
+)
 
 log = logging.getLogger(__name__)
 
@@ -105,17 +111,29 @@ def pulls(raw: Path, table: str, bulk_asof: date) -> pl.LazyFrame:
     return pl.concat(parts)
 
 
-def price_sids(rows: pl.LazyFrame, ids: ids_.Ids, sids: pl.DataFrame) -> pl.DataFrame:
+def price_sids(rows: pl.LazyFrame, raw: Path, ids: ids_.Ids, sids: pl.DataFrame) -> pl.DataFrame:
     """ticker, asof, sid for every ticker of the pulled ``rows`` (:func:`pulls`).
 
-    A row's ticker is valid on the day it was pulled: it resolves through the name in use
-    that day (``ids.lookup``), else today's tickers (``sids``), so a security renamed
-    after a pull keeps the rows pulled under its old name.
+    A row's ticker is valid on the day it was pulled: it resolves through Sharadar's own
+    ticker -> permaticker map as of that day, the prices' (``PRICE_MAPS``) else the
+    fundamentals' (``MAPS``; the bulk download's prices map was not kept), else today's
+    tickers (``sids``), else the name in use that day in the ids (a security Sharadar
+    has since dropped from its tickers). A security renamed or a ticker reused after a
+    pull keeps the rows pulled under the old name with the security that had it.
     """
     keys = rows.select("ticker", "asof").unique().collect(engine="streaming")
-    dated = ids_.lookup(ids, keys.rename({"asof": "date"})).rename({"date": "asof"})
-    out = dated.join(sids.rename({"sid": "_today"}), on="ticker", how="left").select(
-        "ticker", "asof", pl.coalesce("sid", "_today").alias("sid")
+    prices_map = _mapped(raw, ids, keys, PRICE_MAPS).rename({"sid": "_prices"})
+    funds_map = _mapped(raw, ids, keys, MAPS).rename({"sid": "_fundamentals"})
+    out = (
+        keys.join(prices_map, on=["ticker", "asof"], how="left")
+        .join(funds_map, on=["ticker", "asof"], how="left")
+        .join(sids.rename({"sid": "_today"}), on="ticker", how="left")
+        .select("ticker", "asof", pl.coalesce("_prices", "_fundamentals", "_today").alias("sid"))
+    )
+    left = out.filter(pl.col("sid").is_null()).drop("sid").rename({"asof": "date"})
+    named = ids_.lookup(ids, left).rename({"date": "asof", "sid": "_named"})
+    out = out.join(named, on=["ticker", "asof"], how="left").select(
+        "ticker", "asof", pl.coalesce("sid", "_named").alias("sid")
     )
     lost = out.filter(pl.col("sid").is_null())
     if lost.height:
@@ -259,14 +277,14 @@ def filings(raw: Path, ids: ids_.Ids, sids: pl.DataFrame, actions: pl.DataFrame)
                     *CONCEPTS.values())  # fmt: skip
 
 
-def _mapped(raw: Path, ids: ids_.Ids, keys: pl.DataFrame) -> pl.DataFrame:
-    """ticker, asof, sid through the newest kept ``SF1`` map dated on or before ``asof``."""
+def _mapped(raw: Path, ids: ids_.Ids, keys: pl.DataFrame, name: str = MAPS) -> pl.DataFrame:
+    """ticker, asof, sid through the newest map kept in ``name`` dated on or before ``asof``."""
     maps = [
         pl.read_parquet(p).with_columns(
             pl.lit(datetime.strptime(p.stem, "%Y%m%d").date()).alias("_day"),
             pl.col("permaticker").cast(pl.Int64),
         )
-        for p in sorted((raw / MAPS).glob("*.parquet"))
+        for p in sorted((raw / name).glob("*.parquet"))
     ]
     if not maps:
         return keys.with_columns(pl.lit(None, pl.Int64).alias("sid")).select(
@@ -311,7 +329,7 @@ def _write_prices(root: Path, raw: Path, ids: ids_.Ids, current: pl.DataFrame) -
     for table, name in (("SEP", "stocks"), ("SFP", "funds")):
         today = current.filter(pl.col("table") == table).drop("table").unique("ticker")
         rows = pulls(raw, name, bulk_asof)
-        wanted = price_sids(rows, ids, today)
+        wanted = price_sids(rows, raw, ids, today)
         parts = wanted.with_columns((pl.col("sid") % CHUNKS).alias("_k")).partition_by("_k")
         for k, chunk in enumerate(parts):
             part = prices(rows, chunk.drop("_k"))
