@@ -4,7 +4,8 @@ import numpy as np
 import polars as pl
 import pytest
 
-from portfolio_lab.research.optimizer import jkp_daily, jkp_fund, jkp_monthly, jkp_scores
+from portfolio_lab.data import reader
+from portfolio_lab.research.optimizer import jkp, jkp_daily, jkp_fund, jkp_monthly, jkp_scores
 from portfolio_lab.research.optimizer import jkp_fund_chars as fc
 
 
@@ -227,3 +228,22 @@ def test_financial_assets_cash_and_operating_assets_count_investments_as_jkp_doe
     assert out["nfna_x"] == 13.0 - 22.0 and out["coa_x"] == 32.0 and out["netdebt_x"] == 14.0
     none = jkp_fund.helpers(pl.DataFrame([row | {"ivst": None, "ivao": None}])).row(0, named=True)
     assert (none["fna_x"], none["che"], none["ncoa_x"]) == (0.0, 5.0, 60.0)  # missing counts 0
+
+
+def test_share_issuance_is_the_change_in_split_adjusted_shares_and_ignores_dividends(tmp_path):
+    """100 shares filed at month 0, a 2:1 split at month 6, 220 filed at month 12: +10%."""
+    filed = [date(2020, 1, 15), date(2021, 1, 15)]
+    reader.write(tmp_path, "sharadar", "filings", pl.DataFrame(
+        {"sid": [1, 1], "filed": filed, "period_end": [date(2019, 12, 31), date(2020, 12, 31)],
+         "period": ["ttm", "ttm"], "shares_out": [100.0, 220.0]}))  # fmt: skip
+    reader.write(tmp_path, "sharadar", "actions", pl.DataFrame(
+        {"sid": [1], "date": [date(2020, 7, 1)], "action": ["split"], "value": [2.0]}))  # fmt: skip
+    shares = jkp.split_adjusted_shares(tmp_path)
+    assert shares["shares"].to_list() == [200.0, 220.0]
+    first = pl.select(jkp_monthly.month_key(pl.lit(date(2020, 1, 31)))).item()
+    months = pl.DataFrame({"sid": [1] * 13, "ym": list(range(first, first + 13)),
+                           "ret": [0.01] * 13, "prc_adj": [1.0] * 13,
+                           "market_value": [1000.0 * 1.01**k for k in range(13)]})  # fmt: skip
+    out = jkp._issuance(months, shares)
+    assert out["chcsho_12m"][-1] == pytest.approx(0.10)  # the split and the 1%/month returns cancel
+    assert out["eqnpo_12m"][-1] == 0.0  # market value grew with the total return: no net payout

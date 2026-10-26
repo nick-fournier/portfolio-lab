@@ -17,28 +17,66 @@ from portfolio_lab.research.optimizer import jkp_daily, jkp_monthly
 PRICE_COLUMNS = ["high", "low", "close", "volume", "close_adj", "ret_cc"]
 
 
-def _issuance(m: pl.DataFrame) -> pl.DataFrame:
+def split_adjusted_shares(root: Path) -> pl.DataFrame:
+    """sid, ym (the filing month), shares: each filing's share count in today's units.
+
+    The filings keep the count as reported (``conform.sharadar`` undoes later splits); every
+    split after the filing multiplies it, as CRSP's shares times its share-adjustment factor.
+    """
+    f = (
+        reader.read(root, "filings", ["shares_out"])
+        .filter(pl.col("shares_out") > 0)
+        .select("sid", "filed", "shares_out")
+        .sort("sid", "filed")
+        .unique(["sid", "filed"], keep="last", maintain_order=True)
+    )
+    splits = reader.read(root, "actions").filter(
+        (pl.col("action") == "split") & (pl.col("value") > 0)
+    )
+    later = (
+        f.join(splits.select("sid", pl.col("date").alias("_split"), "value"), on="sid")
+        .filter(pl.col("_split") > pl.col("filed"))
+        .group_by("sid", "filed")
+        .agg(pl.col("value").product().alias("_factor"))
+    )
+    return (
+        f.join(later, on=["sid", "filed"], how="left")
+        .select(
+            "sid",
+            jkp_monthly.month_key(pl.col("filed")).alias("ym"),
+            (pl.col("shares_out") * pl.col("_factor").fill_null(1.0)).alias("shares"),
+        )
+        .unique(["sid", "ym"], keep="last", maintain_order=True)
+        .sort("sid", "ym")
+    )
+
+
+def _issuance(m: pl.DataFrame, shares: pl.DataFrame) -> pl.DataFrame:
     """``chcsho_12m`` and ``eqnpo_12m`` (JKP ``market_chars_monthly``, aux 6945-6982).
 
-    Split-adjusted shares are the market value over the split-and-dividend-adjusted close
-    (JKP: CRSP shares times the share-adjustment factor). Net payout is the log total return
-    minus the log change in market value over 12 months, set to 0 when below 1e-5 in size.
+    Share issuance is the 12-month change in split-adjusted shares outstanding: each month
+    takes its latest filing's count (:func:`split_adjusted_shares`). Net payout is the log
+    total return minus the log change in market value over 12 months, set to 0 when below
+    1e-5 in size.
     """
-    m = m.sort("sid", "ym")
+    m = (
+        m.sort("ym")
+        .join_asof(shares.sort("ym"), on="ym", by="sid", strategy="backward")
+        .sort("sid", "ym")
+    )
     count = pl.col("ym").cum_count().over("sid")
-    shares = pl.col("market_value") / pl.col("prc_adj")
     ri = (1 + pl.col("ret").fill_null(0.0)).cum_prod().over("sid")
-    m = m.with_columns(shares.alias("_sh"), ri.alias("_ri"), count.alias("_n"))
+    m = m.with_columns(ri.alias("_ri"), count.alias("_n"))
     lag = lambda c: pl.col(c).shift(12).over("sid")  # noqa: E731
     me, me12 = pl.col("market_value"), lag("market_value")
     npo = (pl.col("_ri") / lag("_ri")).log() - (me / me12).log()
     ok = (pl.col("_n") > 12) & (pl.col("_ri") > 0) & (lag("_ri") > 0) & (me > 0) & (me12 > 0)
     return m.with_columns(
-        pl.when((pl.col("_n") > 12) & (lag("_sh") != 0))
-        .then(pl.col("_sh") / lag("_sh") - 1)
+        pl.when((pl.col("_n") > 12) & (lag("shares") > 0))
+        .then(pl.col("shares") / lag("shares") - 1)
         .alias("chcsho_12m"),
         pl.when(ok).then(pl.when(npo.abs() < 1e-5).then(0.0).otherwise(npo)).alias("eqnpo_12m"),
-    ).drop("_sh", "_ri", "_n", "ret", "prc_adj", "market_value")
+    ).drop("shares", "_ri", "_n", "ret", "prc_adj", "market_value")
 
 
 def build(root: Path, market_value: pl.DataFrame, chunks: int = 8) -> pl.DataFrame:
@@ -63,6 +101,7 @@ def build(root: Path, market_value: pl.DataFrame, chunks: int = 8) -> pl.DataFra
         jkp_monthly.month_key(pl.col("date")).alias("ym"),
         "market_value",
     )
+    issued = split_adjusted_shares(root)
     frames = []
     for chunk in np.array_split(sids, chunks):
         daily = reader.read(root, "prices", PRICE_COLUMNS, sids=chunk.tolist())
@@ -72,7 +111,7 @@ def build(root: Path, market_value: pl.DataFrame, chunks: int = 8) -> pl.DataFra
             .join(mv, on=["sid", "ym"], how="inner")
             .select("sid", "ym", (pl.col("market_value") / pl.col("prc")).alias("shares"))
         )
-        monthly = _issuance(monthly.join(mv, on=["sid", "ym"], how="left"))
+        monthly = _issuance(monthly.join(mv, on=["sid", "ym"], how="left"), issued)
         d = jkp_daily.prepare(daily, factors, listings, shares)
         frames.append(
             monthly.join(jkp_daily.characteristics(d, factors), on=["sid", "ym"], how="left")
