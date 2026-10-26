@@ -123,22 +123,46 @@ def test_merge_duplicates_merges_a_listing_numbered_twice_and_deletes_nothing(id
 
 def test_reader_keeps_the_most_complete_row_then_the_priority_source(tmp_path):
     day = date(2020, 1, 2)
-    full = {"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "ret_cc": 0.0, "ret_co": 0.0}
     # sid 1: both complete -> sharadar wins; sid 2: alpaca complete, sharadar not -> alpaca.
-    reader.write(tmp_path, "sharadar", "prices", pl.DataFrame(
-        [{"sid": 1, "date": day, "volume": 10.0, **full},
-         {"sid": 2, "date": day, "volume": 10.0, **full, "ret_cc": None}]))  # fmt: skip
-    reader.write(tmp_path, "alpaca", "prices", pl.DataFrame(
-        [{"sid": 1, "date": day, "volume": 20.0, **full},
-         {"sid": 2, "date": day, "volume": 20.0, **full},
-         {"sid": 3, "date": date(2021, 1, 4), "volume": 30.0, **full}]))  # fmt: skip
-    out = reader.read(tmp_path, "prices", columns=["volume"])
-    assert out.columns == ["sid", "date", "volume"]
-    assert dict(zip(out["sid"], out["volume"], strict=True)) == {1: 10.0, 2: 20.0, 3: 30.0}
-    assert reader.read(tmp_path, "prices", start=date(2021, 1, 1))["sid"].to_list() == [3]
-    assert reader.read(tmp_path, "prices", sids=[2])["sid"].to_list() == [2]
-    assert reader.sources(tmp_path, "prices") == ["alpaca", "sharadar"]
+    reader.write(tmp_path, "sharadar", "listings", pl.DataFrame(
+        [{"sid": 1, "from": day, "exchange": "NYSE", "category": "common"},
+         {"sid": 2, "from": day, "exchange": "NYSE", "category": None}]))  # fmt: skip
+    reader.write(tmp_path, "alpaca", "listings", pl.DataFrame(
+        [{"sid": 1, "from": day, "exchange": "NASDAQ", "category": "common"},
+         {"sid": 2, "from": day, "exchange": "NASDAQ", "category": "common"},
+         {"sid": 3, "from": date(2021, 1, 4), "exchange": "BATS", "category": "etf"}]))  # fmt: skip
+    out = reader.read(tmp_path, "listings", columns=["exchange"])
+    assert out.columns == ["sid", "from", "exchange"]
+    assert dict(zip(out["sid"], out["exchange"], strict=True)) == {
+        1: "NYSE", 2: "NASDAQ", 3: "BATS"}  # fmt: skip
+    assert reader.read(tmp_path, "listings", sids=[2])["sid"].to_list() == [2]
+    assert reader.sources(tmp_path, "listings") == ["alpaca", "sharadar"]
     assert reader.read(tmp_path, "filings").is_empty()
+
+
+def test_prices_come_from_the_first_source_and_the_next_only_extends_live_securities(tmp_path):
+    days = [date(2026, 9, d) for d in (24, 25, 28, 29, 30)]
+    full = {"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "ret_cc": 0.0, "ret_co": 0.0}
+
+    def bars(sid, picked, volume, **extra):
+        return [{"sid": sid, "date": days[i], "volume": volume, **full, **extra} for i in picked]
+
+    # sharadar's newest day is 9/28. sid 1 trades to it (its first day has no return yet);
+    # sid 2 died on 9/25; alpaca also has sid 3, which sharadar never priced.
+    reader.write(tmp_path, "sharadar", "prices", pl.DataFrame(
+        bars(1, [0], 10.0, ret_cc=None) + bars(1, [1, 2], 10.0) + bars(2, [1], 10.0)))  # fmt: skip
+    reader.write(tmp_path, "alpaca", "prices", pl.DataFrame(
+        bars(1, range(5), 20.0) + bars(2, range(5), 20.0) + bars(3, range(5), 30.0)))  # fmt: skip
+    out = reader.read(tmp_path, "prices", columns=["volume"])
+    got = {s: out.filter(pl.col("sid") == s).select("date", "volume").rows() for s in (1, 2, 3)}
+    assert got[1] == [(days[0], 10.0), (days[1], 10.0), (days[2], 10.0),  # sharadar's, all of it
+                      (days[3], 20.0), (days[4], 20.0)]  # then alpaca carries it on  # fmt: skip
+    assert got[2] == [(days[1], 10.0)]  # no alpaca bars before or after a dead stock's history
+    assert got[3] == [(d, 30.0) for d in days]  # a security only alpaca has: whole
+    # the handoff is the same in any window of the data
+    late = reader.read(tmp_path, "prices", columns=["volume"], start=days[3])
+    assert late.select("sid", "volume").rows() == [(1, 20.0), (1, 20.0), (3, 30.0), (3, 30.0)]
+    assert reader.read(tmp_path, "prices", sids=[2])["date"].to_list() == [days[1]]
 
 
 def test_conform_casts_fills_missing_and_drops_extra_columns():
