@@ -4,8 +4,9 @@ Two kinds:
 
 - **Hard invariants** (:func:`invariants`): values that cannot be right (duplicate keys, a
   non-positive close, a high below the low, negative volume, a return of -100% or worse,
-  negative assets, a listing ending before it starts). Any one stops the nightly chain:
-  the derive step and the paper account refuse to run on such data.
+  negative assets, a listing ending before it starts, a ticker one of our own sids shares
+  with another security). Any one stops the nightly chain: the derive step and the paper
+  account refuse to run on such data.
 - **Measured checks** (:func:`measured`): each metric judged against its own history, not
   a fixed limit. The latest value is flagged when it moves more than any earlier step did,
   or leaves the range of every earlier value by more than that largest step: the latest
@@ -27,6 +28,7 @@ import polars as pl
 
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.core.store import upsert_parquet, write_status
+from portfolio_lab.data import ids as ids_
 from portfolio_lab.data import reader, schemas
 
 log = logging.getLogger(__name__)
@@ -72,7 +74,19 @@ def invariants(root: Path) -> list[str]:
             ).collect(engine="streaming")
             broken += [f"{source}/{table}: {n:,} rows with {name}"
                        for name, n in counts.row(0, named=True).items() if n]  # fmt: skip
-    return broken
+    return broken + _shared_names(root)
+
+
+def _shared_names(root: Path) -> list[str]:
+    """A ticker one of our own sids holds while another security does: numbered twice."""
+    folder = DataPaths(root).ids
+    if not (folder / "tickers.parquet").exists():
+        return []
+    tickers = ids_.shared_names(ids_.Ids.load(folder))["ticker"].unique().sort()
+    if tickers.is_empty():
+        return []
+    return [f"ids: {tickers.len():,} tickers one of our sids shares with another security, "
+            f"e.g. {tickers.head(5).to_list()}"]  # fmt: skip
 
 
 def _judge(name: str, history: list[float], latest: float) -> dict[str, Any]:

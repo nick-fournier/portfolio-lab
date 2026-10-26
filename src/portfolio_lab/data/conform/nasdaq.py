@@ -34,13 +34,28 @@ def build(root: Path, store: Path) -> dict:
         .replace_strict(CATEGORIES, default="other").alias("category"),
     )  # fmt: skip
     latest = symbols["last_seen"].max()
-    found = ids_.lookup(ids, symbols.with_columns(pl.col("last_seen").alias("date")))
-    new = found.filter(pl.col("sid").is_null() & pl.col("category").is_in(["common", "etf"]))
+    seen = symbols.with_columns(pl.col("last_seen").alias("date"))
+    found = ids_.covering(ids, ids_.lookup(ids, seen))  # names: holders on the last day seen
+    # A symbol is a new listing only if no security held its ticker on any day it was seen:
+    # the directory lists a stock for a few days past its delisting. One that two securities
+    # hold on a day is a listing numbered twice, for ids.merge_duplicates and the guard.
+    span = symbols.select("ticker", pl.col("first_seen").alias("date"), "last_seen")
+    held = ids_.covering(ids, span, until="last_seen").select(
+        "ticker", pl.col("names").alias("held")
+    )
+    found = found.join(held, on="ticker", how="left")
+    unclear = found.filter(pl.col("sid").is_null() & (pl.col("names") > 1))
+    if unclear.height:
+        log.warning("nasdaq: %d symbols two securities hold, left out: %s",
+                    unclear.height, unclear["ticker"].head(20).to_list())  # fmt: skip
+    new = found.filter((pl.col("held") == 0) & pl.col("category").is_in(["common", "etf"]))
     if new.height:
+        gone = pl.when(pl.col("last_seen") < latest).then(pl.col("last_seen"))
         ids = ids.extend(new.select("ticker", "name", "exchange", "category",
-                                    pl.col("first_seen").alias("first")))  # fmt: skip
+                                    pl.col("first_seen").alias("first"), gone.alias("to"),
+                                    gone.alias("last")))  # fmt: skip
         ids.save(paths.ids)
-        found = ids_.lookup(ids, symbols.with_columns(pl.col("last_seen").alias("date")))
+        found = ids_.lookup(ids, seen)
         log.info("nasdaq: %d new ids", new.height)
     # A company's warrant or unit can resolve to the company itself: keep the common stock.
     # The directory has no flag for ADRs or closed-end funds (they read as common), so a

@@ -78,11 +78,16 @@ def build(root: Path, store: Path) -> dict:
     ).collect()
     bars = bars.with_columns(pl.col("symbol").str.replace("-", ".").alias("ticker"))
     found = _resolve(ids, bars)
-    # A symbol no name covers, first seen after the ids' history ends, is a new listing.
+    # A symbol no name covers on any day it traded, first seen after the ids' history ends,
+    # is a new listing; one a security held is not (ids.merge_duplicates settles the rest).
     known_until = ids.securities["last"].max()  # the newest delisting: about the data end
     never = found.group_by("ticker").agg(pl.col("sid").null_count() == pl.len(),
-                                         pl.col("date").min().alias("first"))  # fmt: skip
-    new = never.filter(pl.col("sid") & (pl.col("first") > known_until)).select("ticker", "first")
+                                         pl.col("date").min().alias("first"),
+                                         pl.col("date").max().alias("until"))  # fmt: skip
+    never = ids_.covering(ids, never.with_columns(pl.col("first").alias("date")), until="until")
+    new = never.filter(
+        pl.col("sid") & (pl.col("first") > known_until) & (pl.col("names") == 0)
+    ).select("ticker", "first")
     if new.height:
         symbols = pl.read_parquet(old.universe_symbols).select(
             pl.col("symbol").str.replace("-", ".").alias("ticker"), "name",
