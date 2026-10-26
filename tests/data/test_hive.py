@@ -87,6 +87,40 @@ def test_extend_numbers_new_securities_from_the_reserved_range(ids):
     )
 
 
+COPY = {"ticker": ["NEW"], "name": ["New Co"], "exchange": ["NYSE"], "category": ["common"],
+        "first": [date(2026, 10, 1)]}  # fmt: skip
+LONE = {"ticker": ["IPO"], "name": ["Ipo Inc"], "exchange": ["NASDAQ"], "category": ["common"],
+        "first": [date(2026, 10, 1)]}  # fmt: skip
+
+
+def test_covering_counts_the_securities_holding_a_ticker(ids):
+    """A copy of New Co numbered from the reserved range makes NEW ambiguous from its start."""
+    two = ids.extend(pl.DataFrame(COPY))
+    day = date(2026, 10, 2)
+    rows = pl.DataFrame({"ticker": ["NEW", "NEW", "NONE"], "date": [date(2021, 1, 4), day, day]})
+    assert ids_.covering(two, rows)["names"].to_list() == [1, 2, 0]
+    assert ids_.lookup(two, rows)["sid"].to_list() == [200, None, None]
+
+
+def test_merge_duplicates_merges_a_listing_numbered_twice_and_deletes_nothing(ids):
+    r = ids_.RESERVED
+    # r+1 and r+3 copy New Co (200, Sharadar's); r+4 copies the new listing r+2.
+    dup = ids
+    for listing in (COPY, LONE, COPY, LONE):
+        dup = dup.extend(pl.DataFrame(listing))
+    out = ids_.merge_duplicates(dup, date(2026, 10, 26))
+    assert out.merged.select("sid", "into", "ticker", "from", "merged").sort("sid").rows() == [
+        (r + 1, 200, "NEW", date(2026, 10, 1), date(2026, 10, 26)),
+        (r + 3, 200, "NEW", date(2026, 10, 1), date(2026, 10, 26)),
+        (r + 4, r + 2, "IPO", date(2026, 10, 1), date(2026, 10, 26)),
+    ]
+    day = pl.DataFrame({"ticker": ["NEW", "IPO"], "date": [date(2026, 10, 2)] * 2})
+    assert ids_.lookup(out, day)["sid"].to_list() == [200, r + 2]
+    assert out.securities.equals(dup.securities)  # every sid kept
+    assert out.tickers.height + out.merged.height == dup.tickers.height  # names moved, not lost
+    assert ids_.merge_duplicates(out, date(2026, 10, 27)) is out  # nothing left to merge
+
+
 def test_reader_keeps_the_most_complete_row_then_the_priority_source(tmp_path):
     day = date(2020, 1, 2)
     full = {"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "ret_cc": 0.0, "ret_co": 0.0}
@@ -126,6 +160,25 @@ def test_nasdaq_listings_keep_the_kind_the_ids_record(tmp_path, ids):
         (200, "adr"),
         (ids_.RESERVED + 1, "common"),
     ]
+
+
+def test_nasdaq_numbers_only_a_symbol_no_name_covers_and_reruns_number_none(tmp_path, ids):
+    """NEW is held twice (New Co and a copy): no third sid, however often the step runs."""
+    ids.extend(pl.DataFrame(dict(COPY, first=[date(2026, 9, 1)]))).save(tmp_path / "ids")
+    store = _old_store(tmp_path)
+    assert nasdaq.build(tmp_path, store)["new_ids"] == 1  # IPO only
+    assert nasdaq.build(tmp_path, store)["new_ids"] == 0
+    assert ids_.Ids.load(tmp_path / "ids").securities.height == ids.securities.height + 2
+
+
+def test_nasdaq_does_not_number_a_stock_listed_a_few_days_past_its_delisting(tmp_path, ids):
+    """New Co's name ends 2026-09-28; the directory still lists NEW until 2026-10-01."""
+    gone = pl.when(pl.col("ticker") == "NEW").then(pl.lit(date(2026, 9, 28))).otherwise("to")
+    ids_.Ids(ids.securities, ids.tickers.with_columns(gone.alias("to")), ids.sharadar).save(
+        tmp_path / "ids"
+    )
+    assert nasdaq.build(tmp_path, _old_store(tmp_path))["new_ids"] == 1  # IPO only, not NEW
+    assert ids_.shared_names(ids_.Ids.load(tmp_path / "ids")).is_empty()
 
 
 def _old_store(tmp_path):
@@ -278,6 +331,15 @@ def test_quality_invariants_catch_impossible_rows_and_duplicates(tmp_path):
     assert any("close <= 0" in b for b in broken) and any("-100%" in b for b in broken)
 
 
+def test_quality_invariants_catch_a_listing_numbered_twice(tmp_path, ids):
+    ids.save(tmp_path / "ids")
+    assert quality.invariants(tmp_path) == []
+    ids.extend(pl.DataFrame(COPY)).save(tmp_path / "ids")
+    assert quality.invariants(tmp_path) == [
+        "ids: 1 tickers one of our sids shares with another security, e.g. ['NEW']"
+    ]
+
+
 def test_measured_checks_flag_only_what_leaves_its_own_history():
     history = [100.0 + (k % 5) for k in range(40)]
     assert quality._judge("m", history, 102.0)["flag"] is None
@@ -314,6 +376,25 @@ def test_refresh_adds_and_updates_but_never_renumbers(ids):
     assert s.filter(pl.col("sid") == 200)["last"][0] == date(2026, 1, 30)
     assert dict(out.sharadar.rows())[ids_.RESERVED + 1] == 400
     assert ids_.refresh(out, newer, ACTIONS).securities.sort("sid").equals(s)  # idempotent
+
+
+def test_refresh_merges_a_reserved_sid_into_a_known_security_that_takes_its_ticker(ids):
+    """NASDAQ numbers SKY on 10-07; Sharadar then records New Co renamed SKY on 10-06."""
+    sky = dict(COPY, ticker=["SKY"], name=["Sky Corp"], first=[date(2026, 10, 7)])
+    ids = ids.extend(pl.DataFrame(sky))
+    rename = pl.when(pl.col("ticker") == "NEW").then(pl.lit("SKY")).otherwise("ticker")
+    newer = TICKERS.with_columns(rename.alias("ticker"))
+    actions = pl.concat([
+        ACTIONS.with_columns(rename.alias("ticker")),
+        pl.DataFrame({"date": ["2026-10-06", "2026-10-06"],
+                      "action": ["tickerchangefrom", "tickerchangeto"],
+                      "ticker": ["SKY", "SKY"], "contraticker": ["NEW", "SKY"]}),
+    ])  # fmt: skip
+    out = ids_.refresh(ids, newer, actions, on=date(2026, 10, 26))
+    assert out.merged.select("sid", "into").rows() == [(ids_.RESERVED + 1, 200)]
+    day = pl.DataFrame({"ticker": ["SKY", "NEW"], "date": [date(2026, 10, 8), date(2026, 10, 5)]})
+    assert ids_.lookup(out, day)["sid"].to_list() == [200, 200]
+    assert ids_.shared_names(out).is_empty()
 
 
 def test_a_name_changed_on_its_first_day_is_dropped_and_the_current_name_shown():

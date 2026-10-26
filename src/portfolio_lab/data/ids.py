@@ -5,7 +5,7 @@ Tickers are reused (CADE was Cadence Bancorp until 2021, Cadence Bank after) and
 conformed table keys on ``sid`` instead, and sources resolve their tickers through
 :func:`lookup` with the dates they saw the ticker trade.
 
-Three tables, in ``DataPaths.ids``:
+Four tables, in ``DataPaths.ids``:
 
 - ``securities``: sid, name, exchange, category (``common``, ``adr``, ``preferred``,
   ``etf``, ``cef``, ...), cik, cusip, figi, sic, first and last trading dates (``last`` null
@@ -13,6 +13,8 @@ Three tables, in ``DataPaths.ids``:
 - ``tickers``: sid, ticker, from, to (null while current), ``dated`` (from a recorded
   change, or inferred from a source's list of related names).
 - ``sharadar``: sid, permaticker.
+- ``merged``: sid, the sid it was merged into, the names it held (ticker, from, to,
+  dated) and the day it was merged (:func:`merge_duplicates`).
 
 A sid is permanent: assigned once, never renumbered, whatever order data arrives in.
 
@@ -20,14 +22,16 @@ A sid is permanent: assigned once, never renumbered, whatever order data arrives
   reused) as its sid (:func:`from_sharadar`); rebuilding from scratch gives the same sids.
 - Any other security (a new listing Sharadar doesn't have yet, or anything once Sharadar
   is gone) gets the next sid from :data:`RESERVED` up (:func:`extend`), recorded in the
-  tables and never reassigned.
+  tables and never reassigned. Only a ticker no name covers is a new security
+  (:func:`covering`); one more than one security holds never gets another sid.
 - A newer Sharadar tickers table is merged in by :func:`refresh`, which adds securities
   and updates names and delisting dates but never changes a sid: a security numbered from
-  the reserved range before Sharadar listed it keeps that sid.
+  the reserved range before Sharadar listed it keeps that sid, and one numbered from the
+  reserved range while a known security held its name is merged into that security.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -44,6 +48,8 @@ SECURITIES = {
 }  # fmt: skip
 TICKERS = {"sid": pl.Int64, "ticker": pl.String, "from": pl.Date, "to": pl.Date,
            "dated": pl.Boolean}  # fmt: skip
+MERGED = {"sid": pl.Int64, "into": pl.Int64, "ticker": pl.String, "from": pl.Date,
+          "to": pl.Date, "dated": pl.Boolean, "merged": pl.Date}  # fmt: skip
 #: Sharadar's category strings -> ours (first match wins, checked in order).
 CATEGORIES = (
     ("Preferred", "preferred"), ("ADR", "adr"), ("Common", "common"), ("ETF", "etf"),
@@ -57,29 +63,34 @@ SAME_LISTING = timedelta(days=10)
 
 @dataclass(frozen=True)
 class Ids:
-    """The three id tables (module docs)."""
+    """The four id tables (module docs)."""
 
     securities: pl.DataFrame
     tickers: pl.DataFrame
     sharadar: pl.DataFrame
+    merged: pl.DataFrame = field(default_factory=lambda: pl.DataFrame(schema=MERGED))
 
     @classmethod
     def load(cls, folder: Path) -> "Ids":
-        """Read the tables from ``folder`` (``DataPaths.ids``)."""
-        return cls(*(pl.read_parquet(folder / f"{n}.parquet") for n in _FILES))
+        """Read the tables from ``folder`` (``DataPaths.ids``); no merges yet if none saved."""
+        merged = folder / "merged.parquet"
+        return cls(
+            *(pl.read_parquet(folder / f"{n}.parquet") for n in _FILES),
+            pl.read_parquet(merged) if merged.exists() else pl.DataFrame(schema=MERGED),
+        )
 
     def save(self, folder: Path) -> None:
         """Write the tables to ``folder``."""
-        for name in _FILES:
+        for name in (*_FILES, "merged"):
             write_parquet_atomic(getattr(self, name), folder / f"{name}.parquet")
 
     def extend(self, new: pl.DataFrame) -> "Ids":
         """Ids with new securities appended, numbered from :data:`RESERVED` up.
 
         Args:
-            new: ticker, name, exchange, category, first (and optionally cik); one row per
-                new security, none of whose tickers may resolve through :func:`lookup`
-                for its dates.
+            new: ticker, name, exchange, category, first (and optionally cik, and ``to`` and
+                ``last`` for one already gone); one row per new security, whose ticker no
+                name covers on any of its dates (:func:`covering`).
         """
         if new.is_empty():
             return self
@@ -95,10 +106,12 @@ class Ids:
             pl.concat([self.securities, securities]),
             pl.concat([self.tickers, tickers]),
             self.sharadar,
+            self.merged,
         )
 
 
 _FILES = ("securities", "tickers", "sharadar")
+_FAR = date(2999, 12, 31)
 
 
 def _frame(frame: pl.DataFrame, schema: dict[str, pl.DataType]) -> pl.DataFrame:
@@ -205,13 +218,15 @@ def from_sharadar(
     return Ids(securities, _frame(names, TICKERS), rows.select("sid", "permaticker"))
 
 
-def refresh(ids: Ids, tickers: pl.DataFrame, actions: pl.DataFrame) -> Ids:
+def refresh(ids: Ids, tickers: pl.DataFrame, actions: pl.DataFrame, on: date | None = None) -> Ids:
     """``ids`` updated from a newer Sharadar tickers table, without changing any sid.
 
     Securities already known keep their sids and take the new names and dates. A security
     Sharadar lists for the first time takes over the reserved sid of the same listing
     (same ticker, first trading days within :data:`SAME_LISTING`) if another source
     numbered it first, else its permaticker. Securities the new table lacks are kept.
+    A reserved sid that now shares a name with another security is merged into it
+    (:func:`merge_duplicates`, recorded as of ``on``, default today).
     """
     fresh = from_sharadar(tickers, actions)
     new = fresh.securities.join(ids.sharadar, left_on="sid", right_on="permaticker",
@@ -233,13 +248,111 @@ def refresh(ids: Ids, tickers: pl.DataFrame, actions: pl.DataFrame) -> Ids:
         pl.concat([fresh.securities, ids.securities.filter(kept)]).sort("sid"),
         pl.concat([fresh.tickers, ids.tickers.filter(kept)]).sort("sid", "from"),
         pl.concat([fresh.sharadar, known.join(fresh.sharadar, on="permaticker", how="anti")]),
+        ids.merged,
     )
     before = dict(ids.sharadar.select("permaticker", "sid").rows())
     after = dict(merged.sharadar.select("permaticker", "sid").rows())
     changed = [p for p, s in before.items() if after.get(p) != s]
     if changed:  # the one rule ids must never break
         raise ValueError(f"ids: refresh would change {len(changed)} sids, e.g. {changed[:5]}")
-    return merged
+    return merge_duplicates(merged, on or date.today())
+
+
+def shared_names(ids: Ids) -> pl.DataFrame:
+    """Each self-made sid's dated names that another sid's dated name overlaps.
+
+    A self-made sid is numbered from :data:`RESERVED` up and not taken over by a Sharadar
+    security. Returns sid, ticker, the other sid (``other``) and whether Sharadar numbers it
+    (``numbered``), one row per overlapping pair of names.
+    """
+    numbered = ids.sharadar["sid"].implode()
+    dated = ids.tickers.filter(pl.col("dated")).with_columns(
+        pl.col("to").fill_null(_FAR).alias("_to")
+    )
+    own = (pl.col("sid") > RESERVED) & ~pl.col("sid").is_in(numbered)
+    return (
+        dated.filter(own)
+        .join(dated, on="ticker", suffix="_o")
+        .filter(
+            (pl.col("sid") != pl.col("sid_o"))
+            & (pl.col("from") <= pl.col("_to_o"))
+            & (pl.col("from_o") <= pl.col("_to"))
+        )
+        .select(
+            "sid",
+            "ticker",
+            pl.col("sid_o").alias("other"),
+            pl.col("sid_o").is_in(numbered).alias("numbered"),
+        )
+    )
+
+
+def merge_duplicates(ids: Ids, on: date) -> Ids:
+    """Ids with every self-made sid that names another security merged into it.
+
+    A self-made sid whose dated name overlaps another security's (:func:`shared_names`) is
+    the same listing numbered twice: a source numbered it before the ids knew the name. It
+    merges into the Sharadar-numbered sid it overlaps, else into the earliest self-made
+    one; a sid that overlaps two Sharadar-numbered ones is left for the quality check. A
+    merged sid keeps its number and its ``securities`` row; its names move to ``merged``
+    with the sid it went into and ``on``, so no lookup resolves to it again.
+    """
+    shared = shared_names(ids)
+    if shared.is_empty():
+        return ids
+    per = shared.group_by("sid").agg(
+        pl.col("other").filter("numbered").unique().alias("_into"),
+        pl.col("other").filter(~pl.col("numbered")).min().alias("_own"),
+    )
+    into: dict[int, int] = {}
+    unclear = []
+    for sid, numbered, own in per.iter_rows():
+        if len(numbered) > 1:
+            unclear.append(sid)
+        elif numbered:
+            into[sid] = numbered[0]
+        elif own is not None and own < sid:
+            into[sid] = own
+    while any(into.get(target) for target in into.values()):  # a copy of a copy: the first
+        into = {sid: into.get(target, target) for sid, target in into.items()}
+    if unclear:
+        log.warning("ids: %d self-made sids share a name with two securities, left: %s",
+                    len(unclear), sorted(unclear)[:20])  # fmt: skip
+    if not into:
+        return ids
+    gone = pl.Series(list(into), dtype=pl.Int64).implode()
+    moved = ids.tickers.filter(pl.col("sid").is_in(gone)).with_columns(
+        pl.col("sid").replace_strict(into, return_dtype=pl.Int64).alias("into"),
+        pl.lit(on).alias("merged"),
+    )
+    log.info("ids: %d self-made sids merged into the securities they name", len(into))
+    return Ids(
+        ids.securities,
+        ids.tickers.filter(~pl.col("sid").is_in(gone)),
+        ids.sharadar,
+        pl.concat([ids.merged, _frame(moved, MERGED)]),
+    )
+
+
+def covering(ids: Ids, rows: pl.DataFrame, until: str | None = None) -> pl.DataFrame:
+    """``rows`` with ``names``: how many securities hold the row's ticker on its date.
+
+    With ``until`` naming a column, on any day from ``date`` to that column's date.
+    0 means no name covers those days: the only case in which a source may number a new
+    security. More than one on a day is a listing numbered twice or a name recorded
+    ambiguously, for :func:`merge_duplicates` and the quality check, never another sid.
+    """
+    end = pl.col(until) if until else pl.col("date")
+    keys = ["ticker", "date", *([until] if until else [])]
+    names = ids.tickers.with_columns(pl.col("to").fill_null(_FAR))
+    held = (
+        rows.select(keys).unique()
+        .join(names, on="ticker")
+        .filter((end >= pl.col("from")) & (pl.col("date") <= pl.col("to")))
+        .group_by(keys)
+        .agg(pl.col("sid").n_unique().alias("names"))
+    )  # fmt: skip
+    return rows.join(held, on=keys, how="left").with_columns(pl.col("names").fill_null(0))
 
 
 def lookup(ids: Ids, rows: pl.DataFrame) -> pl.DataFrame:
@@ -253,8 +366,7 @@ def lookup(ids: Ids, rows: pl.DataFrame) -> pl.DataFrame:
         ``rows`` with ``sid``: null where no name covers the date, or two inferred ones
         do (a dated name beats an inferred one).
     """
-    far = date(2999, 12, 31)
-    names = ids.tickers.with_columns(pl.col("to").fill_null(far))
+    names = ids.tickers.with_columns(pl.col("to").fill_null(_FAR))
     covering = (
         rows.select("ticker", "date").unique()
         .join(names, on="ticker")
