@@ -9,7 +9,7 @@ import pytest
 
 from portfolio_lab.core.paths import DataPaths
 from portfolio_lab.data import ids as ids_
-from portfolio_lab.data import quality, reader
+from portfolio_lab.data import quality, reader, schemas
 from portfolio_lab.data.conform import sharadar
 from portfolio_lab.data.sources.sharadar import MAPS, UPDATES, keep_ticker_map
 from tests.data.test_hive import ACTIONS, TICKERS
@@ -60,6 +60,17 @@ def test_update_restores_share_counts_and_takes_the_latest_version(root):
     sharadar.update(root)
     f = reader.read(root, "filings").sort("filed")
     assert f["net_income"].to_list() == [11.0, 12.0] and f["shares_out"][0] == 100.0
+
+
+def test_filings_carry_investments_without_changing_which_source_wins(tmp_path, root):
+    raw = DataPaths(root).raw(sharadar.SOURCE)
+    rows = [_fund("NEW", "2022-02-15", "2021-12-31", 200, 10, "2022-07-01")
+            | {"investmentsc": "5", "investmentsnc": "7"}]  # fmt: skip
+    _zip(raw / "fundamentals.zip", pl.DataFrame(rows))
+    sharadar.update(root)
+    f = reader.read(root, "filings")
+    assert f.select("investments_cur", "investments_lt").row(0) == (5.0, 7.0)
+    assert not set(schemas.OPTIONAL_CONCEPTS) & set(schemas.REQUIRED["filings"])
 
 
 def test_update_refreshes_ids_without_renumbering(root):
