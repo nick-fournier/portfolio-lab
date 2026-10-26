@@ -33,9 +33,13 @@ CONCEPTS = (
     "rnd", "depreciation", "ppe", "inventory", "receivables", "tax", "ebit", "intangibles",
     "payables",
 )  # fmt: skip
+#: Concepts not every source reports (Sharadar's current and non-current investments). A
+#: row without them is no less complete, so the reader keeps the same source per filing.
+OPTIONAL_CONCEPTS = ("investments_cur", "investments_lt")
 FILINGS = {
     "sid": SID, "filed": pl.Date, "period_end": pl.Date, "period": pl.String,
-    "form": pl.String, "shares_out": pl.Float64, **dict.fromkeys(CONCEPTS, pl.Float64),
+    "form": pl.String, "shares_out": pl.Float64,
+    **dict.fromkeys((*CONCEPTS, *OPTIONAL_CONCEPTS), pl.Float64),
 }  # fmt: skip
 #: Point-in-time macro series: the value and the date it became known.
 SERIES = {"series": pl.String, "date": pl.Date, "available": pl.Date, "value": pl.Float64}

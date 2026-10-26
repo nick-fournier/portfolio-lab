@@ -33,7 +33,7 @@ from portfolio_lab.data.sources.sharadar import MAPS, UPDATES
 log = logging.getLogger(__name__)
 
 SOURCE = "sharadar"
-#: Sharadar fundamentals column -> concept (``schemas.CONCEPTS``).
+#: Sharadar fundamentals column -> concept (``schemas.CONCEPTS`` and ``OPTIONAL_CONCEPTS``).
 CONCEPTS = {
     "netinc": "net_income", "ncfo": "cfo", "revenue": "revenue", "gp": "gross_profit",
     "cor": "cost_of_revenue", "opinc": "operating_income", "capex": "capex",
@@ -43,6 +43,7 @@ CONCEPTS = {
     "sgna": "sga", "intexp": "interest_expense", "rnd": "rnd", "depamor": "depreciation",
     "ppnenet": "ppe", "inventory": "inventory", "receivables": "receivables",
     "taxexp": "tax", "ebit": "ebit", "intangibles": "intangibles", "payables": "payables",
+    "investmentsc": "investments_cur", "investmentsnc": "investments_lt",
 }  # fmt: skip
 #: Cash outflows Sharadar reports as negatives; stored as positive amounts.
 OUTFLOWS = ("capex", "dividends")
