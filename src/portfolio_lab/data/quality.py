@@ -10,7 +10,9 @@ Two kinds:
 - **Measured checks** (:func:`measured`): each metric judged against its own history, not
   a fixed limit. The latest value is flagged when it moves more than any earlier step did,
   or leaves the range of every earlier value by more than that largest step: the latest
-  session's traded bars per source, monthly agreement between sources on the days they overlap,
+  session's traded bars per source (judged against earlier runs' counts of their own latest
+  session: a source fills in a session over the following nights, so a finished session is
+  no measure of a new one), monthly agreement between sources on the days they overlap,
   and per month the stocks covered, each input's coverage and 1st/50th/99th percentiles,
   and the forecasts' count, mean and spread. Flags are shown, not enforced.
 
@@ -33,7 +35,7 @@ from portfolio_lab.data import reader, schemas
 
 log = logging.getLogger(__name__)
 
-#: Sessions of daily row counts the latest session is judged against.
+#: Earlier runs' latest-session counts the latest session is judged against.
 COUNT_HISTORY = 250
 #: Close prices agree when within this share of each other.
 AGREE = 1e-3
@@ -111,15 +113,16 @@ def measured(root: Path) -> list[dict[str, Any]]:
     """The measured checks' metrics, each judged against its own history (module docs)."""
     paths = DataPaths(root)
     out = []
+    earlier = pl.read_parquet(paths.quality) if paths.quality.exists() else None
     for source in reader.sources(root, "prices"):
         # traded bars only: untraded shells come and go (a day without trades has no bar)
-        daily = (
+        name = f"{source}/prices traded on the latest day"
+        latest = (
             _source(root, source, "prices").filter(pl.col("volume") > 0)
-            .group_by("date").agg(pl.len().alias("n"))
-            .sort("date").collect(engine="streaming").tail(COUNT_HISTORY + 1)
+            .filter(pl.col("date") == pl.col("date").max()).select(pl.len())
+            .collect(engine="streaming").item()
         )  # fmt: skip
-        out.append(_judge(f"{source}/prices traded on the latest day",
-                          daily["n"].to_list()[:-1], float(daily["n"][-1])))  # fmt: skip
+        out.append(_judge(name, _recorded(earlier, name), float(latest)))
     out += _agreement(root)
     if paths.features.exists():
         out += _monthly(pl.read_parquet(paths.features))
@@ -134,6 +137,14 @@ def measured(root: Path) -> list[dict[str, Any]]:
             values = by_month[col].cast(pl.Float64).to_list()
             out.append(_judge(f"forecasts {col}", values[:-1], values[-1]))
     return out
+
+
+def _recorded(earlier: pl.DataFrame | None, metric: str) -> list[float]:
+    """``metric``'s values as earlier runs recorded them, oldest first (the last COUNT_HISTORY)."""
+    if earlier is None:
+        return []
+    rows = earlier.filter(pl.col("metric") == metric).sort("at").tail(COUNT_HISTORY)
+    return rows["value"].to_list()
 
 
 def _agreement(root: Path) -> list[dict[str, Any]]:
