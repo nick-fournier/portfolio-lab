@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 
 import numpy as np
 import polars as pl
@@ -370,6 +370,35 @@ def test_measured_checks_flag_only_what_leaves_its_own_history():
     assert "outside its history" in quality._judge("m", history, 150.0)["flag"]
     assert quality._judge("m", history, 106.0)["flag"] is None  # a record by a normal step
     assert quality._judge("m", history[:5], 150.0)["flag"] is None  # too little history to judge
+
+
+def test_latest_session_is_judged_against_earlier_runs_first_counts(tmp_path):
+    # each earlier run counted its own latest session before the source filled it in (~100
+    # bars short); the finished sessions now hold ~100 more, which must not raise a flag
+    days = _sessions(date(2020, 1, 2), date(2020, 3, 31))[:21]
+    bars = {"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 10.0,
+            "ret_cc": 0.01, "ret_co": 0.0}  # fmt: skip
+    counts = [1000 + 7 * (k % 3) for k in range(len(days))]  # finished sessions
+    counts[-1] -= 100  # the latest session, first night
+
+    def write():
+        reader.write(tmp_path, "alpaca", "prices", pl.DataFrame(
+            [{"sid": s, "date": d, **bars} for d, n in zip(days, counts, strict=True)
+             for s in range(n)]))  # fmt: skip
+
+    write()
+    name = "alpaca/prices traded on the latest day"
+    assert quality.measured(tmp_path)[0] == {"metric": name, "value": counts[-1], "flag": None}
+    earlier = pl.DataFrame({
+        "at": [datetime(2020, 1, k + 1, tzinfo=UTC) for k in range(20)], "stage": "derive",
+        "metric": name, "value": [900.0 + 7 * (k % 3) for k in range(20)], "flag": None,
+    })  # fmt: skip
+    DataPaths(tmp_path).quality.parent.mkdir(parents=True, exist_ok=True)
+    earlier.write_parquet(DataPaths(tmp_path).quality)
+    assert quality.measured(tmp_path)[0]["flag"] is None  # against earlier first counts
+    counts[-1] -= 400  # a real outage still shows
+    write()
+    assert "outside its history" in quality.measured(tmp_path)[0]["flag"]
 
 
 def test_ids_are_permanent_whatever_the_order_or_how_often_they_are_built():
